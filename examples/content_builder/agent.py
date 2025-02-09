@@ -16,8 +16,12 @@ from __future__ import annotations
 
 import asyncio
 
+from dotenv import load_dotenv
+
 from adk_deepagents import SubAgentSpec, create_deep_agent
 from adk_deepagents.backends import FilesystemBackend
+
+load_dotenv()
 
 # Sub-agent: a researcher that can search and synthesize
 researcher = SubAgentSpec(
