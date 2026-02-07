@@ -1,0 +1,46 @@
+review:
+  default:
+    model: opencode/glm-4.7-free
+
+  mode: unified
+
+  agents:
+    - security
+    - quality
+    - style
+    - performance
+    - documentation
+
+  unified:
+    severityThreshold: HIGH
+
+  ignorePatterns:
+    - "test_*.py"
+    - "*_test.py"
+    - "**/__pycache__/**"
+    - "**/.pytest_cache/**"
+    - "**/tests/**"
+    - "**/__tests__/**"
+    - "**/mocks/**"
+    - "**/__mocks__/**"
+    - "uv.lock"
+    - "requirements*.txt"
+    - "**/*.egg-info/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/examples/**"
+
+  describe:
+    enabled: true
+    postDescription: true
+
+describe:
+  model: opencode/glm-4.7-free
+  includeProjectContext: true
+
+contextCompression:
+  enabled: true
+  maxTokens: 32000
+  softBufferTokens: 1500
+  hardBufferTokens: 1000
+  tokenEstimateDivisor: 4
