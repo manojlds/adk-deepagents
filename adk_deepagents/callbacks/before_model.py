@@ -221,6 +221,9 @@ def make_before_model_callback(
                 keep_messages=_resolve_keep_messages(summarization_config),
                 backend_factory=backend_factory,
                 history_path_prefix=summarization_config.history_path_prefix,
+                use_llm_summary=summarization_config.use_llm_summary,
+                summary_model=summarization_config.model,
+                truncate_args_config=summarization_config.truncate_args,
             )
 
         return None  # Proceed with LLM call
