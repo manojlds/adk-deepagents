@@ -972,10 +972,13 @@ examples/
   loads memory. The `PatchToolCallsMiddleware` equivalent (scanning message history for
   orphaned tool calls) is deferred because `CallbackContext` message access needs research.
 
-#### Known Gaps (to address in future phases)
-1. `after_tool_callback` doesn't receive actual tool result — eviction stays in-tool
+#### Known Gaps (addressed in Phase 6)
+1. ~~`after_tool_callback` doesn't receive actual tool result~~ — **RESOLVED**: cooperative
+   eviction via `_last_tool_result` state key + in-tool `truncate_if_too_long()`
 2. `before_tool_callback` HITL blocks tool but doesn't pause for approval input
-3. Dangling tool call patching not implemented (needs message history access)
+3. ~~Dangling tool call patching not implemented~~ — **RESOLVED**: `before_agent_callback`
+   detects dangling calls via session events, `before_model_callback` injects synthetic
+   `FunctionResponse` parts
 
 ### Phase 4: Memory + Skills + FilesystemBackend
 
@@ -1107,33 +1110,37 @@ discovered and activated via adk-skills library.
 **Deliverable:** Agent can execute Python/Bash in Heimdall sandbox, summarize long
 conversations, and route file operations to different backends by path.
 
-### Phase 6: Examples + Documentation
+### Phase 6: Examples + Documentation + Gap Closure
 
-**Status:** Quickstart ✅ complete. Other examples ❌ not started.
+**Status:** ✅ Complete.
 
-**Goal:** Working examples and comprehensive docs.
+**Goal:** Working examples, close remaining code gaps, comprehensive docs.
 
 #### Completed:
 - ✅ `examples/quickstart/agent.py` - full working example with InMemoryRunner
   and interactive loop
-
-2. **Port content-builder example** (with adk-skills):
-   - Create `examples/content_builder/agent.py`
-   - Create sample skills: `skills/blog-writing/SKILL.md`, `skills/social-media/SKILL.md`
-   - Create `AGENTS.md` with content creation memory
-   - Use `FilesystemBackend` for local file output
-   - Demonstrate skill activation, reference loading, and sub-agent research
-
-3. **Port deep_research example** (with sub-agents):
-   - Create `examples/deep_research/agent.py`
-   - Demonstrate parallel sub-agent delegation
-   - Show research → synthesis workflow
-
-4. **New sandboxed_coder example** (Heimdall + skills):
-   - Create `examples/sandboxed_coder/agent.py`
-   - Demonstrate `execution="heimdall"` with code writing and testing
-   - Create `skills/code-review/SKILL.md` for review guidelines
-   - Show cross-language workflow (bash → python)
+- ✅ `examples/content_builder/` - content builder with skills, memory, sub-agents
+  - `agent.py` — creates agent with FilesystemBackend, skills, researcher sub-agent
+  - `AGENTS.md` — content creation memory
+  - `skills/blog-writing/SKILL.md` — blog writing guidelines
+  - `skills/social-media/SKILL.md` — social media content templates
+- ✅ `examples/deep_research/agent.py` - parallel sub-agent research workflow
+  - Three sub-agents: web_researcher, analyst, writer
+  - SummarizationConfig for long research sessions
+- ✅ `examples/sandboxed_coder/` - Heimdall MCP execution with skills
+  - `agent.py` — async agent with sandboxed execution
+  - `skills/code-review/SKILL.md` — code review checklist
+- ✅ **Dangling tool call patching** — two-phase approach:
+  - `before_agent_callback`: scans session events for orphaned function_calls,
+    stores dangling info in `state["_dangling_tool_calls"]`
+  - `before_model_callback`: reads dangling info from state, injects synthetic
+    `FunctionResponse` content into `llm_request.contents`
+  - 7 unit tests covering detection, patching, and edge cases
+- ✅ **After-tool large result eviction** — cooperative pattern:
+  - Tools can store raw result under `state["_last_tool_result"]` before returning
+  - `after_tool_callback` checks size, saves to backend, returns preview
+  - Includes `TOO_LARGE_TOOL_MSG` template with preview and file path
+  - 4 new unit tests for eviction behavior
 
 5. **Write README.md** with:
    - Installation instructions
@@ -1455,8 +1462,8 @@ agent = create_deep_agent(
 | Skills validation | N/A | ✅ Done | **adk-skills** `registry.validate_all()` via config | Phase 4 |
 | Skills database storage | N/A | ⚠️ Deferred | **adk-skills** SQLAlchemy backend (external dep) | Phase 4 |
 | Human-in-the-loop approval | Yes | ⚠️ Partial | Sets state, blocks tool, but no pause | Phase 3 |
-| Large result eviction | Yes | ⚠️ In-tool | `truncate_if_too_long()` in tool functions | Phase 3 |
-| Dangling tool call patching | Yes | ❌ Pending | Needs message history access research | Phase 3 |
+| Large result eviction | Yes | ✅ Done | In-tool `truncate_if_too_long()` + cooperative `after_tool_callback` eviction | Phase 3/6 |
+| Dangling tool call patching | Yes | ✅ Done | `before_agent_callback` detects + `before_model_callback` injects synthetic responses | Phase 6 |
 | Dynamic system prompts | Yes | ✅ Done | `before_model_callback` injection | Phase 3 |
 | State backend (ephemeral) | Yes | ✅ Done | `StateBackend` on session state dict | Phase 1 |
 | Filesystem backend (local) | Yes | ✅ Done | `FilesystemBackend` with virtual mode | Phase 4 |

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from google.genai import types
 
 from adk_deepagents.summarization import (
+    TRUNCATABLE_TOOLS,
     count_content_tokens,
     count_messages_tokens,
     count_tokens_approximate,
     create_summary_content,
     format_messages_for_summary,
+    generate_llm_summary,
     maybe_summarize,
     partition_messages,
+    truncate_tool_args,
 )
+from adk_deepagents.types import TruncateArgsConfig
 
 # ---------------------------------------------------------------------------
 # Token counting
@@ -127,6 +131,148 @@ def test_create_summary_content():
     assert "This is a summary." in summary.parts[0].text
 
 
+def test_create_summary_content_with_offload_path():
+    summary = create_summary_content("Summary here.", offload_path="/history/session.md")
+    text = summary.parts[0].text
+    assert "/history/session.md" in text
+    assert "<summary>" in text
+    assert "Summary here." in text
+    assert "saved to" in text
+
+
+# ---------------------------------------------------------------------------
+# Tool argument truncation
+# ---------------------------------------------------------------------------
+
+
+def test_truncatable_tools_set():
+    assert "write_file" in TRUNCATABLE_TOOLS
+    assert "edit_file" in TRUNCATABLE_TOOLS
+    assert "read_file" not in TRUNCATABLE_TOOLS
+
+
+def test_truncate_tool_args_no_trigger():
+    config = TruncateArgsConfig(trigger=None)
+    messages = [types.Content(role="user", parts=[types.Part(text="hello")])]
+    result, modified = truncate_tool_args(messages, config)
+    assert result == messages
+    assert modified is False
+
+
+def test_truncate_tool_args_below_threshold():
+    config = TruncateArgsConfig(trigger=("messages", 100), keep=("messages", 5))
+    messages = [types.Content(role="user", parts=[types.Part(text="hello")])]
+    result, modified = truncate_tool_args(messages, config)
+    assert modified is False
+
+
+def test_truncate_tool_args_truncates_large_write_file():
+    """Large write_file arguments in old messages should be truncated."""
+    large_content = "x" * 5000  # Exceeds default max_length of 2000
+
+    fc_part = types.Part(
+        function_call=types.FunctionCall(
+            name="write_file",
+            args={"file_path": "/test.py", "content": large_content},
+        )
+    )
+    old_msg = types.Content(role="model", parts=[fc_part])
+    recent_msg = types.Content(role="user", parts=[types.Part(text="thanks")])
+
+    messages = [old_msg, recent_msg]
+
+    config = TruncateArgsConfig(
+        trigger=("messages", 1),
+        keep=("messages", 1),
+        max_length=100,
+        truncation_text="...(truncated)",
+    )
+
+    result, modified = truncate_tool_args(messages, config)
+    assert modified is True
+    assert len(result) == 2
+
+    truncated_fc = result[0].parts[0].function_call
+    assert len(truncated_fc.args["content"]) < 100
+    assert "...(truncated)" in truncated_fc.args["content"]
+    assert truncated_fc.args["file_path"] == "/test.py"
+
+
+def test_truncate_tool_args_preserves_recent_messages():
+    """Messages within the keep window should not be truncated."""
+    large_content = "x" * 5000
+    fc_part = types.Part(
+        function_call=types.FunctionCall(
+            name="write_file",
+            args={"file_path": "/test.py", "content": large_content},
+        )
+    )
+    recent_msg = types.Content(role="model", parts=[fc_part])
+    messages = [recent_msg]
+
+    config = TruncateArgsConfig(
+        trigger=("messages", 1),
+        keep=("messages", 5),
+    )
+
+    result, modified = truncate_tool_args(messages, config)
+    assert modified is False
+
+
+def test_truncate_tool_args_skips_non_truncatable_tools():
+    """Only write_file and edit_file arguments should be truncated."""
+    large_content = "x" * 5000
+    fc_part = types.Part(
+        function_call=types.FunctionCall(
+            name="read_file",
+            args={"file_path": "/test.py", "content": large_content},
+        )
+    )
+    old_msg = types.Content(role="model", parts=[fc_part])
+    recent_msg = types.Content(role="user", parts=[types.Part(text="ok")])
+
+    config = TruncateArgsConfig(
+        trigger=("messages", 1),
+        keep=("messages", 1),
+        max_length=100,
+    )
+
+    result, modified = truncate_tool_args([old_msg, recent_msg], config)
+    assert modified is False
+
+
+# ---------------------------------------------------------------------------
+# LLM summary generation
+# ---------------------------------------------------------------------------
+
+
+def test_generate_llm_summary_success():
+    """LLM summary returns text when API call succeeds."""
+    messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
+
+    mock_response = MagicMock()
+    mock_response.text = "## SESSION INTENT\nGreeting exchange."
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = mock_response
+
+    with patch("google.genai.Client", return_value=mock_client):
+        result = generate_llm_summary(messages, model="gemini-2.5-flash")
+
+    assert result is not None
+    assert "SESSION INTENT" in result
+
+
+def test_generate_llm_summary_failure_returns_none():
+    """LLM summary returns None when API call fails."""
+    messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
+
+    with patch("google.genai.Client", side_effect=Exception("API error")):
+        result = generate_llm_summary(messages)
+
+    assert result is None
+
+
 # ---------------------------------------------------------------------------
 # maybe_summarize integration
 # ---------------------------------------------------------------------------
@@ -156,30 +302,56 @@ def test_maybe_summarize_below_threshold():
     ]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
-    result = maybe_summarize(ctx, req, context_window=200_000)
+    result = maybe_summarize(ctx, req, context_window=200_000, use_llm_summary=False)
     assert result is False
 
 
 def test_maybe_summarize_triggers():
-    # Create enough content to exceed threshold
-    long_text = "x" * 100_000  # ~25k tokens
+    """Summarization triggers with inline mode (no LLM call)."""
+    long_text = "x" * 100_000
     messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
 
-    # Set a small context window so summarization triggers
-    result = maybe_summarize(ctx, req, context_window=1000, trigger_fraction=0.5, keep_messages=2)
+    result = maybe_summarize(
+        ctx, req, context_window=1000, trigger_fraction=0.5, keep_messages=2, use_llm_summary=False
+    )
     assert result is True
 
-    # Should have replaced messages with summary + kept messages
     assert len(req.contents) == 3  # 1 summary + 2 kept
 
-    # First message should be the summary
     summary_text = req.contents[0].parts[0].text
     assert "<conversation_summary>" in summary_text
 
-    # State should be updated
     assert ctx.state["_summarization_state"]["summaries_performed"] == 1
+
+
+def test_maybe_summarize_triggers_with_llm():
+    """Summarization triggers with LLM-based summary."""
+    long_text = "x" * 100_000
+    messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
+    ctx = _make_mock_context()
+    req = _make_mock_request(messages)
+
+    mock_response = MagicMock()
+    mock_response.text = "## SESSION INTENT\nTest task."
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = mock_response
+
+    with patch("google.genai.Client", return_value=mock_client):
+        result = maybe_summarize(
+            ctx,
+            req,
+            context_window=1000,
+            trigger_fraction=0.5,
+            keep_messages=2,
+            use_llm_summary=True,
+        )
+
+    assert result is True
+    summary_text = req.contents[0].parts[0].text
+    assert "SESSION INTENT" in summary_text
 
 
 def test_maybe_summarize_offloads_to_backend():
@@ -189,6 +361,7 @@ def test_maybe_summarize_offloads_to_backend():
     req = _make_mock_request(messages)
 
     mock_backend = MagicMock()
+    mock_backend.download_files.return_value = [MagicMock(content=None)]
     mock_factory = MagicMock(return_value=mock_backend)
 
     result = maybe_summarize(
@@ -198,23 +371,88 @@ def test_maybe_summarize_offloads_to_backend():
         trigger_fraction=0.5,
         keep_messages=2,
         backend_factory=mock_factory,
+        use_llm_summary=False,
     )
     assert result is True
 
-    # Backend write should have been called for history offloading
     mock_backend.write.assert_called_once()
     call_args = mock_backend.write.call_args
-    assert "/conversation_history/chunk_0000.txt" in call_args[0][0]
+    assert "/conversation_history/" in call_args[0][0]
+
+
+def test_maybe_summarize_with_offload_path_in_summary():
+    """When history is offloaded, summary includes the file path."""
+    long_text = "x" * 100_000
+    messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
+    ctx = _make_mock_context()
+    req = _make_mock_request(messages)
+
+    mock_backend = MagicMock()
+    mock_backend.download_files.return_value = [MagicMock(content=None)]
+    mock_factory = MagicMock(return_value=mock_backend)
+
+    maybe_summarize(
+        ctx,
+        req,
+        context_window=1000,
+        trigger_fraction=0.5,
+        keep_messages=2,
+        backend_factory=mock_factory,
+        use_llm_summary=False,
+    )
+
+    summary_text = req.contents[0].parts[0].text
+    assert "saved to" in summary_text
+    assert "/conversation_history/" in summary_text
 
 
 def test_maybe_summarize_not_enough_to_partition():
-    # Only 2 messages with small context — keep_count=6 means no split
     messages = [
         types.Content(role="user", parts=[types.Part(text="x" * 100_000)]) for _ in range(2)
     ]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
 
-    result = maybe_summarize(ctx, req, context_window=1000, trigger_fraction=0.5, keep_messages=6)
-    # Tokens exceed threshold but not enough messages to split
+    result = maybe_summarize(
+        ctx, req, context_window=1000, trigger_fraction=0.5, keep_messages=6, use_llm_summary=False
+    )
     assert result is False
+
+
+def test_maybe_summarize_with_arg_truncation():
+    """Argument truncation runs before summarization check."""
+    large_content = "x" * 5000
+    fc_part = types.Part(
+        function_call=types.FunctionCall(
+            name="write_file",
+            args={"file_path": "/test.py", "content": large_content},
+        )
+    )
+    messages = [
+        types.Content(role="model", parts=[fc_part]),
+        types.Content(role="user", parts=[types.Part(text="ok")]),
+        types.Content(role="model", parts=[types.Part(text="done")]),
+    ]
+    ctx = _make_mock_context()
+    req = _make_mock_request(messages)
+
+    config = TruncateArgsConfig(
+        trigger=("messages", 2),
+        keep=("messages", 2),
+        max_length=100,
+    )
+
+    result = maybe_summarize(
+        ctx,
+        req,
+        context_window=200_000,
+        trigger_fraction=0.85,
+        keep_messages=6,
+        truncate_args_config=config,
+        use_llm_summary=False,
+    )
+
+    # Args were truncated (returns True) but no full summarization
+    assert result is True
+    truncated = req.contents[0].parts[0].function_call.args["content"]
+    assert len(truncated) < 200
