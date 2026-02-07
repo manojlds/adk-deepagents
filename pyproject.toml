@@ -14,10 +14,13 @@ dependencies = [
 skills = [
     "adk-skills-agent>=0.1.0",
 ]
+
+[dependency-groups]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "ruff>=0.4",
+    "ty>=0.0.15",
 ]
 
 [build-system]
@@ -34,3 +37,30 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "UP007", # Use X | Y for union types (not always desired)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["adk_deepagents"]
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.rules]
+# Third-party library type stubs (google-adk) cause false positives
+invalid-argument-type = "warn"
+# Optional dependency (adk-skills-agent) may not be installed
+unresolved-import = "warn"

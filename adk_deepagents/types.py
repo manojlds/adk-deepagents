@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, NotRequired, Sequence, TypedDict
+from typing import Any, TypedDict
 
 
 class SubAgentSpec(TypedDict, total=False):

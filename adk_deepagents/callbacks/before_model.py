@@ -7,7 +7,7 @@ system instruction before each LLM call.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
