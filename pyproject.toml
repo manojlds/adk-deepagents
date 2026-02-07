@@ -64,3 +64,8 @@ python-version = "3.11"
 invalid-argument-type = "warn"
 # Optional dependency (adk-skills-agent) may not be installed
 unresolved-import = "warn"
+# MCP toolset attributes resolved at runtime (incomplete stubs)
+unresolved-attribute = "warn"
+# Test files use assertions that the type checker can't narrow through
+unsupported-operator = "warn"
+not-subscriptable = "warn"
