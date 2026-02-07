@@ -7,12 +7,15 @@ Composes:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types
 
 from adk_deepagents.backends.protocol import Backend, BackendFactory
+
+logger = logging.getLogger(__name__)
 
 
 def _load_memory_files(
@@ -26,6 +29,68 @@ def _load_memory_files(
         if resp.content is not None:
             contents[resp.path] = resp.content.decode("utf-8")
     return contents
+
+
+def _patch_dangling_tool_calls(
+    callback_context: CallbackContext,
+) -> bool:
+    """Scan message history for orphaned tool calls and patch them.
+
+    Ported from deepagents ``PatchToolCallsMiddleware``.
+
+    An orphaned tool call is a ``function_call`` part in a model message
+    that has no corresponding ``function_response`` part anywhere later
+    in the message history.  This can happen when the agent is interrupted,
+    a tool execution crashes, or a session is resumed from a checkpoint.
+
+    Without patching, these dangling calls cause LLM API errors because
+    most models require every function_call to have a matching response.
+
+    Returns ``True`` if any patching was performed.
+    """
+    # Access the session events through the invocation context
+    # ADK stores conversation messages on the session
+    session = getattr(callback_context, "session", None)
+    if session is None:
+        return False
+
+    events = getattr(session, "events", None)
+    if events is None:
+        return False
+
+    # Collect all function_call ids and all function_response ids
+    call_ids: dict[str, tuple[str, int]] = {}  # id -> (name, event_index)
+    response_ids: set[str] = set()
+
+    for idx, event in enumerate(events):
+        content = getattr(event, "content", None)
+        if content is None or not content.parts:
+            continue
+        for part in content.parts:
+            fc = getattr(part, "function_call", None)
+            if fc is not None and getattr(fc, "id", None):
+                call_ids[fc.id] = (getattr(fc, "name", "unknown"), idx)
+            fr = getattr(part, "function_response", None)
+            if fr is not None and getattr(fr, "id", None):
+                response_ids.add(fr.id)
+
+    # Find dangling calls (calls without responses)
+    dangling = {cid: info for cid, info in call_ids.items() if cid not in response_ids}
+
+    if not dangling:
+        return False
+
+    # We can't directly inject events into the session in all ADK backends,
+    # so we store the dangling call info in state for before_model_callback
+    # to inject synthetic function_response parts into the LLM request.
+    state = callback_context.state
+    dangling_info = []
+    for cid, (name, _idx) in dangling.items():
+        dangling_info.append({"id": cid, "name": name})
+
+    state["_dangling_tool_calls"] = dangling_info
+    logger.info("Found %d dangling tool call(s), stored for patching", len(dangling))
+    return True
 
 
 def make_before_agent_callback(
@@ -48,7 +113,10 @@ def make_before_agent_callback(
     ) -> types.Content | None:
         state = callback_context.state
 
-        # 1. Load memory files (once per session)
+        # 1. Patch dangling tool calls
+        _patch_dangling_tool_calls(callback_context)
+
+        # 2. Load memory files (once per session)
         if memory_sources and backend_factory and "memory_contents" not in state:
             backend = backend_factory(state)
             contents = _load_memory_files(backend, memory_sources)
