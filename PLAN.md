@@ -3,6 +3,21 @@
 > Re-implementing LangChain's [deepagents](https://github.com/langchain-ai/deepagents) using
 > [Google ADK](https://google.github.io/adk-docs/) primitives with close feature compatibility.
 
+### External Library Integration
+
+This implementation leverages two companion libraries rather than rebuilding from scratch:
+
+- **[adk-skills](https://github.com/manojlds/adk-skills)** (`adk-skills-agent`) — Provides
+  full [Agent Skills](https://agentskills.io) support for ADK, replacing the custom
+  `SkillsMiddleware` in deepagents. Handles SKILL.md discovery, parsing, validation,
+  on-demand activation via `use_skill` tool, script execution via `run_script` tool,
+  reference loading via `read_reference` tool, and prompt injection.
+
+- **[Heimdall MCP](https://github.com/manojlds/heimdall)** (`@heimdall-ai/heimdall`) — An
+  MCP server providing sandboxed Python and Bash execution via Pyodide (WebAssembly) and
+  just-bash. Replaces the `LocalShellBackend`/`SandboxBackend` in deepagents with a
+  security-first execution environment.
+
 ---
 
 ## Table of Contents
@@ -38,6 +53,13 @@ This plan details how to re-implement every deepagents feature using native ADK 
 the **middleware pattern** to **callbacks + tools**, the **backend abstraction** to
 **session state + artifacts**, and the **sub-agent system** to ADK's **AgentTool delegation**.
 
+Two external libraries are used instead of re-implementing from scratch:
+- **[adk-skills](https://github.com/manojlds/adk-skills)** for Agent Skills (SKILL.md) support,
+  replacing deepagents' `SkillsMiddleware` with a mature, spec-compliant implementation.
+- **[Heimdall MCP](https://github.com/manojlds/heimdall)** for sandboxed code execution,
+  replacing deepagents' `LocalShellBackend`/`SandboxBackend` with WebAssembly-sandboxed
+  Python/Bash execution via the MCP protocol.
+
 ---
 
 ## 2. Architecture Comparison
@@ -72,16 +94,25 @@ create_deep_agent()
 create_deep_agent()
 ├── LlmAgent (Gemini / any supported model)
 ├── Callbacks (middleware equivalent)
-│   ├── before_agent_callback   → memory loading, skills loading, dangling tool patching
-│   ├── before_model_callback   → system prompt injection (memory, skills, filesystem, subagent docs)
+│   ├── before_agent_callback   → memory loading, dangling tool patching
+│   ├── before_model_callback   → system prompt injection (memory, filesystem, subagent docs)
 │   ├── after_model_callback    → (reserved for future use)
 │   ├── before_tool_callback    → path validation, interrupt/approval
 │   └── after_tool_callback     → large result eviction, state updates
 ├── Tools (function tools via ToolContext)
 │   ├── write_todos / read_todos
 │   ├── ls / read_file / write_file / edit_file / glob / grep
-│   ├── execute (shell)
+│   ├── use_skill / run_script / read_reference  ← adk-skills library
 │   └── task (sub-agent spawner via AgentTool)
+├── Code Execution (via Heimdall MCP)
+│   ├── execute_python          → sandboxed Python (Pyodide/WASM)
+│   ├── execute_bash            → sandboxed Bash (just-bash)
+│   └── workspace filesystem    → shared persistent workspace
+├── Skills (via adk-skills library)
+│   ├── SkillsRegistry          → discovery, parsing, validation
+│   ├── use_skill tool          → on-demand skill activation
+│   ├── run_script tool         → execute skill scripts (via Heimdall sandbox)
+│   └── read_reference tool     → load skill reference docs
 ├── State Management
 │   ├── session.state           → ephemeral file storage, todos, metadata
 │   └── artifacts               → persistent file storage
@@ -105,13 +136,13 @@ create_deep_agent()
 | `StateBackend` | `session.state` dict | ADK session state |
 | `FilesystemBackend` | Custom backend wrapping `os`/`pathlib` | Direct filesystem access |
 | `CompositeBackend` | Custom routing backend | Same pattern, different primitives |
-| `SandboxBackendProtocol` | Custom backend wrapping subprocess/Docker | Shell execution |
+| `SandboxBackendProtocol` | **Heimdall MCP** (Pyodide + just-bash sandbox) | Sandboxed execution via MCP |
 | `FilesystemMiddleware` tools | ADK `FunctionTool`s with `ToolContext` | Tools access state via `ToolContext` |
 | `TodoListMiddleware` | ADK `FunctionTool`s + `session.state["todos"]` | State-backed todo tools |
 | `SubAgentMiddleware` (`task` tool) | `AgentTool` wrapping sub-`LlmAgent`s | Key architectural difference |
 | `SummarizationMiddleware` | `before_model_callback` + custom logic | Manual implementation needed |
 | `MemoryMiddleware` | `before_model_callback` + file loading | System prompt injection |
-| `SkillsMiddleware` | `before_model_callback` + SKILL.md parsing | Progressive disclosure |
+| `SkillsMiddleware` | **adk-skills** `SkillsRegistry` + tools | Full replacement via library |
 | `PatchToolCallsMiddleware` | `before_agent_callback` | Message history repair |
 | `HumanInTheLoopMiddleware` | `before_tool_callback` returning dict to skip | Approval gating |
 | `LangGraph checkpointer` | `SessionService` (database-backed) | Persistence |
@@ -138,22 +169,34 @@ def create_deep_agent(
     instruction: str | None = None,
     subagents: list[SubAgentSpec] | None = None,
     skills: list[str] | None = None,
+    skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
     output_schema: type | None = None,
     backend: Backend | BackendFactory | None = None,
+    execution: str | dict | None = None,       # "heimdall", "local", or MCP config dict
     interrupt_on: dict[str, bool] | None = None,
     session_service: SessionService | None = None,
     name: str = "deep_agent",
 ) -> LlmAgent:
 ```
 
+**Parameters:**
+- `skills`: List of directory paths to discover Agent Skills from (via adk-skills library)
+- `skills_config`: Optional `SkillsConfig` for adk-skills customization (DB, validation, etc.)
+- `execution`: Code execution backend. `"heimdall"` for sandboxed execution via Heimdall MCP,
+  `"local"` for local subprocess, or a dict of MCP server config for custom setup.
+
 **Implementation:**
 1. Resolve `backend` (default to `StateBackend`)
-2. Build tool list: todo tools + filesystem tools + execute tool + user tools
-3. Build sub-agent list: general-purpose + user sub-agents, wrapped as `AgentTool`
-4. Compose callbacks from middleware-equivalent functions
-5. Build instruction string: base prompt + memory + skills + filesystem docs + subagent docs
-6. Create and return configured `LlmAgent`
+2. Build tool list: todo tools + filesystem tools + user tools
+3. If `skills` provided: create `SkillsRegistry`, discover skills, add `use_skill` /
+   `run_script` / `read_reference` tools (via adk-skills)
+4. If `execution` provided: connect to Heimdall MCP or create local shell tool. If both
+   `skills` and `execution="heimdall"` are set, bridge skill script execution through Heimdall
+5. Build sub-agent list: general-purpose + user sub-agents, wrapped as `AgentTool`
+6. Compose callbacks from middleware-equivalent functions
+7. Build instruction string: base prompt + memory + filesystem docs + subagent docs
+8. Create and return configured `LlmAgent`
 
 ### 4.2 Backends: `adk_deepagents/backends/`
 
@@ -201,9 +244,16 @@ changes needed.
 
 Direct port - routes operations by path prefix to different backends.
 
-#### 4.2.5 Local Shell Backend: `backends/local_shell.py`
+#### 4.2.5 Execution Backends: `execution/`
 
-Port for local shell execution via `subprocess`. Implements `SandboxBackendProtocol.execute()`.
+Code execution is handled separately from file backends (see Section 4.8):
+
+- **`execution/heimdall.py`**: Primary — Heimdall MCP (sandboxed Python + Bash via WASM)
+- **`execution/local.py`**: Fallback — local `subprocess.run()` (less secure)
+- **`execution/bridge.py`**: Routes adk-skills `run_script` through Heimdall
+
+The old `LocalShellBackend` / `SandboxBackend` pattern is replaced by the `execution`
+parameter on `create_deep_agent()`.
 
 #### 4.2.6 Backend Utilities: `backends/utils.py`
 
@@ -241,7 +291,9 @@ the path, and delegates to the backend:
 - `edit_file(file_path, old_string, new_string, tool_context, replace_all=False)` → `backend.edit(...)`
 - `glob(pattern, tool_context, path="/")` → `backend.glob_info(...)`
 - `grep(pattern, tool_context, path=None, glob=None, output_mode="files_with_matches")` → `backend.grep_raw(...)`
-- `execute(command, tool_context)` → `backend.execute(command)`
+
+**Note:** The `execute` tool is NOT in filesystem tools — code execution is handled by the
+`execution/` module (Heimdall MCP or local shell). See Section 4.8.
 
 **State update pattern:** Since ADK tools return dicts (not LangGraph `Command` objects), file
 state updates happen through `tool_context.state` mutations:
@@ -529,15 +581,208 @@ def format_memory(contents: dict[str, str], sources: list[str]) -> str:
     return MEMORY_SYSTEM_PROMPT.format(agent_memory="\n\n".join(sections))
 ```
 
-### 4.7 Skills: `adk_deepagents/skills.py`
+### 4.7 Skills: Integration with `adk-skills` Library
 
-Port of `SkillsMiddleware`. Discovers SKILL.md files, parses YAML frontmatter, and injects
-skill metadata into system prompt with progressive disclosure.
+**NOT a port** — we delegate entirely to the
+[adk-skills](https://github.com/manojlds/adk-skills) library (`adk-skills-agent` on PyPI),
+which already provides a complete, spec-compliant implementation of Agent Skills for Google ADK.
 
-All parsing logic (`_parse_skill_metadata`, `_validate_skill_name`, `_list_skills`) ports
-directly since it's framework-agnostic YAML/file handling.
+#### What adk-skills provides
 
-### 4.8 Prompt Constants: `adk_deepagents/prompts.py`
+- **`SkillsRegistry`**: Discovers SKILL.md files from directories, parses YAML frontmatter,
+  validates against the [agentskills.io](https://agentskills.io) spec, and caches full skill
+  content on-demand. Supports both file-based and database-backed storage.
+
+- **`use_skill` tool**: On-demand skill activation. The tool's description contains an
+  `<available_skills>` XML block listing all discovered skills (progressive disclosure).
+  When the LLM calls `use_skill(name="web-scraper")`, it receives the full SKILL.md
+  instructions, base directory, and capability flags (has_scripts, has_references, has_assets).
+
+- **`run_script` tool**: Execute Python/Bash scripts bundled with skills. Scripts live in
+  `skills/<name>/scripts/`. Supports explicit activation and timeouts.
+
+- **`read_reference` tool**: Load reference documents from `skills/<name>/references/` on
+  demand, keeping context lean until needed.
+
+- **Prompt injection**: `registry.inject_skills_prompt(instruction, format="xml")` appends
+  `<available_skills>` to the system prompt. Alternative to tool-based discovery.
+
+- **`SkillsAgent`**: High-level agent wrapper that integrates discovery, validation, tools,
+  and prompt injection in one class.
+
+- **Helper functions**: `with_skills(agent, dirs)`, `create_skills_agent(...)`,
+  `inject_skills_prompt(...)` for ergonomic integration.
+
+#### Integration pattern in `create_deep_agent()`
+
+```python
+from adk_skills_agent import SkillsRegistry
+
+def create_deep_agent(
+    ...
+    skills: list[str] | None = None,    # directories to discover skills from
+    skills_config: SkillsConfig | None = None,
+    ...
+) -> LlmAgent:
+    tools = [...]  # other tools
+
+    if skills:
+        registry = SkillsRegistry(config=skills_config)
+        registry.discover(skills)
+
+        # Option A: Tool-based (default, matches deepagents' progressive disclosure)
+        tools.append(registry.create_use_skill_tool())
+        tools.append(registry.create_run_script_tool())
+        tools.append(registry.create_read_reference_tool())
+
+        # Option B: Prompt injection (alternative, injects into system prompt)
+        # instruction = registry.inject_skills_prompt(instruction, format="xml")
+        # tools.append(registry.create_use_skill_tool(include_skills_listing=False))
+```
+
+#### Mapping from deepagents SkillsMiddleware
+
+| deepagents SkillsMiddleware | adk-skills equivalent |
+|---|---|
+| `_discover_skills()` | `registry.discover(directories)` |
+| `_list_skills()` → system prompt | `registry.to_prompt_xml()` or tool description |
+| `_parse_skill_metadata()` (YAML) | `registry.list_metadata()` |
+| `use_skill` tool (progressive disclosure) | `registry.create_use_skill_tool()` |
+| `run_script` tool | `registry.create_run_script_tool()` |
+| SKILL.md validation | `registry.validate_all(strict=True)` |
+| System prompt injection | `registry.inject_skills_prompt(instruction)` |
+
+**Key advantage:** adk-skills is already ADK-native, supports both tool-based and prompt-injection
+patterns, includes database-backed skills (SQLAlchemy), and follows the agentskills.io spec. No
+porting effort needed — just wire it into `create_deep_agent()`.
+
+#### Script execution via Heimdall
+
+The `run_script` tool from adk-skills executes scripts locally by default. For sandboxed
+execution, we bridge it to Heimdall MCP (see Section 4.9). The adk-skills `run_script` tool
+can be configured with a custom executor that routes execution through Heimdall's
+`execute_python` or `execute_bash` MCP tools instead of local subprocess.
+
+### 4.8 Code Execution: Integration with Heimdall MCP
+
+**NOT a port of `LocalShellBackend`/`SandboxBackend`** — we delegate code execution to
+[Heimdall MCP](https://github.com/manojlds/heimdall) (`@heimdall-ai/heimdall` on npm), which
+provides a sandboxed execution environment via the MCP protocol.
+
+#### What Heimdall provides
+
+Heimdall is a TypeScript MCP server that exposes:
+
+- **`execute_python`**: Sandboxed Python execution via Pyodide (WebAssembly). Auto-detects
+  imports and installs packages. No network access from user code (WASM security boundary).
+  Supports numpy, pandas, scipy, matplotlib, etc.
+
+- **`execute_bash`**: Bash command execution via just-bash (TypeScript simulation, no real
+  processes). Supports 50+ built-in commands (grep, sed, awk, find, jq, curl, tar, etc.),
+  pipes, redirections, variables, loops, and conditionals.
+
+- **`write_file` / `read_file` / `list_files` / `delete_file`**: Virtual filesystem
+  operations within a persistent workspace directory.
+
+- **`install_packages`**: Install Python packages via micropip.
+
+- **Shared workspace**: Bash and Python share the same `/workspace` filesystem, enabling
+  cross-language workflows (e.g., Bash prepares CSV → Python analyzes with pandas).
+
+#### Security model
+
+| Feature | Guarantee |
+|---|---|
+| Python execution | WebAssembly sandbox (memory-isolated, no network) |
+| Bash execution | TypeScript simulation (no real process spawning) |
+| Filesystem | Workspace directory only (no host FS access) |
+| Execution limits | Timeouts prevent infinite loops |
+| Package installation | Pyodide's trusted mechanism only |
+
+#### Integration via ADK MCP Tools
+
+Google ADK has native MCP tool support. We connect Heimdall as an MCP server:
+
+```python
+from google.adk.tools.mcp_tool import MCPToolset
+
+# Option 1: Stdio transport (local Heimdall server)
+heimdall_tools = MCPToolset.from_server(
+    command="npx",
+    args=["@heimdall-ai/heimdall"],
+)
+
+# Option 2: SSE transport (remote Heimdall server)
+heimdall_tools = MCPToolset.from_server(
+    uri="http://localhost:3000/sse",
+)
+```
+
+In `create_deep_agent()`:
+
+```python
+def create_deep_agent(
+    ...
+    execution: str | dict | None = None,  # "heimdall", "local", or MCP config dict
+    ...
+) -> LlmAgent:
+    tools = [...]
+
+    if execution == "heimdall":
+        # Connect to Heimdall MCP server for sandboxed execution
+        heimdall_tools = MCPToolset.from_server(
+            command="npx",
+            args=["@heimdall-ai/heimdall"],
+            env={"HEIMDALL_WORKSPACE": workspace_path},
+        )
+        tools.extend(heimdall_tools)
+    elif execution == "local":
+        # Fallback: local shell execution (less secure)
+        tools.append(local_execute_tool)
+    elif isinstance(execution, dict):
+        # Custom MCP server config
+        heimdall_tools = MCPToolset.from_server(**execution)
+        tools.extend(heimdall_tools)
+```
+
+#### Mapping from deepagents execution backends
+
+| deepagents Backend | Heimdall MCP equivalent |
+|---|---|
+| `LocalShellBackend.execute(cmd)` | `execute_bash` MCP tool |
+| `SandboxBackendProtocol.execute(cmd)` | `execute_bash` + `execute_python` MCP tools |
+| Sandbox file read/write | `read_file` / `write_file` MCP tools |
+| Sandbox package install | `install_packages` MCP tool |
+
+#### Key advantages over deepagents execution
+
+1. **Security-first**: Pyodide WASM sandbox + just-bash simulation vs. raw `subprocess.run()`
+2. **Language support**: Both Python and Bash in a single sandbox
+3. **Shared workspace**: Files persist across executions and are shared between languages
+4. **No host access**: Workspace isolation prevents agent from accessing host filesystem
+5. **MCP standard**: Standard protocol enables remote execution, scaling, and swappability
+6. **Configurable limits**: File size, workspace size, and execution timeouts via env vars
+
+#### Bridging adk-skills script execution to Heimdall
+
+When both adk-skills and Heimdall are configured, the `run_script` tool from adk-skills can
+route script execution through Heimdall for sandboxed execution:
+
+```python
+# Custom executor that routes through Heimdall
+class HeimdallScriptExecutor:
+    def __init__(self, heimdall_tools):
+        self.execute_python = heimdall_tools["execute_python"]
+        self.execute_bash = heimdall_tools["execute_bash"]
+
+    async def execute(self, script_path: str, script_content: str) -> dict:
+        if script_path.endswith(".py"):
+            return await self.execute_python(code=script_content)
+        elif script_path.endswith(".sh"):
+            return await self.execute_bash(command=script_content)
+```
+
+### 4.9 Prompt Constants: `adk_deepagents/prompts.py`
 
 Port all system prompt templates from deepagents:
 
@@ -564,22 +809,28 @@ adk_deepagents/
 │   ├── state.py                    # StateBackend (session.state)
 │   ├── filesystem.py               # FilesystemBackend (local FS)
 │   ├── composite.py                # CompositeBackend (path routing)
-│   ├── local_shell.py              # LocalShellBackend (subprocess)
 │   └── utils.py                    # Shared utilities
 ├── tools/
 │   ├── __init__.py
 │   ├── todos.py                    # write_todos, read_todos
-│   ├── filesystem.py               # ls, read_file, write_file, edit_file, glob, grep, execute
+│   ├── filesystem.py               # ls, read_file, write_file, edit_file, glob, grep
 │   └── task.py                     # task tool (sub-agent spawner)
+├── execution/
+│   ├── __init__.py
+│   ├── heimdall.py                 # Heimdall MCP integration (sandboxed execution)
+│   ├── local.py                    # Local shell fallback (subprocess, less secure)
+│   └── bridge.py                   # Bridge adk-skills run_script → Heimdall executor
+├── skills/
+│   ├── __init__.py
+│   └── integration.py              # adk-skills SkillsRegistry wiring into create_deep_agent
 ├── callbacks/
 │   ├── __init__.py
-│   ├── before_agent.py             # Memory/skills loading, dangling tool patching
-│   ├── before_model.py             # System prompt injection (memory, skills, fs, subagents)
+│   ├── before_agent.py             # Memory loading, dangling tool patching
+│   ├── before_model.py             # System prompt injection (memory, fs, subagents)
 │   ├── after_tool.py               # Large result eviction
 │   └── before_tool.py              # Human-in-the-loop approval
 ├── summarization.py                # Context window management
-├── memory.py                       # AGENTS.md loading and formatting
-└── skills.py                       # SKILL.md discovery, parsing, formatting
+└── memory.py                       # AGENTS.md loading and formatting
 
 tests/
 ├── unit_tests/
@@ -592,16 +843,23 @@ tests/
 │   │   ├── test_todos.py
 │   │   ├── test_filesystem_tools.py
 │   │   └── test_task.py
+│   ├── execution/
+│   │   ├── test_heimdall.py
+│   │   ├── test_local.py
+│   │   └── test_bridge.py
+│   ├── skills/
+│   │   └── test_integration.py
 │   ├── callbacks/
 │   │   ├── test_before_agent.py
 │   │   ├── test_before_model.py
 │   │   └── test_after_tool.py
 │   ├── test_memory.py
-│   ├── test_skills.py
 │   └── test_summarization.py
 ├── integration_tests/
 │   ├── test_deep_agent.py
 │   ├── test_subagents.py
+│   ├── test_heimdall_execution.py
+│   ├── test_skills_integration.py
 │   └── test_filesystem_integration.py
 └── conftest.py
 
@@ -611,11 +869,20 @@ examples/
 ├── content_builder/
 │   ├── agent.py
 │   ├── AGENTS.md
-│   ├── skills/
+│   ├── skills/                     # Agent Skills (adk-skills format)
+│   │   ├── blog-writing/
+│   │   │   └── SKILL.md
+│   │   └── social-media/
+│   │       └── SKILL.md
 │   └── subagents.yaml
-└── deep_research/
-    ├── agent.py
-    └── research_agent/
+├── deep_research/
+│   ├── agent.py
+│   └── research_agent/
+└── sandboxed_coder/
+    ├── agent.py                    # Agent with Heimdall execution
+    └── skills/
+        └── code-review/
+            └── SKILL.md
 ```
 
 ---
@@ -626,7 +893,7 @@ examples/
 
 **Goal:** A working agent with filesystem tools on session state.
 
-1. Set up `pyproject.toml` with `google-adk` dependency
+1. Set up `pyproject.toml` with dependencies: `google-adk`, `adk-skills-agent`
 2. Implement `backends/protocol.py` - port all dataclasses and ABC
 3. Implement `backends/utils.py` - port utility functions
 4. Implement `backends/state.py` - `StateBackend` backed by a dict (session.state)
@@ -663,41 +930,51 @@ examples/
 
 **Deliverable:** Agent has dynamic system prompts with filesystem docs and subagent docs.
 
-### Phase 4: Memory + Skills
+### Phase 4: Memory + Skills (adk-skills integration)
 
-**Goal:** AGENTS.md and SKILL.md support.
+**Goal:** AGENTS.md memory and Agent Skills (SKILL.md) support.
 
 1. Implement `memory.py` - load and format AGENTS.md files
-2. Implement `skills.py` - discover, parse, and format SKILL.md files
+2. Implement `skills/integration.py` - wire `adk-skills` `SkillsRegistry` into
+   `create_deep_agent()`:
+   - Create `SkillsRegistry`, call `registry.discover(skills_dirs)`
+   - Add `use_skill`, `run_script`, `read_reference` tools to agent
+   - Optionally inject skills listing into system prompt via `inject_skills_prompt()`
 3. Add memory loading to `before_agent_callback`
-4. Add memory/skills injection to `before_model_callback`
+4. Add memory injection to `before_model_callback`
 5. Implement `backends/filesystem.py` - local filesystem backend
-6. Write tests for memory and skills loading
+6. Write tests for memory and skills integration
 
-**Deliverable:** Agent loads memory and skills from filesystem or state.
+**Deliverable:** Agent loads memory from AGENTS.md and discovers/activates skills via adk-skills.
 
-### Phase 5: Summarization + Advanced
+### Phase 5: Code Execution (Heimdall MCP) + Summarization
 
-**Goal:** Context window management and production features.
+**Goal:** Sandboxed code execution and context window management.
 
-1. Implement `summarization.py` - token counting, message partitioning, summary generation
-2. Integrate summarization into `before_model_callback`
-3. Implement `backends/composite.py` - path-based routing
-4. Implement `backends/local_shell.py` - local shell execution
-5. Add execution tool support
-6. Comprehensive integration tests
+1. Implement `execution/heimdall.py` - ADK MCP tool integration with Heimdall:
+   - Connect to Heimdall MCP server (stdio or SSE transport)
+   - Expose `execute_python`, `execute_bash`, workspace tools
+   - Configure workspace path and execution limits
+2. Implement `execution/bridge.py` - bridge adk-skills `run_script` to Heimdall executor
+3. Implement `execution/local.py` - local shell fallback for environments without Heimdall
+4. Implement `summarization.py` - token counting, message partitioning, summary generation
+5. Integrate summarization into `before_model_callback`
+6. Implement `backends/composite.py` - path-based routing
+7. Comprehensive integration tests (including Heimdall sandbox tests)
 
-**Deliverable:** Full feature parity with deepagents core.
+**Deliverable:** Agent can execute code in Heimdall sandbox + full feature parity with
+deepagents core.
 
 ### Phase 6: Examples + Documentation
 
 **Goal:** Working examples and docs.
 
-1. Port `quickstart` example
-2. Port `content-builder-agent` example
-3. Port `deep_research` example
-4. Write README with usage guide
-5. Write migration guide (deepagents → adk-deepagents)
+1. Port `quickstart` example (basic agent with filesystem + todos)
+2. Port `content-builder-agent` example (with adk-skills for blog/social skills)
+3. Port `deep_research` example (with sub-agents)
+4. New `sandboxed_coder` example (agent with Heimdall execution + code-review skill)
+5. Write README with usage guide
+6. Write migration guide (deepagents → adk-deepagents)
 
 ---
 
@@ -751,6 +1028,52 @@ Anthropic-specific `PromptCachingMiddleware` is dropped (Gemini handles caching 
 file operations from storage implementation, enabling the same agent to work with in-memory state,
 local filesystem, remote sandboxes, or databases. This is orthogonal to ADK and should be preserved.
 
+### 7.6 Skills: Delegate to adk-skills, Don't Reimplement
+
+**Decision:** Use `adk-skills-agent` library for all skills functionality.
+
+**Rationale:** deepagents' `SkillsMiddleware` implements custom SKILL.md parsing, validation,
+and progressive disclosure. The `adk-skills` library already provides all of this for Google ADK,
+plus additional features:
+
+- **Spec-compliant**: Follows the [agentskills.io](https://agentskills.io) standard exactly
+- **Two integration patterns**: Tool-based (progressive disclosure via `use_skill`) and
+  prompt injection (skills in system prompt) — matching both deepagents patterns
+- **Database support**: Optional SQLAlchemy-backed skill storage for production deployments
+- **Validation**: Built-in skill validation against the spec
+- **Reference loading**: On-demand `read_reference` tool for skill documentation
+- **Already ADK-native**: Produces tools compatible with `google.adk.agents.Agent`
+
+Re-implementing this would duplicate significant effort with no benefit.
+
+### 7.7 Code Execution: Heimdall MCP over Local Shell
+
+**Decision:** Use Heimdall MCP as the primary execution backend, with local shell as fallback.
+
+**Rationale:** deepagents' `LocalShellBackend` uses raw `subprocess.run()`, which gives the
+agent unrestricted access to the host system — a significant security concern. Heimdall provides:
+
+1. **WebAssembly sandbox**: Python runs in Pyodide (WASM) with no host filesystem or network
+   access. Bash runs via just-bash (TypeScript simulation, no real processes).
+2. **MCP protocol**: Standard protocol enabling remote execution, horizontal scaling, and
+   swappability. ADK has native MCP tool support via `MCPToolset`.
+3. **Shared workspace**: Python and Bash share a persistent `/workspace` directory, enabling
+   cross-language workflows common in research and data processing.
+4. **Configurable limits**: File size, workspace size, and execution timeouts via env vars.
+
+The trade-off is that Heimdall requires Node.js and has some limitations (no native C
+extensions in Python, no real networking). For use cases that need full host access, the
+`execution="local"` fallback preserves raw `subprocess` behavior.
+
+### 7.8 Execution + Skills Bridge
+
+**Decision:** Bridge adk-skills' `run_script` through Heimdall when both are configured.
+
+**Rationale:** Skills may include scripts in `scripts/` directories. By default, adk-skills
+runs these locally. When Heimdall is configured, we route script execution through the sandbox
+for consistent security. This is implemented as a custom executor class that the adk-skills
+`run_script` tool delegates to.
+
 ---
 
 ## 8. Examples to Port
@@ -771,17 +1094,26 @@ result = runner.run(session_id=session.id, user_message="List files in /")
 
 ### 8.2 Content Builder (port of `examples/content-builder-agent/`)
 
+Uses adk-skills for blog-writing and social-media skills:
+
 ```python
 from adk_deepagents import create_deep_agent
 from adk_deepagents.backends import FilesystemBackend
 
 agent = create_deep_agent(
     memory=["./AGENTS.md"],
-    skills=["./skills/"],
+    skills=["./skills/"],              # adk-skills discovers blog-writing, social-media
     tools=[web_search, generate_cover],
     subagents=[researcher_spec],
     backend=FilesystemBackend(root_dir="."),
 )
+
+# The agent can now:
+# 1. Activate blog-writing skill via use_skill("blog-writing") → gets full instructions
+# 2. Activate social-media skill → gets platform-specific guidelines
+# 3. Read skill references → use_reference("blog-writing", "seo-guide.md")
+# 4. Delegate research to sub-agent
+# 5. Write files to local filesystem
 ```
 
 ### 8.3 Deep Research (port of `examples/deep_research/`)
@@ -795,6 +1127,29 @@ agent = create_deep_agent(
     instruction=RESEARCH_INSTRUCTIONS,
     subagents=[{"name": "research-agent", "description": "...", "system_prompt": "..."}],
 )
+```
+
+### 8.4 Sandboxed Coder (new example, Heimdall + adk-skills)
+
+Demonstrates sandboxed code execution with Heimdall MCP and code-review skill:
+
+```python
+from adk_deepagents import create_deep_agent
+
+agent = create_deep_agent(
+    model="gemini-2.5-flash",
+    instruction="You are a coding assistant. Write and test code in the sandbox.",
+    skills=["./skills/"],              # code-review skill
+    execution="heimdall",              # Sandboxed Python + Bash via Heimdall MCP
+)
+
+# The agent can now:
+# 1. Write Python code and execute it in the Pyodide sandbox
+# 2. Run bash commands (grep, find, jq, etc.) in just-bash sandbox
+# 3. Install Python packages (numpy, pandas, etc.)
+# 4. Read/write files in the shared /workspace
+# 5. Activate code-review skill for review guidelines
+# 6. Cross-language workflows: bash prepares data → python analyzes
 ```
 
 ---
@@ -844,6 +1199,14 @@ agent = create_deep_agent(
 5. **Token counting:** deepagents uses `count_tokens_approximately` from LangChain. ADK may
    have its own token counting API, or we may need to implement our own.
 
+6. **ADK MCP tool lifecycle:** When using `MCPToolset.from_server()` for Heimdall, how is the
+   MCP server process lifecycle managed? Does ADK start/stop it automatically, or do we need
+   to manage it ourselves?
+
+7. **adk-skills run_script executor extensibility:** Can we cleanly inject a custom executor
+   into adk-skills' `run_script` tool to route execution through Heimdall? Or do we need to
+   wrap/replace the tool?
+
 ### Risks
 
 1. **Callback limitations:** ADK callbacks may not offer the same level of control as LangGraph
@@ -862,33 +1225,55 @@ agent = create_deep_agent(
    caching). Some features may not have Gemini equivalents. Mitigation: Make these optional
    and implement Gemini-specific optimizations where available.
 
+5. **Heimdall MCP availability:** Heimdall requires Node.js >= 18. In environments where
+   Node.js is unavailable, the `execution="heimdall"` option won't work. Mitigation: Always
+   support `execution="local"` fallback and make Heimdall optional.
+
+6. **Heimdall execution limitations:** Pyodide doesn't support all Python packages (those
+   requiring native C extensions without WASM ports). Bash is simulated (not real shell).
+   Mitigation: Document limitations clearly and offer local shell fallback.
+
+7. **adk-skills version compatibility:** We depend on adk-skills' public API. Breaking changes
+   in the library could affect our integration. Mitigation: Pin to a specific version range
+   and contribute upstream if needed.
+
 ---
 
 ## Appendix: Feature Parity Checklist
 
-| Feature | deepagents | adk-deepagents | Status |
-|---|---|---|---|
-| Todo list (write_todos/read_todos) | Yes | Planned | Phase 1 |
-| File operations (ls/read/write/edit) | Yes | Planned | Phase 1 |
-| Glob search | Yes | Planned | Phase 1 |
-| Grep search | Yes | Planned | Phase 1 |
-| Shell execution | Yes | Planned | Phase 5 |
-| Sub-agent delegation | Yes | Planned | Phase 2 |
-| General-purpose sub-agent | Yes | Planned | Phase 2 |
-| Custom sub-agents | Yes | Planned | Phase 2 |
-| Parallel sub-agent execution | Yes | Planned | Phase 2 |
-| Conversation summarization | Yes | Planned | Phase 5 |
-| Memory (AGENTS.md) | Yes | Planned | Phase 4 |
-| Skills (SKILL.md) | Yes | Planned | Phase 4 |
-| Human-in-the-loop approval | Yes | Planned | Phase 3 |
-| Large result eviction | Yes | Planned | Phase 3 |
-| Dangling tool call patching | Yes | Planned | Phase 3 |
-| Dynamic system prompts | Yes | Planned | Phase 3 |
-| State backend (ephemeral) | Yes | Planned | Phase 1 |
-| Filesystem backend (local) | Yes | Planned | Phase 4 |
-| Composite backend (routing) | Yes | Planned | Phase 5 |
-| Structured output | Yes | Planned | Phase 1 |
-| Model agnosticism | Yes (LangChain) | Yes (ADK) | Phase 1 |
-| Streaming | Yes (LangGraph) | Yes (ADK) | Phase 1 |
-| Checkpointing/persistence | Yes (LangGraph) | Yes (SessionService) | Phase 5 |
-| Prompt caching (Anthropic) | Yes | N/A (model-specific) | - |
+| Feature | deepagents | adk-deepagents | Implementation | Status |
+|---|---|---|---|---|
+| Todo list (write_todos/read_todos) | Yes | Planned | Custom tools + session.state | Phase 1 |
+| File operations (ls/read/write/edit) | Yes | Planned | Custom tools + Backend abstraction | Phase 1 |
+| Glob search | Yes | Planned | Custom tool + Backend | Phase 1 |
+| Grep search | Yes | Planned | Custom tool + Backend | Phase 1 |
+| Shell execution (Bash) | Yes (subprocess) | Planned | **Heimdall MCP** `execute_bash` | Phase 5 |
+| Python execution | N/A | Planned | **Heimdall MCP** `execute_python` | Phase 5 |
+| Sandboxed execution | Partial | Planned | **Heimdall MCP** (WASM sandbox) | Phase 5 |
+| Sub-agent delegation | Yes | Planned | ADK `AgentTool` | Phase 2 |
+| General-purpose sub-agent | Yes | Planned | ADK `AgentTool` | Phase 2 |
+| Custom sub-agents | Yes | Planned | ADK `AgentTool` | Phase 2 |
+| Parallel sub-agent execution | Yes | Planned | ADK `AgentTool` | Phase 2 |
+| Conversation summarization | Yes | Planned | Custom `before_model_callback` | Phase 5 |
+| Memory (AGENTS.md) | Yes | Planned | Custom loading + prompt injection | Phase 4 |
+| Skills (SKILL.md) discovery | Yes | Planned | **adk-skills** `SkillsRegistry.discover()` | Phase 4 |
+| Skills progressive disclosure | Yes | Planned | **adk-skills** `use_skill` tool | Phase 4 |
+| Skills prompt injection | Yes | Planned | **adk-skills** `inject_skills_prompt()` | Phase 4 |
+| Skills script execution | Yes | Planned | **adk-skills** `run_script` → Heimdall bridge | Phase 5 |
+| Skills reference loading | N/A | Planned | **adk-skills** `read_reference` tool | Phase 4 |
+| Skills validation | N/A | Planned | **adk-skills** `registry.validate_all()` | Phase 4 |
+| Skills database storage | N/A | Planned | **adk-skills** SQLAlchemy backend | Phase 4 |
+| Human-in-the-loop approval | Yes | Planned | ADK `before_tool_callback` | Phase 3 |
+| Large result eviction | Yes | Planned | ADK `after_tool_callback` | Phase 3 |
+| Dangling tool call patching | Yes | Planned | ADK `before_agent_callback` | Phase 3 |
+| Dynamic system prompts | Yes | Planned | ADK `before_model_callback` | Phase 3 |
+| State backend (ephemeral) | Yes | Planned | ADK `session.state` | Phase 1 |
+| Filesystem backend (local) | Yes | Planned | Custom `pathlib` backend | Phase 4 |
+| Composite backend (routing) | Yes | Planned | Custom routing backend | Phase 5 |
+| Structured output | Yes | Planned | ADK `output_schema` | Phase 1 |
+| Model agnosticism | Yes (LangChain) | Yes (ADK) | ADK model string | Phase 1 |
+| Streaming | Yes (LangGraph) | Yes (ADK) | ADK Runner streaming | Phase 1 |
+| Checkpointing/persistence | Yes (LangGraph) | Yes | ADK `SessionService` | Phase 5 |
+| Prompt caching (Anthropic) | Yes | N/A | Model-specific, not needed | - |
+| Shared Python/Bash workspace | N/A | Planned | **Heimdall MCP** shared `/workspace` | Phase 5 |
+| Package installation (sandbox) | N/A | Planned | **Heimdall MCP** `install_packages` | Phase 5 |
