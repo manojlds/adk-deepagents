@@ -73,6 +73,81 @@ def _format_subagent_docs(subagent_descriptions: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _inject_dangling_tool_responses(
+    llm_request: LlmRequest,
+    dangling: list[dict],
+) -> None:
+    """Inject synthetic function_response parts for dangling tool calls.
+
+    For each dangling tool call (a function_call with no matching
+    function_response), we find it in the conversation contents and
+    insert a synthetic response immediately after the message that
+    contains the call.
+
+    This mirrors deepagents' ``PatchToolCallsMiddleware`` which creates
+    synthetic ``ToolMessage`` objects for orphaned tool calls.
+    """
+    if not llm_request.contents:
+        return
+
+    dangling_ids = {d["id"]: d["name"] for d in dangling}
+
+    # Scan existing contents for function_responses to avoid double-patching
+    existing_response_ids: set[str] = set()
+    for content in llm_request.contents:
+        if content.parts:
+            for part in content.parts:
+                fr = getattr(part, "function_response", None)
+                if fr is not None and getattr(fr, "id", None):
+                    existing_response_ids.add(fr.id)
+
+    # Remove already-resolved from dangling
+    still_dangling = {
+        cid: name for cid, name in dangling_ids.items() if cid not in existing_response_ids
+    }
+    if not still_dangling:
+        return
+
+    # Build patched contents list: for each model message with dangling calls,
+    # insert a synthetic tool response content immediately after it
+    patched: list[types.Content] = []
+    for content in llm_request.contents:
+        patched.append(content)
+        if not content.parts:
+            continue
+
+        # Collect dangling call IDs from this message
+        msg_dangling_ids = []
+        for part in content.parts:
+            fc = getattr(part, "function_call", None)
+            if fc is not None and getattr(fc, "id", None) in still_dangling:
+                msg_dangling_ids.append((fc.id, still_dangling[fc.id]))
+
+        # Insert synthetic responses
+        for call_id, call_name in msg_dangling_ids:
+            cancel_msg = (
+                f"Tool call {call_name} with id {call_id} was cancelled — "
+                "another message came in before it could be completed."
+            )
+            response_content = types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            id=call_id,
+                            name=call_name,
+                            response={"status": "cancelled", "message": cancel_msg},
+                        )
+                    )
+                ],
+            )
+            patched.append(response_content)
+            # Remove from still_dangling to avoid duplicate patching
+            still_dangling.pop(call_id, None)
+
+    llm_request.contents = patched
+
+
 def make_before_model_callback(
     *,
     memory_sources: list[str] | None = None,
@@ -103,6 +178,12 @@ def make_before_model_callback(
         llm_request: LlmRequest,
     ) -> LlmResponse | None:
         state = callback_context.state
+
+        # 0. Patch dangling tool calls into the LLM request contents
+        dangling = state.pop("_dangling_tool_calls", None)
+        if dangling and llm_request.contents:
+            _inject_dangling_tool_responses(llm_request, dangling)
+
         additions: list[str] = []
 
         # Todo tools documentation
