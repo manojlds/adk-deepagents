@@ -1,12 +1,13 @@
 """Main factory — ``create_deep_agent()``.
 
 Mirrors ``deepagents.graph.create_deep_agent()`` using Google ADK primitives.
-Wires together tools, callbacks, sub-agents, memory, and skills into a
-configured ``LlmAgent``.
+Wires together tools, callbacks, sub-agents, memory, skills, execution,
+and summarization into a configured ``LlmAgent``.
 """
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -22,7 +23,7 @@ from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import build_subagent_tools
 from adk_deepagents.tools.todos import read_todos, write_todos
-from adk_deepagents.types import SkillsConfig, SubAgentSpec
+from adk_deepagents.types import SkillsConfig, SubAgentSpec, SummarizationConfig
 
 # ---------------------------------------------------------------------------
 # Default backend factory
@@ -51,6 +52,7 @@ def create_deep_agent(
     output_schema: type | None = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
+    summarization: SummarizationConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
     name: str = "deep_agent",
 ) -> LlmAgent:
@@ -83,7 +85,11 @@ def create_deep_agent(
         ``StateBackend`` backed by session state.
     execution:
         Code execution backend. ``"heimdall"`` for sandboxed execution,
-        ``"local"`` for subprocess, or a dict of MCP config.
+        ``"local"`` for subprocess, or a dict of MCP config. For
+        ``"heimdall"`` or dict configs, use ``create_deep_agent_async()``
+        or pre-resolve MCP tools via ``tools``.
+    summarization:
+        Optional ``SummarizationConfig`` for context window management.
     interrupt_on:
         Tool names that require human approval before execution.
     name:
@@ -143,7 +149,14 @@ def create_deep_agent(
             from adk_deepagents.execution.local import create_local_execute_tool
 
             core_tools.append(create_local_execute_tool())
-        # "heimdall" and dict configs are handled in Phase 5
+        elif execution == "heimdall" or isinstance(execution, dict):
+            # Heimdall/MCP tools must be resolved async.
+            warnings.warn(
+                f"execution={execution!r} requires async MCP tool resolution. "
+                "Use create_deep_agent_async() or pre-resolve MCP tools "
+                "and pass them via the `tools` parameter.",
+                stacklevel=2,
+            )
 
     # 5. Build sub-agent tools
     subagent_descriptions: list[dict[str, str]] = []
@@ -181,6 +194,8 @@ def create_deep_agent(
         memory_sources=memory,
         has_execution=has_execution,
         subagent_descriptions=subagent_descriptions or None,
+        summarization_config=summarization,
+        backend_factory=backend_factory if summarization else None,
     )
 
     after_tool_cb = make_after_tool_callback(
@@ -213,3 +228,80 @@ def create_deep_agent(
     )
 
     return agent
+
+
+# ---------------------------------------------------------------------------
+# Async factory (for Heimdall MCP)
+# ---------------------------------------------------------------------------
+
+
+async def create_deep_agent_async(
+    model: str = "gemini-2.5-flash",
+    tools: Sequence[Callable] | None = None,
+    *,
+    instruction: str | None = None,
+    subagents: list[SubAgentSpec] | None = None,
+    skills: list[str] | None = None,
+    skills_config: SkillsConfig | None = None,
+    memory: list[str] | None = None,
+    output_schema: type | None = None,
+    backend: Backend | BackendFactory | None = None,
+    execution: str | dict | None = None,
+    summarization: SummarizationConfig | None = None,
+    interrupt_on: dict[str, bool] | None = None,
+    name: str = "deep_agent",
+) -> tuple[LlmAgent, Callable | None]:
+    """Async variant of ``create_deep_agent()`` that resolves MCP tools.
+
+    Use this when ``execution="heimdall"`` or ``execution=dict(...)``.
+    Returns ``(agent, cleanup_fn)`` where ``cleanup_fn`` must be awaited
+    when the agent is no longer needed.
+
+    Parameters
+    ----------
+    (same as ``create_deep_agent``)
+
+    Returns
+    -------
+    tuple[LlmAgent, Callable | None]
+        The agent and an optional async cleanup function for MCP connections.
+    """
+    cleanup_fn: Callable | None = None
+    mcp_tools: list = []
+
+    # Resolve MCP tools if needed
+    if execution == "heimdall":
+        from adk_deepagents.execution.heimdall import get_heimdall_tools
+
+        mcp_tools, cleanup_fn = await get_heimdall_tools()
+    elif isinstance(execution, dict):
+        from adk_deepagents.execution.heimdall import get_heimdall_tools_from_config
+
+        mcp_tools, cleanup_fn = await get_heimdall_tools_from_config(execution)
+
+    # Merge MCP tools with user tools
+    combined_tools: list[Callable] = list(tools or []) + mcp_tools
+
+    # Set execution to "local" so has_execution=True for prompt injection,
+    # but tools are already resolved above (no async warning).
+    effective_execution: str | dict | None = execution
+    if execution == "heimdall" or isinstance(execution, dict):
+        effective_execution = "local" if mcp_tools else None
+
+    agent = create_deep_agent(
+        model=model,
+        tools=combined_tools,
+        instruction=instruction,
+        subagents=subagents,
+        skills=skills,
+        skills_config=skills_config,
+        memory=memory,
+        output_schema=output_schema,
+        backend=backend,
+        execution=effective_execution,
+        summarization=summarization,
+        interrupt_on=interrupt_on,
+        name=name,
+    )
+
+    return agent, cleanup_fn

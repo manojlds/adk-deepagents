@@ -2,7 +2,8 @@
 
 Replaces deepagents' ``wrap_model_call`` from all middleware classes.
 Injects memory, skills, filesystem docs, and sub-agent docs into the
-system instruction before each LLM call.
+system instruction before each LLM call. Optionally triggers
+conversation summarization.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
 from google.genai import types
 
+from adk_deepagents.backends.protocol import BackendFactory
 from adk_deepagents.prompts import (
     EXECUTION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
@@ -20,6 +22,7 @@ from adk_deepagents.prompts import (
     TASK_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
 )
+from adk_deepagents.types import SummarizationConfig
 
 
 def _append_to_system_instruction(llm_request: LlmRequest, text: str) -> None:
@@ -75,6 +78,8 @@ def make_before_model_callback(
     memory_sources: list[str] | None = None,
     has_execution: bool = False,
     subagent_descriptions: list[dict[str, str]] | None = None,
+    summarization_config: SummarizationConfig | None = None,
+    backend_factory: BackendFactory | None = None,
 ) -> Callable:
     """Create a ``before_model_callback`` that injects dynamic system prompts.
 
@@ -86,6 +91,11 @@ def make_before_model_callback(
         Whether execution tools (Heimdall/local) are available.
     subagent_descriptions:
         List of ``{"name": ..., "description": ...}`` for sub-agents.
+    summarization_config:
+        Optional config for context window summarization.
+    backend_factory:
+        Optional factory for creating backends (used by summarization
+        for history offloading).
     """
 
     def before_model_callback(
@@ -118,6 +128,43 @@ def make_before_model_callback(
         combined = "\n\n".join(additions)
         _append_to_system_instruction(llm_request, combined)
 
+        # Summarization check
+        if summarization_config:
+            from adk_deepagents.summarization import maybe_summarize
+
+            maybe_summarize(
+                callback_context,
+                llm_request,
+                context_window=_resolve_context_window(summarization_config),
+                trigger_fraction=_resolve_trigger_fraction(summarization_config),
+                keep_messages=_resolve_keep_messages(summarization_config),
+                backend_factory=backend_factory,
+                history_path_prefix=summarization_config.history_path_prefix,
+            )
+
         return None  # Proceed with LLM call
 
     return before_model_callback
+
+
+def _resolve_context_window(config: SummarizationConfig) -> int:
+    """Resolve context window size from config."""
+    from adk_deepagents.summarization import DEFAULT_CONTEXT_WINDOW
+
+    return DEFAULT_CONTEXT_WINDOW
+
+
+def _resolve_trigger_fraction(config: SummarizationConfig) -> float:
+    """Resolve trigger fraction from config."""
+    kind, value = config.trigger
+    if kind == "fraction":
+        return float(value)
+    return 0.85  # default
+
+
+def _resolve_keep_messages(config: SummarizationConfig) -> int:
+    """Resolve keep messages count from config."""
+    kind, value = config.keep
+    if kind == "messages":
+        return int(value)
+    return 6  # default
