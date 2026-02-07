@@ -6,7 +6,8 @@ When configured, certain tools require explicit approval before execution.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from google.adk.tools import BaseTool, ToolContext
 
@@ -31,9 +32,7 @@ def make_before_tool_callback(
     if not interrupt_on:
         return None
 
-    tools_requiring_approval = {
-        name for name, requires in interrupt_on.items() if requires
-    }
+    tools_requiring_approval = {name for name, requires in interrupt_on.items() if requires}
 
     if not tools_requiring_approval:
         return None

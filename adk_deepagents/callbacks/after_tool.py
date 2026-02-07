@@ -9,16 +9,14 @@ Ported from deepagents.middleware.filesystem large result eviction logic.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from google.adk.tools import BaseTool, ToolContext
 
-from adk_deepagents.backends.protocol import Backend, BackendFactory
+from adk_deepagents.backends.protocol import BackendFactory
 from adk_deepagents.backends.utils import (
-    NUM_CHARS_PER_TOKEN,
     TOOL_RESULT_TOKEN_LIMIT,
-    create_content_preview,
-    sanitize_tool_call_id,
 )
 
 # Tools whose results should NOT be evicted even if large.
@@ -41,8 +39,6 @@ def make_after_tool_callback(
     token_limit:
         Approximate token limit above which results are evicted.
     """
-
-    char_limit = token_limit * NUM_CHARS_PER_TOKEN
 
     def after_tool_callback(
         tool: BaseTool,

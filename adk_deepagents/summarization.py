@@ -7,7 +7,6 @@ overflow during long conversations.
 
 from __future__ import annotations
 
-from adk_deepagents.types import SummarizationConfig
 
 # Will be implemented in Phase 5 with:
 # - Token counting (approximate or model-specific)

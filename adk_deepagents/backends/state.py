@@ -20,8 +20,6 @@ from adk_deepagents.backends.protocol import (
 from adk_deepagents.backends.utils import (
     create_file_data,
     file_data_to_string,
-    filter_files_by_path,
-    format_grep_matches,
     format_read_response,
     glob_search_files,
     grep_matches_from_files,
@@ -68,7 +66,7 @@ class StateBackend(Backend):
             if norm_fp == normalized:
                 fd = files[fp]
                 content = fd.get("content", [])
-                size = sum(len(l) for l in content) + max(0, len(content) - 1)
+                size = sum(len(line) for line in content) + max(0, len(content) - 1)
                 return [
                     FileInfo(
                         path=norm_fp,
@@ -94,7 +92,7 @@ class StateBackend(Backend):
                 # Direct child file
                 fd = files[fp]
                 content = fd.get("content", [])
-                size = sum(len(l) for l in content) + max(0, len(content) - 1)
+                size = sum(len(line) for line in content) + max(0, len(content) - 1)
                 entries[norm_fp] = FileInfo(
                     path=norm_fp,
                     is_dir=False,
@@ -173,7 +171,7 @@ class StateBackend(Backend):
         result: list[FileInfo] = []
         for fp, fd in sorted(matched.items()):
             content = fd.get("content", [])
-            size = sum(len(l) for l in content) + max(0, len(content) - 1)
+            size = sum(len(line) for line in content) + max(0, len(content) - 1)
             result.append(
                 FileInfo(
                     path=normalize_path(fp),
@@ -184,9 +182,7 @@ class StateBackend(Backend):
             )
         return result
 
-    def upload_files(
-        self, files: list[tuple[str, bytes]]
-    ) -> list[FileUploadResponse]:
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         raise NotImplementedError("StateBackend does not support upload_files")
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
