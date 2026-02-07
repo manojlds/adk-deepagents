@@ -6,7 +6,7 @@ In ADK, each sub-agent becomes its own ``AgentTool``. We support both patterns.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from collections.abc import Callable
 
 from google.adk.agents import LlmAgent
 from google.adk.tools import AgentTool
@@ -16,6 +16,7 @@ from adk_deepagents.prompts import (
     DEFAULT_SUBAGENT_PROMPT,
 )
 from adk_deepagents.types import SubAgentSpec
+
 
 def _sanitize_agent_name(name: str) -> str:
     """Sanitize an agent name to be a valid Python identifier.
@@ -74,9 +75,7 @@ def build_subagent_tools(
     specs: list[SubAgentSpec] = []
 
     if include_general_purpose:
-        has_gp = any(
-            _sanitize_agent_name(s["name"]) == "general_purpose" for s in subagents
-        )
+        has_gp = any(_sanitize_agent_name(s["name"]) == "general_purpose" for s in subagents)
         if not has_gp:
             specs.append(GENERAL_PURPOSE_SUBAGENT)
 

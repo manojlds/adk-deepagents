@@ -7,7 +7,8 @@ configured ``LlmAgent``.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from google.adk.agents import LlmAgent
 
@@ -21,7 +22,7 @@ from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import build_subagent_tools
 from adk_deepagents.tools.todos import read_todos, write_todos
-from adk_deepagents.types import SkillsConfig, SubAgentSpec, SummarizationConfig
+from adk_deepagents.types import SkillsConfig, SubAgentSpec
 
 # ---------------------------------------------------------------------------
 # Default backend factory
@@ -102,7 +103,8 @@ def create_deep_agent(
         backend_factory = backend
     else:
         # Wrap a concrete backend instance in a factory
-        backend_factory = lambda _state, _b=backend: _b  # type: ignore[assignment]
+        def backend_factory(_state: dict, _b: Backend = backend) -> Backend:
+            return _b
 
     # 2. Build core tool list
     core_tools: list[Callable] = [
@@ -154,8 +156,7 @@ def create_deep_agent(
             include_general_purpose=True,
         )
         subagent_descriptions = [
-            {"name": s["name"], "description": s["description"]}
-            for s in subagents
+            {"name": s["name"], "description": s["description"]} for s in subagents
         ]
         # Include general-purpose in descriptions if added
         has_gp = any(s["name"] in ("general-purpose", "general_purpose") for s in subagents)

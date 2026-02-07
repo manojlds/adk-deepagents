@@ -7,10 +7,9 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
-from typing import Literal
+from datetime import UTC, datetime
 
-from adk_deepagents.backends.protocol import FileData, FileInfo, GrepMatch
+from adk_deepagents.backends.protocol import FileData, GrepMatch
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -58,11 +57,8 @@ def validate_path(
 
     normalized = normalize_path(path)
 
-    if allowed_prefixes:
-        if not any(normalized.startswith(p) for p in allowed_prefixes):
-            raise ValueError(
-                f"Path {normalized} not within allowed prefixes: {allowed_prefixes}"
-            )
+    if allowed_prefixes and not any(normalized.startswith(p) for p in allowed_prefixes):
+        raise ValueError(f"Path {normalized} not within allowed prefixes: {allowed_prefixes}")
 
     return normalized
 
@@ -74,7 +70,7 @@ def validate_path(
 
 def create_file_data(content: str, created_at: str | None = None) -> FileData:
     """Create a ``FileData`` dict from string content."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     lines = content.split("\n") if content else []
     return FileData(
         content=lines,
@@ -88,8 +84,8 @@ def update_file_data(file_data: FileData, content: str) -> FileData:
     lines = content.split("\n") if content else []
     return FileData(
         content=lines,
-        created_at=file_data.get("created_at", datetime.now(timezone.utc).isoformat()),
-        modified_at=datetime.now(timezone.utc).isoformat(),
+        created_at=file_data.get("created_at", datetime.now(UTC).isoformat()),
+        modified_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -117,10 +113,7 @@ def format_content_with_line_numbers(content: str, start_line: int = 1) -> str:
             result_parts.append(f"{line_num:>{LINE_NUMBER_WIDTH}}\t{line}")
         else:
             # Chunk long lines
-            chunks = [
-                line[j : j + MAX_LINE_LENGTH]
-                for j in range(0, len(line), MAX_LINE_LENGTH)
-            ]
+            chunks = [line[j : j + MAX_LINE_LENGTH] for j in range(0, len(line), MAX_LINE_LENGTH)]
             for ci, chunk in enumerate(chunks):
                 if ci == 0:
                     result_parts.append(f"{line_num:>{LINE_NUMBER_WIDTH}}\t{chunk}")
@@ -151,7 +144,9 @@ def format_read_response(
 
     if offset + limit < total_lines:
         remaining = total_lines - (offset + limit)
-        formatted += f"\n\n... ({remaining} more lines. Use offset={offset + limit} to continue reading)"
+        formatted += (
+            f"\n\n... ({remaining} more lines. Use offset={offset + limit} to continue reading)"
+        )
 
     return formatted
 
@@ -176,7 +171,7 @@ def perform_string_replacement(
 
     count = content.count(old_string)
     if count == 0:
-        return f"old_string not found in file content"
+        return "old_string not found in file content"
 
     if not replace_all and count > 1:
         return (

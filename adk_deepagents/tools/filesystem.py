@@ -9,8 +9,6 @@ Ported from deepagents.middleware.filesystem tool definitions.
 
 from __future__ import annotations
 
-from typing import Any
-
 from google.adk.tools import ToolContext
 
 from adk_deepagents.backends.protocol import Backend, FileData

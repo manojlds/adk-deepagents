@@ -9,7 +9,8 @@ loading via ``read_reference``.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from adk_deepagents.types import SkillsConfig
 

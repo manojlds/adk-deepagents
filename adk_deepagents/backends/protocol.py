@@ -6,8 +6,9 @@ Ported from deepagents.backends.protocol with adaptations for ADK.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Callable, Literal, TypeAlias, TypedDict
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal, TypeAlias, TypedDict
 
 # ---------------------------------------------------------------------------
 # Error types
@@ -147,9 +148,7 @@ class Backend(ABC):
         """Find files matching a glob *pattern*."""
 
     @abstractmethod
-    def upload_files(
-        self, files: list[tuple[str, bytes]]
-    ) -> list[FileUploadResponse]:
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload files (name, content) pairs."""
 
     @abstractmethod
