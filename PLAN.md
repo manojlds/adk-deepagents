@@ -979,43 +979,28 @@ examples/
 
 ### Phase 4: Memory + Skills + FilesystemBackend
 
-**Status:** Memory ✅ done. Skills ⚠️ stub. FilesystemBackend ❌ not started.
+**Status:** ✅ Complete.
 
 **Goal:** AGENTS.md memory, Agent Skills, and local filesystem backend.
 
-#### Already Complete:
+#### Completed:
 - ✅ `memory.py` - `load_memory()` and `format_memory()` (65 lines, 4 tests)
 - ✅ Memory loading wired into `before_agent_callback`
 - ✅ Memory injection wired into `before_model_callback`
-- ✅ `skills/integration.py` - basic `add_skills_tools()` stub
+- ✅ `skills/integration.py` - full implementation with logging, config forwarding,
+  per-operation error handling, registry/metadata state storage, and `inject_skills_into_prompt()`
+- ✅ `backends/filesystem.py` - local filesystem backend with virtual mode sandboxing,
+  ripgrep-accelerated grep, pathlib operations, upload/download support
+- ✅ 35 FilesystemBackend tests + 7 skills integration tests (42 new tests, 104 total)
 
-#### Remaining Work:
-
-1. **Improve `skills/integration.py`** - the current stub silently eats errors and discards
-   the registry. Needs:
-   - Store `SkillsRegistry` instance in state for later access
-   - Pass `skills_config` to registry constructor
-   - Handle discovery errors gracefully (log, don't silently ignore)
-   - Add skills metadata to state (`state["skills_metadata"]`) for prompt injection
-   - Support the prompt injection alternative (`inject_skills_prompt()`) in
-     `before_model_callback` for non-tool-based skills listing
-   - Add a `skills_prompt_injection: bool = False` parameter to `create_deep_agent()`
-
-2. **Implement `backends/filesystem.py`** - local filesystem backend:
-   - Port from `deepagents.backends.filesystem.FilesystemBackend`
-   - `__init__(root_dir=None, virtual_mode=False, max_file_size_mb=10)`
-   - `_resolve_path(key)` — virtual mode enforces paths within root_dir
-   - Security: prevent symlink attacks with `os.O_NOFOLLOW`, block `..` and `~`
-   - `grep_raw()` — try ripgrep (`rg --json -F`) first, fallback to Python regex
-   - `glob_info()` — use `Path.rglob(pattern)`
-   - `ls_info()`, `read()`, `write()`, `edit()` via `pathlib`
-   - `upload_files()` and `download_files()` for file transfer
-   - Key difference from StateBackend: returns `files_update=None` (persists directly
-     to disk, no state merging needed)
-
-3. **Write tests** for:
-   - Skills integration (with mocked adk-skills-agent)
-   - FilesystemBackend (with temp directories)
+#### Implementation Notes:
+- `skills/integration.py` stores `SkillsRegistry` in `state["_skills_registry"]` and
+  metadata in `state["skills_metadata"]` for prompt injection
+- `inject_skills_into_prompt()` provides non-tool-based alternative for skills listing
+- `FilesystemBackend` returns `files_update=None` from write/edit (persists directly to disk)
+- `FilesystemBackend.grep_raw()` tries ripgrep first, falls back to Python search
+- Virtual mode uses `Path.relative_to()` to prevent directory escapes
+- Non-virtual mode accesses absolute paths directly (for system-level access)
 
 #### Implementation Details for `backends/filesystem.py`
 
@@ -1518,19 +1503,19 @@ agent = create_deep_agent(
 | Parallel sub-agent execution | Yes | ✅ Done | ADK `AgentTool` (native) | Phase 2 |
 | Conversation summarization | Yes | ❌ Pending | Custom `before_model_callback` | Phase 5 |
 | Memory (AGENTS.md) | Yes | ✅ Done | `memory.py` + callback injection | Phase 4 |
-| Skills (SKILL.md) discovery | Yes | ⚠️ Stub | **adk-skills** `SkillsRegistry.discover()` | Phase 4 |
-| Skills progressive disclosure | Yes | ⚠️ Stub | **adk-skills** `use_skill` tool | Phase 4 |
-| Skills prompt injection | Yes | ❌ Pending | **adk-skills** `inject_skills_prompt()` | Phase 4 |
+| Skills (SKILL.md) discovery | Yes | ✅ Done | **adk-skills** `SkillsRegistry.discover()` | Phase 4 |
+| Skills progressive disclosure | Yes | ✅ Done | **adk-skills** `use_skill` tool | Phase 4 |
+| Skills prompt injection | Yes | ✅ Done | `inject_skills_into_prompt()` | Phase 4 |
 | Skills script execution | Yes | ❌ Pending | **adk-skills** `run_script` → Heimdall bridge | Phase 5 |
-| Skills reference loading | N/A | ⚠️ Stub | **adk-skills** `read_reference` tool | Phase 4 |
-| Skills validation | N/A | ❌ Pending | **adk-skills** `registry.validate_all()` | Phase 4 |
-| Skills database storage | N/A | ❌ Pending | **adk-skills** SQLAlchemy backend | Phase 4 |
+| Skills reference loading | N/A | ✅ Done | **adk-skills** `read_reference` tool | Phase 4 |
+| Skills validation | N/A | ✅ Done | **adk-skills** `registry.validate_all()` via config | Phase 4 |
+| Skills database storage | N/A | ⚠️ Deferred | **adk-skills** SQLAlchemy backend (external dep) | Phase 4 |
 | Human-in-the-loop approval | Yes | ⚠️ Partial | Sets state, blocks tool, but no pause | Phase 3 |
 | Large result eviction | Yes | ⚠️ In-tool | `truncate_if_too_long()` in tool functions | Phase 3 |
 | Dangling tool call patching | Yes | ❌ Pending | Needs message history access research | Phase 3 |
 | Dynamic system prompts | Yes | ✅ Done | `before_model_callback` injection | Phase 3 |
 | State backend (ephemeral) | Yes | ✅ Done | `StateBackend` on session state dict | Phase 1 |
-| Filesystem backend (local) | Yes | ❌ Pending | Custom `pathlib` backend | Phase 4 |
+| Filesystem backend (local) | Yes | ✅ Done | `FilesystemBackend` with virtual mode | Phase 4 |
 | Composite backend (routing) | Yes | ❌ Pending | Custom routing backend | Phase 5 |
 | Structured output | Yes | ✅ Done | ADK `output_schema` param | Phase 1 |
 | Model agnosticism | Yes (LangChain) | ✅ Done | ADK model string | Phase 1 |
