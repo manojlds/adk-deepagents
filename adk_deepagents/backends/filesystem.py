@@ -7,12 +7,9 @@ Files are persisted directly to disk, so ``WriteResult.files_update`` and
 
 from __future__ import annotations
 
-import os
-import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from adk_deepagents.backends.protocol import (
     Backend,
@@ -73,8 +70,8 @@ class FilesystemBackend(Backend):
             # Prevent escape from root directory
             try:
                 resolved.relative_to(self._root)
-            except ValueError:
-                raise ValueError(f"Path escapes root directory: {key}")
+            except ValueError as err:
+                raise ValueError(f"Path escapes root directory: {key}") from err
             return resolved
         else:
             # Non-virtual: treat as absolute path, or relative to root
@@ -101,9 +98,7 @@ class FilesystemBackend(Backend):
                     path=path,
                     is_dir=False,
                     size=stat.st_size,
-                    modified_at=datetime.fromtimestamp(
-                        stat.st_mtime, tz=timezone.utc
-                    ).isoformat(),
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                 )
             ]
 
@@ -121,9 +116,7 @@ class FilesystemBackend(Backend):
                             path=child_path,
                             is_dir=child.is_dir(),
                             size=stat.st_size if child.is_file() else 0,
-                            modified_at=datetime.fromtimestamp(
-                                stat.st_mtime, tz=timezone.utc
-                            ).isoformat(),
+                            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                         )
                     )
                 except OSError:
@@ -170,15 +163,12 @@ class FilesystemBackend(Backend):
         if not selected:
             return f"No content at offset {offset} (file has {total_lines} lines)"
 
-        formatted = format_content_with_line_numbers(
-            "\n".join(selected), start_line=offset + 1
-        )
+        formatted = format_content_with_line_numbers("\n".join(selected), start_line=offset + 1)
 
         if offset + limit < total_lines:
             remaining = total_lines - (offset + limit)
             formatted += (
-                f"\n\n... ({remaining} more lines. "
-                f"Use offset={offset + limit} to continue reading)"
+                f"\n\n... ({remaining} more lines. Use offset={offset + limit} to continue reading)"
             )
 
         return formatted
@@ -186,7 +176,7 @@ class FilesystemBackend(Backend):
     def write(self, file_path: str, content: str) -> WriteResult:
         try:
             resolved = self._resolve_path(file_path)
-        except ValueError as e:
+        except ValueError:
             return WriteResult(error="invalid_path", path=file_path)
 
         if resolved.exists():
@@ -197,7 +187,7 @@ class FilesystemBackend(Backend):
             resolved.write_text(content, encoding="utf-8")
         except PermissionError:
             return WriteResult(error="permission_denied", path=file_path)
-        except OSError as e:
+        except OSError:
             return WriteResult(error="invalid_path", path=file_path)
 
         # files_update is None — file is persisted directly to disk
@@ -212,7 +202,7 @@ class FilesystemBackend(Backend):
     ) -> EditResult:
         try:
             resolved = self._resolve_path(file_path)
-        except ValueError as e:
+        except ValueError:
             return EditResult(error="invalid_path", path=file_path)
 
         if not resolved.exists():
@@ -227,9 +217,7 @@ class FilesystemBackend(Backend):
         except OSError as e:
             return EditResult(error=str(e), path=file_path)
 
-        result = perform_string_replacement(
-            current_content, old_string, new_string, replace_all
-        )
+        result = perform_string_replacement(current_content, old_string, new_string, replace_all)
 
         if isinstance(result, str):
             return EditResult(error=result, path=file_path)
@@ -274,9 +262,7 @@ class FilesystemBackend(Backend):
             cmd.extend(["--glob", glob_pattern])
 
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return None
 
@@ -304,9 +290,7 @@ class FilesystemBackend(Backend):
                     pass
             line_number = match_data["line_number"]
             text = match_data["lines"]["text"].rstrip("\n")
-            matches.append(
-                GrepMatch(path=file_path, line=line_number, text=text)
-            )
+            matches.append(GrepMatch(path=file_path, line=line_number, text=text))
         return matches
 
     def _grep_python(
@@ -349,9 +333,7 @@ class FilesystemBackend(Backend):
                             display_path = str(file_path)
                     else:
                         display_path = str(file_path)
-                    matches.append(
-                        GrepMatch(path=display_path, line=line_num, text=line)
-                    )
+                    matches.append(GrepMatch(path=display_path, line=line_num, text=line))
 
         return matches
 
@@ -387,17 +369,13 @@ class FilesystemBackend(Backend):
                     path=display_path,
                     is_dir=False,
                     size=stat.st_size,
-                    modified_at=datetime.fromtimestamp(
-                        stat.st_mtime, tz=timezone.utc
-                    ).isoformat(),
+                    modified_at=datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat(),
                 )
             )
 
         return entries
 
-    def upload_files(
-        self, files: list[tuple[str, bytes]]
-    ) -> list[FileUploadResponse]:
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         results: list[FileUploadResponse] = []
         for name, content in files:
             try:

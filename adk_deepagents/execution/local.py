@@ -7,7 +7,7 @@ Less secure than Heimdall MCP — intended for development/testing only.
 from __future__ import annotations
 
 import subprocess
-from typing import Callable
+from collections.abc import Callable
 
 from adk_deepagents.backends.protocol import ExecuteResponse
 

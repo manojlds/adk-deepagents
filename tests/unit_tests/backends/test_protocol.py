@@ -42,6 +42,7 @@ def test_write_result_with_update():
         files_update={"/new.txt": FileData(content=["hi"], created_at="t", modified_at="t")},
     )
     assert wr.error is None
+    assert wr.files_update is not None
     assert "/new.txt" in wr.files_update
 
 

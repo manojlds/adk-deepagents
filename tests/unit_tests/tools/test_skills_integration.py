@@ -10,9 +10,7 @@ class TestAddSkillsTools:
         """When adk-skills-agent is not installed, tools are returned as-is."""
         original_tools = [lambda: None]
         with patch.dict("sys.modules", {"adk_skills_agent": None}):
-            result = add_skills_tools(
-                list(original_tools), skills_dirs=["/skills"]
-            )
+            result = add_skills_tools(list(original_tools), skills_dirs=["/skills"])
         # Should return the original tools unchanged (ImportError caught)
         assert len(result) == len(original_tools)
 
@@ -67,9 +65,7 @@ class TestAddSkillsTools:
                 skills_config=config,
             )
 
-        mock_module.SkillsRegistry.assert_called_once_with(
-            db_url="sqlite:///skills.db"
-        )
+        mock_module.SkillsRegistry.assert_called_once_with(db_url="sqlite:///skills.db")
 
     def test_handles_discovery_error_gracefully(self):
         """If one directory fails, others are still tried."""
@@ -108,14 +104,14 @@ class TestInjectSkillsIntoPrompt:
 
     def test_calls_registry_inject(self):
         mock_registry = MagicMock()
-        mock_registry.inject_skills_prompt.return_value = "Hello\n<available_skills>...</available_skills>"
+        mock_registry.inject_skills_prompt.return_value = (
+            "Hello\n<available_skills>...</available_skills>"
+        )
 
         state = {"_skills_registry": mock_registry}
         result = inject_skills_into_prompt("Hello", state, format="xml")
 
-        mock_registry.inject_skills_prompt.assert_called_once_with(
-            "Hello", format="xml"
-        )
+        mock_registry.inject_skills_prompt.assert_called_once_with("Hello", format="xml")
         assert "<available_skills>" in result
 
     def test_handles_error_gracefully(self):
