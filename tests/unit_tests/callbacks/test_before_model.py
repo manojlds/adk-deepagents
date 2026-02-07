@@ -69,3 +69,92 @@ def test_subagent_docs_injected():
 
     si = str(request.config.system_instruction)
     assert "researcher" in si
+
+
+def test_dangling_tool_calls_patched():
+    """Dangling tool calls in state are injected as synthetic responses."""
+    cb = make_before_model_callback()
+    ctx = MagicMock()
+    ctx.state = {
+        "_dangling_tool_calls": [
+            {"id": "call_abc", "name": "write_file"},
+        ]
+    }
+
+    # Create a request with a model message containing the dangling function_call
+    fc_part = types.Part(
+        function_call=types.FunctionCall(
+            id="call_abc",
+            name="write_file",
+            args={"file_path": "/test.txt", "content": "hello"},
+        )
+    )
+    model_msg = types.Content(role="model", parts=[fc_part])
+
+    request = _make_llm_request()
+    request.contents = [model_msg]
+
+    result = cb(ctx, request)
+    assert result is None
+
+    # The dangling calls should be consumed from state
+    assert "_dangling_tool_calls" not in ctx.state
+
+    # A synthetic function_response should have been injected
+    assert len(request.contents) == 2
+    patched_content = request.contents[1]
+    assert patched_content.parts[0].function_response is not None
+    assert patched_content.parts[0].function_response.name == "write_file"
+    assert patched_content.parts[0].function_response.id == "call_abc"
+
+
+def test_dangling_calls_not_double_patched():
+    """If a response already exists for a dangling call, it's not duplicated."""
+    cb = make_before_model_callback()
+    ctx = MagicMock()
+    ctx.state = {
+        "_dangling_tool_calls": [
+            {"id": "call_xyz", "name": "ls"},
+        ]
+    }
+
+    # Message with function_call AND matching function_response
+    fc_part = types.Part(
+        function_call=types.FunctionCall(
+            id="call_xyz",
+            name="ls",
+            args={"path": "/"},
+        )
+    )
+    fr_part = types.Part(
+        function_response=types.FunctionResponse(
+            id="call_xyz",
+            name="ls",
+            response={"status": "success"},
+        )
+    )
+    model_msg = types.Content(role="model", parts=[fc_part])
+    tool_msg = types.Content(role="user", parts=[fr_part])
+
+    request = _make_llm_request()
+    request.contents = [model_msg, tool_msg]
+
+    cb(ctx, request)
+
+    # No extra messages should be injected since the response already exists
+    assert len(request.contents) == 2
+
+
+def test_no_dangling_calls_no_patching():
+    """When there are no dangling calls, contents are not modified."""
+    cb = make_before_model_callback()
+    ctx = MagicMock()
+    ctx.state = {}
+
+    msg = types.Content(role="user", parts=[types.Part(text="Hello")])
+    request = _make_llm_request()
+    request.contents = [msg]
+
+    cb(ctx, request)
+
+    assert len(request.contents) == 1
