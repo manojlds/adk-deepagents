@@ -12,6 +12,7 @@ from adk_deepagents.backends.protocol import (
     SandboxBackend,
     WriteResult,
 )
+from adk_deepagents.backends.filesystem import FilesystemBackend
 from adk_deepagents.backends.state import StateBackend
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "EditResult",
     "ExecuteResponse",
     "FileDownloadResponse",
+    "FilesystemBackend",
     "FileInfo",
     "FileUploadResponse",
     "GrepMatch",
