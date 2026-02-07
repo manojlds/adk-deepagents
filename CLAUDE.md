@@ -9,8 +9,8 @@ adk-deepagents is a Python library that re-implements deepagents using Google AD
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-# Install dependencies (including dev)
-uv sync --extra dev
+# Install dependencies (including dev group)
+uv sync
 
 # Run tests
 uv run pytest
