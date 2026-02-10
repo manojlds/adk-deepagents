@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import asyncio
 
+from dotenv import load_dotenv
+
 from adk_deepagents import create_deep_agent_async
+
+load_dotenv()
 
 
 # Create the sandboxed coder agent (async for Heimdall MCP)

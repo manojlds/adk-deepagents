@@ -12,7 +12,11 @@ from __future__ import annotations
 
 import asyncio
 
+from dotenv import load_dotenv
+
 from adk_deepagents import create_deep_agent
+
+load_dotenv()
 
 # Create a deep agent with default settings:
 # - Gemini 2.5 Flash model
