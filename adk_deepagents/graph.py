@@ -175,9 +175,7 @@ def create_deep_agent(
         for s in effective_subagents
     ]
     # Include general-purpose in descriptions if not already present
-    has_gp = any(
-        s["name"] in ("general-purpose", "general_purpose") for s in effective_subagents
-    )
+    has_gp = any(s["name"] in ("general-purpose", "general_purpose") for s in effective_subagents)
     if not has_gp:
         subagent_descriptions.insert(
             0,
