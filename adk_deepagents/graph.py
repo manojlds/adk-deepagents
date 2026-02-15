@@ -21,7 +21,11 @@ from adk_deepagents.callbacks.before_model import make_before_model_callback
 from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
-from adk_deepagents.tools.task import build_subagent_tools
+from adk_deepagents.tools.task import (
+    GENERAL_PURPOSE_SUBAGENT,
+    _sanitize_agent_name,
+    build_subagent_tools,
+)
 from adk_deepagents.tools.todos import read_todos, write_todos
 from adk_deepagents.types import SkillsConfig, SubAgentSpec, SummarizationConfig
 
@@ -159,35 +163,34 @@ def create_deep_agent(
             )
 
     # 5. Build sub-agent tools
-    subagent_descriptions: list[dict[str, str]] = []
-    subagent_tools = []
-    if subagents is not None:
-        subagent_tools = build_subagent_tools(
-            subagents,
-            default_model=model,
-            default_tools=list(core_tools),
-            include_general_purpose=True,
+    effective_subagents = list(subagents) if subagents else []
+    subagent_tools = build_subagent_tools(
+        effective_subagents,
+        default_model=model,
+        default_tools=list(core_tools),
+        include_general_purpose=True,
+    )
+    subagent_descriptions = [
+        {"name": _sanitize_agent_name(s["name"]), "description": s["description"]}
+        for s in effective_subagents
+    ]
+    # Include general-purpose in descriptions if not already present
+    has_gp = any(
+        s["name"] in ("general-purpose", "general_purpose") for s in effective_subagents
+    )
+    if not has_gp:
+        subagent_descriptions.insert(
+            0,
+            {
+                "name": _sanitize_agent_name(GENERAL_PURPOSE_SUBAGENT["name"]),
+                "description": GENERAL_PURPOSE_SUBAGENT["description"],
+            },
         )
-        subagent_descriptions = [
-            {"name": s["name"], "description": s["description"]} for s in subagents
-        ]
-        # Include general-purpose in descriptions if added
-        has_gp = any(s["name"] in ("general-purpose", "general_purpose") for s in subagents)
-        if not has_gp:
-            from adk_deepagents.tools.task import GENERAL_PURPOSE_SUBAGENT
-
-            subagent_descriptions.insert(
-                0,
-                {
-                    "name": GENERAL_PURPOSE_SUBAGENT["name"],
-                    "description": GENERAL_PURPOSE_SUBAGENT["description"],
-                },
-            )
 
     # 6. Compose callbacks
     before_agent_cb = make_before_agent_callback(
         memory_sources=memory,
-        backend_factory=backend_factory if memory else None,
+        backend_factory=backend_factory,
     )
 
     before_model_cb = make_before_model_callback(
@@ -282,11 +285,11 @@ async def create_deep_agent_async(
     # Merge MCP tools with user tools
     combined_tools: list[Callable] = list(tools or []) + mcp_tools
 
-    # Set execution to "local" so has_execution=True for prompt injection,
-    # but tools are already resolved above (no async warning).
+    # Signal that execution tools are available (for prompt injection) without
+    # adding a duplicate local execute tool — MCP tools are already in combined_tools.
     effective_execution: str | dict | None = execution
     if execution == "heimdall" or isinstance(execution, dict):
-        effective_execution = "local" if mcp_tools else None
+        effective_execution = "_resolved" if mcp_tools else None
 
     agent = create_deep_agent(
         model=model,

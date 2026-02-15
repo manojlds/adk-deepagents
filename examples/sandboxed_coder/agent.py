@@ -66,8 +66,7 @@ def _build_prompt() -> str:
 def build_agent(model: str = DEFAULT_MODEL):
     """Create the sandboxed coder agent (sync variant).
 
-    This variant uses ``execution="heimdall"`` in sync mode, which emits
-    a warning about async MCP resolution. For proper Heimdall integration,
+    Uses local subprocess execution. For sandboxed Heimdall execution,
     use ``build_agent_async()`` instead.
 
     Parameters
@@ -84,7 +83,7 @@ def build_agent(model: str = DEFAULT_MODEL):
         model=model,
         instruction=_build_prompt(),
         skills=[SKILLS_DIR],
-        execution="heimdall",
+        execution="local",
     )
 
 
@@ -114,8 +113,7 @@ async def build_agent_async(model: str = DEFAULT_MODEL):
 
 
 # Default agent for ADK CLI (adk run examples/sandboxed_coder/)
-# Note: ADK CLI uses sync import, so Heimdall tools won't be resolved.
-# Use the async runner below for full Heimdall support.
+# Uses local execution. For sandboxed Heimdall MCP, use the async runner below.
 root_agent = build_agent()
 
 

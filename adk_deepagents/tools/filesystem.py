@@ -77,7 +77,7 @@ def read_file(
     file_path: str,
     tool_context: ToolContext,
     offset: int = 0,
-    limit: int = 100,
+    limit: int = 2000,
 ) -> dict:
     """Read a file from the filesystem with optional pagination.
 
@@ -87,7 +87,7 @@ def read_file(
     Args:
         file_path: Absolute path to the file (must start with /).
         offset: Line number to start reading from (0-based). Defaults to 0.
-        limit: Maximum number of lines to return. Defaults to 100.
+        limit: Maximum number of lines to return. Defaults to 2000.
     """
     try:
         validated = validate_path(file_path)
