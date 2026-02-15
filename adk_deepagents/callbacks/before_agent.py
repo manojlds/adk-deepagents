@@ -113,6 +113,10 @@ def make_before_agent_callback(
     ) -> types.Content | None:
         state = callback_context.state
 
+        # 0. Store backend factory so filesystem tools can resolve it
+        if backend_factory is not None and "_backend_factory" not in state:
+            state["_backend_factory"] = backend_factory
+
         # 1. Patch dangling tool calls
         _patch_dangling_tool_calls(callback_context)
 
