@@ -1,6 +1,6 @@
 review:
   default:
-    model: opencode/glm-4.7-free
+    model: opencode/minimax-m2.5-free
 
   mode: unified
 
@@ -35,7 +35,7 @@ review:
     postDescription: true
 
 describe:
-  model: opencode/glm-4.7-free
+  model: opencode/minimax-m2.5-free
   includeProjectContext: true
 
 contextCompression:
