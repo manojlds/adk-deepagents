@@ -99,7 +99,7 @@
         "uv run ruff format --check . passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-004 and US-005"
     },
     {

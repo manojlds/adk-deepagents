@@ -72,3 +72,17 @@ Thread: https://ampcode.com/threads/T-019c6d7b-661a-77cf-87f7-0242e957913e
   - The `monkeypatch` approach for verifying no `asyncio.to_thread` usage is effective — patch the function and assert it was never called
   - All 6 async methods have matching signatures to the ABC defaults in `protocol.py`
 ---
+
+## 2026-02-17 - US-006
+Thread: https://ampcode.com/threads/T-019c6d7c-f700-743d-ba36-d7c67cb168b2
+- Added 6 async method overrides to `CompositeBackend` in `backends/composite.py`: `als_info`, `aread`, `awrite`, `aedit`, `agrep_raw`, `aglob_info`
+- Each override delegates to the resolved backend's async method (not the sync method)
+- `agrep_raw` and `aglob_info` mirror the sync merge logic (multi-backend search + deduplication)
+- `FilesystemBackend` inherits default `asyncio.to_thread()` wrappers from ABC — no changes needed
+- Added 9 async unit tests including a mock-based test verifying delegation calls the async method on the child backend
+- Files changed: `adk_deepagents/backends/composite.py`, `tests/unit_tests/backends/test_composite_backend.py`
+- **Learnings for future iterations:**
+  - `CompositeBackend` async methods must mirror the merge logic from sync counterparts for `agrep_raw` and `aglob_info`
+  - `ruff format` rewrites multi-line async method argument lists — always run `ruff format --check` before commit
+  - `AsyncMock` from `unittest.mock` works cleanly with `MagicMock(spec=Backend)` for verifying async delegation
+---
