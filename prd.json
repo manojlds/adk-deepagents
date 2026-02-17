@@ -158,7 +158,7 @@
         "uv run ruff format --check . passes"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Requires research into ADK's before_tool_callback return semantics"
     },
     {

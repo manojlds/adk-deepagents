@@ -7,6 +7,7 @@ Started: Tue Feb 17 09:14:02 PM GMT 2026
 - **Test structure:** Backend tests are in `tests/unit_tests/backends/test_<backend>_backend.py`, tool tests in `tests/unit_tests/tools/test_filesystem_tools.py`. Tests assert specific error codes, not just `is not None`.
 - **Write is create-only:** `Backend.write()` is create-only (no overwrites). Use `edit()` for modifications.
 - **StoreBackend namespace pattern:** `StoreBackend` uses `_ns_path()` / `_strip_ns()` to transparently prefix/strip namespace from paths. For grep/glob utilities, remap files to external paths before calling shared helpers.
+- **HITL via ADK ToolConfirmation:** Use `tool_context.request_confirmation()` to pause the agent. Check `tool_context.tool_confirmation` on resume: `None` = first call (pause), `.confirmed=True` = approved, `.confirmed=False` = rejected. Use `payload` dict for `modified_args`. Always set `actions.skip_summarization = True` when requesting confirmation.
 ---
 
 ## 2026-02-17 - US-001
@@ -118,4 +119,22 @@ Thread: https://ampcode.com/threads/T-019c6d7e-923b-7198-b35d-a4cbccf9cc08
   - Image detection uses `os.path.splitext` + a frozenset of extensions — simple and extensible
   - Mock `backend.download_files` directly on the backend instance from `mock_tool_context.state["_backend"]` for image tests
   - Always run `ruff format` after edits — ruff reformats spacing around `frozenset` and `dict` literals
+  ---
+
+  ## 2026-02-17 - US-009
+  Thread: https://ampcode.com/threads/T-019c6d83-225f-72c4-9743-28a6f38a184e
+  - Rewrote `before_tool.py` to use ADK's native `tool_context.request_confirmation()` for true pause/resume instead of just setting state
+  - First invocation: calls `request_confirmation()` with hint + payload (approval_id, tool, args), sets `skip_summarization=True`, returns `awaiting_approval` dict
+  - Resume with `confirmed=True`: proceeds with tool execution; supports `modified_args` via `payload`
+  - Resume with `confirmed=False`: returns rejection dict, skipping the tool
+  - Added `resume_approval()` helper that creates a `ToolConfirmation` object for callers (CLI, web UI, tests)
+  - Exported `resume_approval` from `callbacks/__init__.py`
+  - 14 unit tests covering: no-interrupt, empty, all-false, unspecified tool, multiple tools, first-call pause, approve, reject, modified args, resume_approval helper
+  - Files changed: `adk_deepagents/callbacks/before_tool.py`, `adk_deepagents/callbacks/__init__.py`, `tests/unit_tests/callbacks/test_before_tool.py`
+  - **Learnings for future iterations:**
+  - ADK has native HITL support via `ToolContext.request_confirmation()` and `ToolContext.tool_confirmation` — no need for custom exception/signal hacking
+  - Pattern: first call has `tool_confirmation=None` → call `request_confirmation()`; second call has `ToolConfirmation` with `confirmed` and optional `payload`
+  - `ToolConfirmation` is marked `@experimental(FeatureName.TOOL_CONFIRMATION)` — tests emit a UserWarning about experimental feature
+  - `actions.skip_summarization = True` prevents ADK from summarizing the confirmation request as a tool response
+  - The `payload` field on `ToolConfirmation` is `Any` (JSON serializable) — used to pass `modified_args` dict for the modified-args flow
   ---
