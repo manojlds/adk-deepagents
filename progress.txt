@@ -34,3 +34,16 @@ Thread: https://ampcode.com/threads/T-019c6d75-77a0-7389-8546-75f7a90e8510
   - Use `from None` on re-raised `ImportError` to satisfy ruff B904
   - Ruff SIM117 requires combining nested `with` statements into a single `with` using `,`
 ---
+
+## 2026-02-17 - US-003
+Thread: https://ampcode.com/threads/T-019c6d77-937b-74b1-8185-46ad542e12b1
+- Added `context_window: int | None` field to `SummarizationConfig` in `types.py`
+- Rewrote `_resolve_context_window()` in `callbacks/before_model.py` with 3-tier resolution: explicit config → model lookup table → DEFAULT_CONTEXT_WINDOW fallback
+- Added `MODEL_CONTEXT_WINDOWS` dict with known model context sizes (Gemini, GPT-4o, Claude-3)
+- Added 5 unit tests covering: explicit config, known models, unknown models, override precedence, and defaults
+- Files changed: `adk_deepagents/types.py`, `adk_deepagents/callbacks/before_model.py`, `tests/unit_tests/callbacks/test_before_model.py`
+- **Learnings for future iterations:**
+  - `_resolve_context_window` is in `callbacks/before_model.py`, not in `summarization.py` — the callback module resolves config into concrete values before passing to `maybe_summarize()`
+  - Trigger/keep resolution functions (`_resolve_trigger_fraction`, `_resolve_keep_messages`) live alongside `_resolve_context_window` in the same file
+  - The `maybe_summarize()` function takes already-resolved numeric values, not the config object
+---
