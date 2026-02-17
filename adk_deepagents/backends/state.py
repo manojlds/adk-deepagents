@@ -199,3 +199,40 @@ class StateBackend(Backend):
                     FileDownloadResponse(path=normalized, content=content_str.encode("utf-8"))
                 )
         return results
+
+    # -- async overrides (direct, no asyncio.to_thread needed) ---------------
+
+    async def als_info(self, path: str) -> list[FileInfo]:
+        """Async :meth:`ls_info` — direct call (in-memory, no I/O)."""
+        return self.ls_info(path)
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+        """Async :meth:`read` — direct call (in-memory, no I/O)."""
+        return self.read(file_path, offset, limit)
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """Async :meth:`write` — direct call (in-memory, no I/O)."""
+        return self.write(file_path, content)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """Async :meth:`edit` — direct call (in-memory, no I/O)."""
+        return self.edit(file_path, old_string, new_string, replace_all)
+
+    async def agrep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> list[GrepMatch] | str:
+        """Async :meth:`grep_raw` — direct call (in-memory, no I/O)."""
+        return self.grep_raw(pattern, path, glob)
+
+    async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+        """Async :meth:`glob_info` — direct call (in-memory, no I/O)."""
+        return self.glob_info(pattern, path)
