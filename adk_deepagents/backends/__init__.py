@@ -15,6 +15,7 @@ from adk_deepagents.backends.protocol import (
     WriteResult,
 )
 from adk_deepagents.backends.state import StateBackend
+from adk_deepagents.backends.store import StoreBackend
 
 __all__ = [
     "Backend",
@@ -29,5 +30,6 @@ __all__ = [
     "GrepMatch",
     "SandboxBackend",
     "StateBackend",
+    "StoreBackend",
     "WriteResult",
 ]
