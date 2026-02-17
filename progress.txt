@@ -3,6 +3,7 @@ Started: Tue Feb 17 09:14:02 PM GMT 2026
 
 ## Codebase Patterns
 - **Error codes in backends:** `FileOperationError` in `backends/protocol.py` is a `Literal` type — add new error codes there. Both `StateBackend` and `FilesystemBackend` must be updated in tandem. The tool layer in `tools/filesystem.py` maps error codes to user-facing messages.
+- **Async overrides pattern:** `StateBackend` overrides async methods with direct sync calls (no `asyncio.to_thread`) since it's in-memory. `FilesystemBackend` inherits the default `asyncio.to_thread` wrappers from the ABC. When adding a new backend, decide based on whether operations involve I/O.
 - **Test structure:** Backend tests are in `tests/unit_tests/backends/test_<backend>_backend.py`, tool tests in `tests/unit_tests/tools/test_filesystem_tools.py`. Tests assert specific error codes, not just `is not None`.
 - **Write is create-only:** `Backend.write()` is create-only (no overwrites). Use `edit()` for modifications.
 ---
@@ -58,4 +59,16 @@ Thread: https://ampcode.com/threads/T-019c6d79-786c-725d-b0b5-b9a0379a08d5
   - `StateBackend.edit()` returns `files_update` dict but doesn't auto-apply it to `_state["files"]` — tests that chain edits must manually apply updates
   - Async tests run automatically via `pytest-asyncio` with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorator needed
   - `ruff format` may reformat multi-line `asyncio.to_thread()` calls — run format check before committing
+---
+
+## 2026-02-17 - US-005
+Thread: https://ampcode.com/threads/T-019c6d7b-661a-77cf-87f7-0242e957913e
+- Added 6 async method overrides to `StateBackend` in `backends/state.py`: `als_info`, `aread`, `awrite`, `aedit`, `agrep_raw`, `aglob_info`
+- Each override directly calls the sync method (no `asyncio.to_thread`) since StateBackend is in-memory
+- Added 12 async unit tests in `test_state_backend.py` including a `test_no_asyncio_to_thread` that monkeypatches `asyncio.to_thread` to verify it's never called
+- Files changed: `adk_deepagents/backends/state.py`, `tests/unit_tests/backends/test_state_backend.py`
+- **Learnings for future iterations:**
+  - StateBackend async overrides are trivial — just call the sync method directly since there's no I/O
+  - The `monkeypatch` approach for verifying no `asyncio.to_thread` usage is effective — patch the function and assert it was never called
+  - All 6 async methods have matching signatures to the ABC defaults in `protocol.py`
 ---

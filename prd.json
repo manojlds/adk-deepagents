@@ -83,7 +83,7 @@
         "uv run ruff format --check . passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-004 (ABC async method definitions)"
     },
     {
