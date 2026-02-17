@@ -45,9 +45,7 @@ async def test_subagent_delegation():
     )
 
     # Verify the sub-agent tool was actually invoked
-    assert "math_expert" in tool_calls, (
-        f"Expected 'math_expert' in tool calls, got: {tool_calls}"
-    )
+    assert "math_expert" in tool_calls, f"Expected 'math_expert' in tool calls, got: {tool_calls}"
 
     # Verify the correct answer came back
     response_text = " ".join(texts)

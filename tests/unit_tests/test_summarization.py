@@ -259,7 +259,9 @@ def test_generate_llm_summary_success():
     messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
 
     mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=MagicMock(content="## SESSION INTENT\nGreeting exchange."))]
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content="## SESSION INTENT\nGreeting exchange."))
+    ]
 
     with patch("litellm.completion", return_value=mock_response):
         result = generate_llm_summary(messages, model="openai/test-model")
