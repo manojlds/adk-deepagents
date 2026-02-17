@@ -6,6 +6,7 @@ Started: Tue Feb 17 09:14:02 PM GMT 2026
 - **Async overrides pattern:** `StateBackend` overrides async methods with direct sync calls (no `asyncio.to_thread`) since it's in-memory. `FilesystemBackend` inherits the default `asyncio.to_thread` wrappers from the ABC. When adding a new backend, decide based on whether operations involve I/O.
 - **Test structure:** Backend tests are in `tests/unit_tests/backends/test_<backend>_backend.py`, tool tests in `tests/unit_tests/tools/test_filesystem_tools.py`. Tests assert specific error codes, not just `is not None`.
 - **Write is create-only:** `Backend.write()` is create-only (no overwrites). Use `edit()` for modifications.
+- **StoreBackend namespace pattern:** `StoreBackend` uses `_ns_path()` / `_strip_ns()` to transparently prefix/strip namespace from paths. For grep/glob utilities, remap files to external paths before calling shared helpers.
 ---
 
 ## 2026-02-17 - US-001
@@ -85,4 +86,22 @@ Thread: https://ampcode.com/threads/T-019c6d7c-f700-743d-ba36-d7c67cb168b2
   - `CompositeBackend` async methods must mirror the merge logic from sync counterparts for `agrep_raw` and `aglob_info`
   - `ruff format` rewrites multi-line async method argument lists — always run `ruff format --check` before commit
   - `AsyncMock` from `unittest.mock` works cleanly with `MagicMock(spec=Backend)` for verifying async delegation
+---
+
+## 2026-02-17 - US-007
+Thread: https://ampcode.com/threads/T-019c6d7e-923b-7198-b35d-a4cbccf9cc08
+- Created `StoreBackend` in `adk_deepagents/backends/store.py` — a cross-thread persistence backend using a shared dict-based store
+- Implements full Backend ABC (ls, read, write, edit, grep, glob, upload, download) + all 6 async overrides (direct, no asyncio.to_thread)
+- Supports namespace-based isolation: paths are transparently prefixed with `/<namespace>` in the store but presented without prefix to callers
+- Cross-thread persistence: same `store` dict instance passed to multiple StoreBackend instances allows data sharing
+- CompositeBackend routing works with StoreBackend via path prefix
+- Exported `StoreBackend` from `adk_deepagents/backends/__init__.py`
+- 42 unit tests in `tests/unit_tests/backends/test_store_backend.py` covering all operations, namespace isolation, cross-session reads, composite routing, and async methods
+- Files changed: `adk_deepagents/backends/store.py` (new), `adk_deepagents/backends/__init__.py`, `tests/unit_tests/backends/test_store_backend.py` (new)
+- **Learnings for future iterations:**
+  - StoreBackend follows the same in-memory pattern as StateBackend — async overrides are direct sync calls, no `asyncio.to_thread`
+  - Namespace isolation uses `_ns_path()` and `_strip_ns()` helpers to transparently map between external paths and internal namespaced paths
+  - For grep/glob, files must be remapped to external paths before passing to shared utility functions (`grep_matches_from_files`, `glob_search_files`)
+  - `ruff format` rewrites long docstrings and method signatures — always run `ruff format` before committing
+  - Import sorting: `asyncio` (stdlib) must come before `pytest` (third-party) — `ruff check --fix` handles this
 ---
