@@ -172,3 +172,58 @@ class CompositeBackend(Backend):
             result = backend.download_files([path])
             responses.extend(result)
         return responses
+
+    # ----- async delegation -----
+
+    async def als_info(self, path: str) -> list[FileInfo]:
+        """Async :meth:`ls_info` — delegates to resolved backend."""
+        return await self._resolve(path).als_info(path)
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+        """Async :meth:`read` — delegates to resolved backend."""
+        return await self._resolve(file_path).aread(file_path, offset, limit)
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """Async :meth:`write` — delegates to resolved backend."""
+        return await self._resolve(file_path).awrite(file_path, content)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """Async :meth:`edit` — delegates to resolved backend."""
+        return await self._resolve(file_path).aedit(file_path, old_string, new_string, replace_all)
+
+    async def agrep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> list[GrepMatch] | str:
+        """Async :meth:`grep_raw` — delegates to resolved backends and merges."""
+        backends = self._resolve_all(path)
+
+        all_matches: list[GrepMatch] = []
+        for backend in backends:
+            result = await backend.agrep_raw(pattern, path, glob)
+            if isinstance(result, list):
+                all_matches.extend(result)
+            elif isinstance(result, str) and result != "No matches found." and not all_matches:
+                return result
+
+        return all_matches
+
+    async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+        """Async :meth:`glob_info` — delegates to resolved backends and merges."""
+        backends = self._resolve_all(path)
+        all_results: list[FileInfo] = []
+        seen_paths: set[str] = set()
+        for backend in backends:
+            for info in await backend.aglob_info(pattern, path):
+                if info["path"] not in seen_paths:
+                    seen_paths.add(info["path"])
+                    all_results.append(info)
+        return all_results
