@@ -9,6 +9,9 @@ Ported from deepagents.middleware.filesystem tool definitions.
 
 from __future__ import annotations
 
+import base64
+import os
+
 from google.adk.tools import ToolContext
 
 from adk_deepagents.backends.protocol import Backend, FileData
@@ -17,6 +20,27 @@ from adk_deepagents.backends.utils import (
     truncate_if_too_long,
     validate_path,
 )
+
+# ---------------------------------------------------------------------------
+# Image detection
+# ---------------------------------------------------------------------------
+
+_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+_IMAGE_MEDIA_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+def _is_image_file(file_path: str) -> bool:
+    """Return True if *file_path* has a recognised image extension."""
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in _IMAGE_EXTENSIONS
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -82,7 +106,8 @@ def read_file(
     """Read a file from the filesystem with optional pagination.
 
     Returns content with line numbers. For large files, use offset and limit
-    to paginate through the content.
+    to paginate through the content. Image files (.png, .jpg, .jpeg, .gif,
+    .webp) are returned as base64-encoded multimodal content.
 
     Args:
         file_path: Absolute path to the file (must start with /).
@@ -95,6 +120,20 @@ def read_file(
         return {"status": "error", "message": str(e)}
 
     backend = _get_backend(tool_context)
+
+    if _is_image_file(validated):
+        responses = backend.download_files([validated])
+        resp = responses[0]
+        if resp.error:
+            return {"status": "error", "message": f"Error: {resp.error}"}
+        ext = os.path.splitext(validated)[1].lower()
+        media_type = _IMAGE_MEDIA_TYPES[ext]
+        encoded = base64.b64encode(resp.content).decode("ascii")  # type: ignore[arg-type]
+        return {
+            "status": "success",
+            "content": {"type": "image", "media_type": media_type, "data": encoded},
+        }
+
     content = backend.read(validated, offset=offset, limit=limit)
 
     if content.startswith("Error:"):
