@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import warnings
+from unittest.mock import patch
 
+import pytest
 from google.adk.agents import LlmAgent
 
 from adk_deepagents.backends.state import StateBackend
@@ -138,3 +140,17 @@ class TestCreateDeepAgent:
 
         agent = create_deep_agent(output_schema=MyOutput)
         assert agent.output_schema is MyOutput
+
+    def test_skills_raises_import_error_when_not_installed(self):
+        """When skills are requested but adk-skills-agent is missing, raise ImportError."""
+        with (
+            patch.dict("sys.modules", {"adk_skills_agent": None}),
+            pytest.raises(ImportError, match="adk-skills-agent is required"),
+        ):
+            create_deep_agent(skills=["/skills"])
+
+    def test_no_error_when_skills_not_requested_and_import_fails(self):
+        """When skills are NOT requested, import failure is irrelevant."""
+        with patch.dict("sys.modules", {"adk_skills_agent": None}):
+            agent = create_deep_agent()
+            assert isinstance(agent, LlmAgent)

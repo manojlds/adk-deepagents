@@ -135,15 +135,20 @@ def create_deep_agent(
     # 3. Skills integration (adk-skills)
     if skills:
         try:
-            from adk_deepagents.skills.integration import add_skills_tools
-
-            core_tools = add_skills_tools(
-                core_tools,
-                skills_dirs=skills,
-                skills_config=skills_config,
-            )
+            import adk_skills_agent  # noqa: F401
         except ImportError:
-            pass  # adk-skills not installed; skip silently
+            raise ImportError(
+                "adk-skills-agent is required for skills support. "
+                "Install it with: pip install adk-skills-agent"
+            ) from None
+
+        from adk_deepagents.skills.integration import add_skills_tools
+
+        core_tools = add_skills_tools(
+            core_tools,
+            skills_dirs=skills,
+            skills_config=skills_config,
+        )
 
     # 4. Execution tools
     has_execution = False
