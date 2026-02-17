@@ -166,4 +166,36 @@ Thread: https://ampcode.com/threads/T-019c6d88-9270-754a-b156-cdcaf456381f
   - Sub-agent skills use the same `ImportError` guard pattern as the parent — centralized in `_resolve_skills_tools()`
   - `ruff format` rewrites multi-line for-loops in graph.py — always run format before commit
   - General-purpose dedup must check both pre-built agent names and spec names
----
+  ---
+
+  ## 2026-02-17 - US-012
+  Thread: https://ampcode.com/threads/T-019c6d8a-ee0b-70f4-9e86-ee0c15a69335
+  - Added `litellm>=1.81.13` and `pytest-timeout>=2.0` to dev dependencies in `pyproject.toml`
+  - Added `integration` marker definition to `[tool.pytest.ini_options]` in `pyproject.toml`
+  - Created `tests/integration_tests/conftest.py` with auto-skip logic when `OPENCODE_API_KEY` is not set
+  - Created `tests/integration_tests/test_filesystem_roundtrip.py` with full round-trip scenario: write_file → read_file → edit_file → verify content
+  - Tests use `LiteLlm` from `google.adk.models.lite_llm` configured to hit OpenCode Zen endpoint (`https://opencode.ai/zen/v1/chat/completions`)
+  - API key is read from `OPENCODE_API_KEY` environment variable
+  - Tests marked with `@pytest.mark.integration` and `@pytest.mark.timeout(120)` for safety
+  - Uses `InMemoryRunner` from `google.adk.runners` for end-to-end agent execution
+  - Files changed: `pyproject.toml`, `tests/integration_tests/conftest.py` (new), `tests/integration_tests/test_filesystem_roundtrip.py` (new), `uv.lock`
+  - **Learnings for future iterations:**
+  - `_backend_factory` must be passed in initial session state for filesystem tools to work — callbacks use their own closure-captured factory but tools resolve from `tool_context.state`
+  - `InMemoryRunner.session_service.create_session()` accepts `state` dict for initial session state
+  - `LiteLlm(model="openai/gpt-4o-mini", api_key=..., api_base=...)` passes kwargs through to litellm completion API
+  - Integration tests use multi-turn conversation within a single session: first `_run_agent()` helper for initial prompt, then `runner.run_async()` for subsequent turns
+  - `conftest.py` `pytest_collection_modifyitems` hook is the cleanest way to skip all integration tests when the API key is missing
+  - `ruff format` will reformat new files — always run format before committing
+  ---
+
+  ## 2026-02-17 - US-013
+  Thread: https://ampcode.com/threads/T-019c6d8f-5ced-766d-9657-64aab67c471f
+  - Created `tests/integration_tests/test_subagent_delegation.py` with sub-agent delegation scenario
+  - Test creates a main agent with a `math_expert` sub-agent via `SubAgentSpec`, instructs the main agent to delegate a math question, and verifies the sub-agent computed the result (15×7=105)
+  - Follows same patterns as `test_filesystem_roundtrip.py`: `_make_litellm_model()`, `_backend_factory()`, `_run_agent()` helper, `@pytest.mark.integration`, `@pytest.mark.timeout(120)`
+  - Files changed: `tests/integration_tests/test_subagent_delegation.py` (new)
+  - **Learnings for future iterations:**
+  - Sub-agent delegation tests should use concrete, verifiable answers (e.g., math) so assertions can check exact values
+  - The `SubAgentSpec` only needs `name` and `description` for basic delegation — `model` and `tools` default from the parent
+  - Integration test helpers (`_run_agent`, `_make_litellm_model`, `_backend_factory`) are duplicated per test file since they're lightweight — could be shared via conftest if more tests are added
+  ---
