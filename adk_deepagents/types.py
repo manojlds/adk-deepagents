@@ -18,6 +18,8 @@ class SubAgentSpec(TypedDict, total=False):
     system_prompt: str
     tools: Sequence[Callable]
     model: str
+    skills: list[str]
+    interrupt_on: dict[str, bool]
 
 
 SubAgentSpec.__required_keys__ = frozenset({"name", "description"})

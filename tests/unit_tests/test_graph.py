@@ -310,3 +310,131 @@ class TestExtraCallbacks:
 
         result = _compose_callbacks(None, None)
         assert result is None
+
+
+class TestSubAgentSpecFields:
+    """Tests for SubAgentSpec skills, interrupt_on, and pre-built LlmAgent support (US-011)."""
+
+    def test_subagent_with_skills_raises_when_not_installed(self):
+        """Skills on a sub-agent raise ImportError if adk-skills-agent is missing."""
+        with (
+            patch.dict("sys.modules", {"adk_skills_agent": None}),
+            pytest.raises(ImportError, match="adk-skills-agent is required"),
+        ):
+            create_deep_agent(
+                subagents=[
+                    {
+                        "name": "skill_agent",
+                        "description": "Agent with skills",
+                        "skills": ["/skills"],
+                    }
+                ]
+            )
+
+    def test_subagent_without_skills_no_error(self):
+        """Sub-agent without skills works even if adk-skills-agent is missing."""
+        with patch.dict("sys.modules", {"adk_skills_agent": None}):
+            agent = create_deep_agent(
+                subagents=[
+                    {
+                        "name": "plain_agent",
+                        "description": "No skills needed",
+                    }
+                ]
+            )
+            assert isinstance(agent, LlmAgent)
+
+    def test_subagent_with_interrupt_on(self):
+        """Sub-agent with interrupt_on gets its own before_tool_callback."""
+        agent = create_deep_agent(
+            subagents=[
+                {
+                    "name": "cautious_agent",
+                    "description": "Agent requiring approval",
+                    "interrupt_on": {"write_file": True},
+                }
+            ]
+        )
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        # Find the cautious_agent
+        cautious = [t for t in agent_tools if t.agent.name == "cautious_agent"]
+        assert len(cautious) == 1
+        assert cautious[0].agent.before_tool_callback is not None
+
+    def test_subagent_without_interrupt_on_has_no_callback(self):
+        """Sub-agent without interrupt_on has no before_tool_callback."""
+        agent = create_deep_agent(
+            subagents=[
+                {
+                    "name": "normal_agent",
+                    "description": "Normal agent",
+                }
+            ]
+        )
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        normal = [t for t in agent_tools if t.agent.name == "normal_agent"]
+        assert len(normal) == 1
+        assert normal[0].agent.before_tool_callback is None
+
+    def test_prebuilt_llmagent_in_subagents(self):
+        """Pre-built LlmAgent instances are accepted in the subagents list."""
+        prebuilt = LlmAgent(
+            name="prebuilt_agent",
+            model="gemini-2.5-flash",
+            description="A pre-built agent",
+            instruction="You are a pre-built agent.",
+        )
+        agent = create_deep_agent(subagents=[prebuilt])
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        prebuilt_tools = [t for t in agent_tools if t.agent.name == "prebuilt_agent"]
+        assert len(prebuilt_tools) == 1
+        assert prebuilt_tools[0].agent is prebuilt
+
+    def test_prebuilt_llmagent_mixed_with_specs(self):
+        """Pre-built LlmAgent and SubAgentSpec can be mixed."""
+        prebuilt = LlmAgent(
+            name="prebuilt_agent",
+            model="gemini-2.5-flash",
+            description="A pre-built agent",
+            instruction="Pre-built instructions.",
+        )
+        agent = create_deep_agent(
+            subagents=[
+                prebuilt,
+                {
+                    "name": "spec_agent",
+                    "description": "Spec-based agent",
+                },
+            ]
+        )
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        names = {t.agent.name for t in agent_tools}
+        # Should have prebuilt, spec_agent, and general_purpose
+        assert "prebuilt_agent" in names
+        assert "spec_agent" in names
+        assert "general_purpose" in names
+
+    def test_prebuilt_general_purpose_skips_default(self):
+        """Pre-built agent named general_purpose prevents adding the default one."""
+        prebuilt_gp = LlmAgent(
+            name="general_purpose",
+            model="gemini-2.5-flash",
+            description="Custom GP",
+            instruction="Custom GP instructions.",
+        )
+        agent = create_deep_agent(subagents=[prebuilt_gp])
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        gp_tools = [t for t in agent_tools if t.agent.name == "general_purpose"]
+        # Should be exactly 1 (the custom one, not a duplicate)
+        assert len(gp_tools) == 1
+        assert gp_tools[0].agent is prebuilt_gp

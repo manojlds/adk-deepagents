@@ -76,7 +76,7 @@ def create_deep_agent(
     tools: Sequence[Callable] | None = None,
     *,
     instruction: str | None = None,
-    subagents: list[SubAgentSpec] | None = None,
+    subagents: list[SubAgentSpec | LlmAgent] | None = None,
     skills: list[str] | None = None,
     skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
@@ -202,27 +202,42 @@ def create_deep_agent(
             )
 
     # 5. Build sub-agent tools
-    effective_subagents = list(subagents) if subagents else []
-    subagent_tools = build_subagent_tools(
-        effective_subagents,
-        default_model=model,
-        default_tools=list(core_tools),
-        include_general_purpose=True,
-    )
-    subagent_descriptions = [
-        {"name": _sanitize_agent_name(s["name"]), "description": s["description"]}
-        for s in effective_subagents
-    ]
-    # Include general-purpose in descriptions if not already present
-    has_gp = any(s["name"] in ("general-purpose", "general_purpose") for s in effective_subagents)
-    if not has_gp:
-        subagent_descriptions.insert(
-            0,
-            {
-                "name": _sanitize_agent_name(GENERAL_PURPOSE_SUBAGENT["name"]),
-                "description": GENERAL_PURPOSE_SUBAGENT["description"],
-            },
+    subagent_descriptions: list[dict[str, str]] = []
+    subagent_tools = []
+    if subagents is not None:
+        subagent_tools = build_subagent_tools(
+            subagents,
+            default_model=model,
+            default_tools=list(core_tools),
+            include_general_purpose=True,
+            skills_config=skills_config,
         )
+        subagent_descriptions = []
+        for s in subagents:
+            if isinstance(s, LlmAgent):
+                subagent_descriptions.append(
+                    {"name": s.name, "description": s.description or s.name}
+                )
+            else:
+                subagent_descriptions.append({"name": s["name"], "description": s["description"]})
+        # Include general-purpose in descriptions if added
+        all_names = set()
+        for s in subagents:
+            if isinstance(s, LlmAgent):
+                all_names.add(s.name)
+            else:
+                all_names.add(s["name"])
+        has_gp = any(n in ("general-purpose", "general_purpose") for n in all_names)
+        if not has_gp:
+            from adk_deepagents.tools.task import GENERAL_PURPOSE_SUBAGENT
+
+            subagent_descriptions.insert(
+                0,
+                {
+                    "name": GENERAL_PURPOSE_SUBAGENT["name"],
+                    "description": GENERAL_PURPOSE_SUBAGENT["description"],
+                },
+            )
 
     # 6. Compose callbacks
     before_agent_cb = make_before_agent_callback(
@@ -287,7 +302,7 @@ async def create_deep_agent_async(
     tools: Sequence[Callable] | None = None,
     *,
     instruction: str | None = None,
-    subagents: list[SubAgentSpec] | None = None,
+    subagents: list[SubAgentSpec | LlmAgent] | None = None,
     skills: list[str] | None = None,
     skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
