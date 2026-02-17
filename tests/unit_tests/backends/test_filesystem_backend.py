@@ -113,7 +113,7 @@ class TestWrite:
 
     def test_write_existing_file_fails(self, fs_backend):
         result = fs_backend.write("/hello.txt", "overwrite")
-        assert result.error is not None
+        assert result.error == "already_exists"
 
     def test_write_creates_parent_dirs(self, fs_backend, tmp_root):
         result = fs_backend.write("/deep/nested/file.txt", "nested content")

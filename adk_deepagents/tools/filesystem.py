@@ -121,7 +121,7 @@ def write_file(file_path: str, content: str, tool_context: ToolContext) -> dict:
     result = backend.write(validated, content)
 
     if result.error:
-        if result.error == "invalid_path":
+        if result.error == "already_exists":
             return {
                 "status": "error",
                 "message": f"File already exists: {validated}. Use edit_file to modify.",

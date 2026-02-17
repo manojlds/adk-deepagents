@@ -116,7 +116,7 @@ class StateBackend(Backend):
 
         if normalized in files:
             return WriteResult(
-                error="invalid_path",
+                error="already_exists",
                 path=normalized,
             )
 

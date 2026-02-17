@@ -60,7 +60,7 @@ class TestStateBackendWrite:
 
     def test_write_existing_file_fails(self, state_backend):
         result = state_backend.write("/hello.txt", "overwrite")
-        assert result.error is not None
+        assert result.error == "already_exists"
 
     def test_write_updates_state(self, populated_state):
         backend = StateBackend(populated_state)

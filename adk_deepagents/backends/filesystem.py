@@ -180,7 +180,7 @@ class FilesystemBackend(Backend):
             return WriteResult(error="invalid_path", path=file_path)
 
         if resolved.exists():
-            return WriteResult(error="invalid_path", path=file_path)
+            return WriteResult(error="already_exists", path=file_path)
 
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)

@@ -19,6 +19,7 @@ FileOperationError = Literal[
     "permission_denied",
     "is_directory",
     "invalid_path",
+    "already_exists",
 ]
 
 # ---------------------------------------------------------------------------

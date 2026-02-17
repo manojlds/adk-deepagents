@@ -1,0 +1,23 @@
+# vaibhav ralph configuration
+# Auto-generated — edit as needed
+
+project:
+  name: "adk-deepagents"
+  language: "Python"
+
+commands:
+  test: "pytest"
+  lint: "ruff check ."
+  # build: ""
+
+rules: []
+  # - "follow existing patterns"
+  # - "use TypeScript strict mode"
+
+boundaries:
+  never_touch:
+    - "*.lock"
+    - ".env*"
+
+engine: "amp"
+max_retries: 3
