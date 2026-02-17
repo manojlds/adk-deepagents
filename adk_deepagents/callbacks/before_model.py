@@ -180,7 +180,9 @@ def make_before_model_callback(
         state = callback_context.state
 
         # 0. Patch dangling tool calls into the LLM request contents
-        dangling = state.pop("_dangling_tool_calls", None)
+        dangling = state.get("_dangling_tool_calls")
+        if "_dangling_tool_calls" in state:
+            del state["_dangling_tool_calls"]  # type: ignore[not-subscriptable]
         if dangling and llm_request.contents:
             _inject_dangling_tool_responses(llm_request, dangling)
 
@@ -231,11 +233,37 @@ def make_before_model_callback(
     return before_model_callback
 
 
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-2.0-flash": 1_048_576,
+    "gemini-1.5-flash": 1_048_576,
+    "gemini-1.5-pro": 2_097_152,
+    "gpt-4o": 128_000,
+    "gpt-4o-mini": 128_000,
+    "gpt-4-turbo": 128_000,
+    "claude-3-opus": 200_000,
+    "claude-3-sonnet": 200_000,
+    "claude-3-haiku": 200_000,
+    "claude-3.5-sonnet": 200_000,
+}
+"""Known model context window sizes in tokens."""
+
+
 def _resolve_context_window(config: SummarizationConfig) -> int:
-    """Resolve context window size from config."""
+    """Resolve context window size from config.
+
+    Resolution order:
+    1. Explicit ``config.context_window`` (if set)
+    2. Model-name lookup in ``MODEL_CONTEXT_WINDOWS``
+    3. ``DEFAULT_CONTEXT_WINDOW`` fallback
+    """
     from adk_deepagents.summarization import DEFAULT_CONTEXT_WINDOW
 
-    return DEFAULT_CONTEXT_WINDOW
+    if config.context_window is not None:
+        return config.context_window
+
+    return MODEL_CONTEXT_WINDOWS.get(config.model, DEFAULT_CONTEXT_WINDOW)
 
 
 def _resolve_trigger_fraction(config: SummarizationConfig) -> float:

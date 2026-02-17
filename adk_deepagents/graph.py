@@ -22,8 +22,6 @@ from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import (
-    GENERAL_PURPOSE_SUBAGENT,
-    _sanitize_agent_name,
     build_subagent_tools,
 )
 from adk_deepagents.tools.todos import read_todos, write_todos
@@ -39,6 +37,33 @@ def _default_backend_factory(state: dict[str, Any]) -> Backend:
     return StateBackend(state)
 
 
+def _compose_callbacks(
+    builtin: Callable | None,
+    extra: Callable | None,
+) -> Callable | None:
+    """Compose *builtin* and *extra* callbacks.
+
+    The built-in callback runs first.  If it returns a non-``None`` value
+    (short-circuit), the extra callback is **not** called and the built-in
+    result is returned.  Otherwise, the extra callback is called with the
+    same arguments and its result is returned.
+
+    If either side is ``None``, the other is returned as-is.
+    """
+    if extra is None:
+        return builtin
+    if builtin is None:
+        return extra
+
+    def composed(*args: Any, **kwargs: Any) -> Any:
+        result = builtin(*args, **kwargs)
+        if result is not None:
+            return result
+        return extra(*args, **kwargs)
+
+    return composed
+
+
 # ---------------------------------------------------------------------------
 # Main factory
 # ---------------------------------------------------------------------------
@@ -49,15 +74,16 @@ def create_deep_agent(
     tools: Sequence[Callable] | None = None,
     *,
     instruction: str | None = None,
-    subagents: list[SubAgentSpec] | None = None,
+    subagents: list[SubAgentSpec | LlmAgent] | None = None,
     skills: list[str] | None = None,
     skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
-    output_schema: type | None = None,
+    output_schema: Any = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
+    extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
 ) -> LlmAgent:
     """Create a deep agent with ADK primitives.
@@ -96,6 +122,12 @@ def create_deep_agent(
         Optional ``SummarizationConfig`` for context window management.
     interrupt_on:
         Tool names that require human approval before execution.
+    extra_callbacks:
+        Optional dict with keys ``before_agent``, ``before_model``,
+        ``before_tool``, ``after_tool``.  Each value is a callback that
+        is composed **after** the built-in callback.  If the built-in
+        callback short-circuits (returns a non-``None`` value), the
+        extra callback is **not** called.
     name:
         Agent name (default ``"deep_agent"``).
 
@@ -135,15 +167,20 @@ def create_deep_agent(
     # 3. Skills integration (adk-skills)
     if skills:
         try:
-            from adk_deepagents.skills.integration import add_skills_tools
-
-            core_tools = add_skills_tools(
-                core_tools,
-                skills_dirs=skills,
-                skills_config=skills_config,
-            )
+            import adk_skills_agent  # noqa: F401
         except ImportError:
-            pass  # adk-skills not installed; skip silently
+            raise ImportError(
+                "adk-skills-agent is required for skills support. "
+                "Install it with: pip install adk-skills-agent"
+            ) from None
+
+        from adk_deepagents.skills.integration import add_skills_tools
+
+        core_tools = add_skills_tools(
+            core_tools,
+            skills_dirs=skills,
+            skills_config=skills_config,
+        )
 
     # 4. Execution tools
     has_execution = False
@@ -163,27 +200,42 @@ def create_deep_agent(
             )
 
     # 5. Build sub-agent tools
-    effective_subagents = list(subagents) if subagents else []
-    subagent_tools = build_subagent_tools(
-        effective_subagents,
-        default_model=model,
-        default_tools=list(core_tools),
-        include_general_purpose=True,
-    )
-    subagent_descriptions = [
-        {"name": _sanitize_agent_name(s["name"]), "description": s["description"]}
-        for s in effective_subagents
-    ]
-    # Include general-purpose in descriptions if not already present
-    has_gp = any(s["name"] in ("general-purpose", "general_purpose") for s in effective_subagents)
-    if not has_gp:
-        subagent_descriptions.insert(
-            0,
-            {
-                "name": _sanitize_agent_name(GENERAL_PURPOSE_SUBAGENT["name"]),
-                "description": GENERAL_PURPOSE_SUBAGENT["description"],
-            },
+    subagent_descriptions: list[dict[str, str]] = []
+    subagent_tools = []
+    if subagents is not None:
+        subagent_tools = build_subagent_tools(
+            subagents,
+            default_model=model,
+            default_tools=list(core_tools),
+            include_general_purpose=True,
+            skills_config=skills_config,
         )
+        subagent_descriptions = []
+        for s in subagents:
+            if isinstance(s, LlmAgent):
+                subagent_descriptions.append(
+                    {"name": s.name, "description": s.description or s.name}
+                )
+            else:
+                subagent_descriptions.append({"name": s["name"], "description": s["description"]})
+        # Include general-purpose in descriptions if added
+        all_names = set()
+        for s in subagents:
+            if isinstance(s, LlmAgent):
+                all_names.add(s.name)
+            else:
+                all_names.add(s["name"])
+        has_gp = any(n in ("general-purpose", "general_purpose") for n in all_names)
+        if not has_gp:
+            from adk_deepagents.tools.task import GENERAL_PURPOSE_SUBAGENT
+
+            subagent_descriptions.insert(
+                0,
+                {
+                    "name": GENERAL_PURPOSE_SUBAGENT["name"],
+                    "description": GENERAL_PURPOSE_SUBAGENT["description"],
+                },
+            )
 
     # 6. Compose callbacks
     before_agent_cb = make_before_agent_callback(
@@ -207,20 +259,27 @@ def create_deep_agent(
         interrupt_on=interrupt_on,
     )
 
+    # 6b. Compose extra callbacks (if provided)
+    if extra_callbacks:
+        before_agent_cb = _compose_callbacks(before_agent_cb, extra_callbacks.get("before_agent"))
+        before_model_cb = _compose_callbacks(before_model_cb, extra_callbacks.get("before_model"))
+        after_tool_cb = _compose_callbacks(after_tool_cb, extra_callbacks.get("after_tool"))
+        before_tool_cb = _compose_callbacks(before_tool_cb, extra_callbacks.get("before_tool"))
+
     # 7. Build instruction
     full_instruction = BASE_AGENT_PROMPT
     if instruction:
         full_instruction = instruction + "\n\n" + BASE_AGENT_PROMPT
 
     # 8. Assemble all tools
-    all_tools: list = list(core_tools) + subagent_tools
+    all_tools: list[Any] = list(core_tools) + subagent_tools
 
     # 9. Create and return the agent
     agent = LlmAgent(
         name=name,
         model=model,
         instruction=full_instruction,
-        tools=all_tools,
+        tools=all_tools,  # type: ignore[invalid-argument-type]
         output_schema=output_schema,
         before_agent_callback=before_agent_cb,
         before_model_callback=before_model_cb,
@@ -241,15 +300,16 @@ async def create_deep_agent_async(
     tools: Sequence[Callable] | None = None,
     *,
     instruction: str | None = None,
-    subagents: list[SubAgentSpec] | None = None,
+    subagents: list[SubAgentSpec | LlmAgent] | None = None,
     skills: list[str] | None = None,
     skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
-    output_schema: type | None = None,
+    output_schema: Any = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
+    extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
 ) -> tuple[LlmAgent, Callable | None]:
     """Async variant of ``create_deep_agent()`` that resolves MCP tools.
@@ -302,6 +362,7 @@ async def create_deep_agent_async(
         execution=effective_execution,
         summarization=summarization,
         interrupt_on=interrupt_on,
+        extra_callbacks=extra_callbacks,
         name=name,
     )
 

@@ -1,0 +1,25 @@
+# vaibhav ralph configuration
+# Auto-generated — edit as needed
+
+project:
+  name: "adk-deepagents"
+  language: "Python"
+
+commands:
+  test: "uv run pytest"
+  lint: "uv run ruff check ."
+  format: "uv run ruff format --check ."
+  typecheck: "uv run ty check"
+
+rules:
+  - "use uv for all Python commands (uv run pytest, uv run ruff, etc.)"
+  - "follow existing patterns in neighboring files"
+  - "all new code must pass ruff check, ruff format, and ty check"
+
+boundaries:
+  never_touch:
+    - "*.lock"
+    - ".env*"
+
+engine: "amp"
+max_retries: 3

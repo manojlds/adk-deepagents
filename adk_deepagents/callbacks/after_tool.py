@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from google.adk.tools import BaseTool, ToolContext
 
@@ -82,7 +82,9 @@ def make_after_tool_callback(
 
         # Check for cooperative large-result tracking
         state = tool_context.state
-        raw_result = state.pop(LAST_TOOL_RESULT_KEY, None)
+        raw_result = state.get(LAST_TOOL_RESULT_KEY)
+        if LAST_TOOL_RESULT_KEY in state:
+            del state[LAST_TOOL_RESULT_KEY]  # type: ignore[not-subscriptable]
         if raw_result is None:
             return None
 
@@ -101,7 +103,7 @@ def make_after_tool_callback(
             )
             return None
 
-        backend = backend_factory(state)
+        backend = backend_factory(cast(dict[str, Any], state))
         call_id = getattr(tool_context, "function_call_id", "") or "unknown"
         safe_id = sanitize_tool_call_id(call_id)
         file_path = f"/large_tool_results/{tool_name}_{safe_id}"

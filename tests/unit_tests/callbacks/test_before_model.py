@@ -4,7 +4,13 @@ from unittest.mock import MagicMock
 
 from google.genai import types
 
-from adk_deepagents.callbacks.before_model import make_before_model_callback
+from adk_deepagents.callbacks.before_model import (
+    MODEL_CONTEXT_WINDOWS,
+    _resolve_context_window,
+    make_before_model_callback,
+)
+from adk_deepagents.summarization import DEFAULT_CONTEXT_WINDOW
+from adk_deepagents.types import SummarizationConfig
 
 
 def _make_llm_request(system_instruction=None):
@@ -158,3 +164,41 @@ def test_no_dangling_calls_no_patching():
     cb(ctx, request)
 
     assert len(request.contents) == 1
+
+
+# ---------------------------------------------------------------------------
+# Model-aware context window resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_context_window_explicit_config():
+    """Explicit context_window in config takes priority over model lookup."""
+    config = SummarizationConfig(model="gemini-2.5-flash", context_window=500_000)
+    assert _resolve_context_window(config) == 500_000
+
+
+def test_resolve_context_window_known_model():
+    """Known models resolve to their lookup table values."""
+    config = SummarizationConfig(model="gemini-2.5-flash")
+    assert _resolve_context_window(config) == MODEL_CONTEXT_WINDOWS["gemini-2.5-flash"]
+
+    config = SummarizationConfig(model="gpt-4o")
+    assert _resolve_context_window(config) == 128_000
+
+
+def test_resolve_context_window_unknown_model():
+    """Unknown models fall back to DEFAULT_CONTEXT_WINDOW."""
+    config = SummarizationConfig(model="some-unknown-model-v9")
+    assert _resolve_context_window(config) == DEFAULT_CONTEXT_WINDOW
+
+
+def test_resolve_context_window_explicit_overrides_model():
+    """Explicit config.context_window wins even for a known model."""
+    config = SummarizationConfig(model="gpt-4o", context_window=64_000)
+    assert _resolve_context_window(config) == 64_000
+
+
+def test_resolve_context_window_none_defaults():
+    """Default SummarizationConfig (no context_window) uses model lookup."""
+    config = SummarizationConfig()  # model defaults to "gemini-2.5-flash"
+    assert _resolve_context_window(config) == MODEL_CONTEXT_WINDOWS["gemini-2.5-flash"]

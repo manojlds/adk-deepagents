@@ -18,6 +18,8 @@ class SubAgentSpec(TypedDict, total=False):
     system_prompt: str
     tools: Sequence[Callable]
     model: str
+    skills: list[str]
+    interrupt_on: dict[str, bool]
 
 
 SubAgentSpec.__required_keys__ = frozenset({"name", "description"})
@@ -60,6 +62,9 @@ class SummarizationConfig:
     If False, fall back to inline text truncation (faster, no extra API call)."""
     truncate_args: TruncateArgsConfig | None = None
     """Optional settings for truncating large tool arguments in older messages."""
+    context_window: int | None = None
+    """Explicit context window size in tokens. If set, overrides the model-based
+    lookup. If None, the context window is resolved from the model name."""
 
 
 @dataclass

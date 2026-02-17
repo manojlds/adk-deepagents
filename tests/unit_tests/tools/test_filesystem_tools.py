@@ -1,5 +1,9 @@
 """Tests for filesystem tools."""
 
+import base64
+from unittest.mock import MagicMock
+
+from adk_deepagents.backends.protocol import FileDownloadResponse
 from adk_deepagents.tools.filesystem import (
     edit_file,
     glob,
@@ -36,6 +40,42 @@ class TestReadFile:
     def test_read_traversal_blocked(self, mock_tool_context):
         result = read_file("/../etc/passwd", mock_tool_context)
         assert result["status"] == "error"
+
+    def test_read_image_png(self, mock_tool_context):
+        raw_bytes = b"\x89PNG\r\n\x1a\nfakedata"
+        backend = mock_tool_context.state["_backend"]
+        backend.download_files = MagicMock(
+            return_value=[FileDownloadResponse(path="/photo.png", content=raw_bytes)]
+        )
+        result = read_file("/photo.png", mock_tool_context)
+        assert result["status"] == "success"
+        content = result["content"]
+        assert content["type"] == "image"
+        assert content["media_type"] == "image/png"
+        assert content["data"] == base64.b64encode(raw_bytes).decode("ascii")
+
+    def test_read_image_jpeg(self, mock_tool_context):
+        raw_bytes = b"\xff\xd8\xff\xe0jpegdata"
+        backend = mock_tool_context.state["_backend"]
+        backend.download_files = MagicMock(
+            return_value=[FileDownloadResponse(path="/photo.jpg", content=raw_bytes)]
+        )
+        result = read_file("/photo.jpg", mock_tool_context)
+        assert result["status"] == "success"
+        assert result["content"]["media_type"] == "image/jpeg"
+
+    def test_read_image_not_found(self, mock_tool_context):
+        backend = mock_tool_context.state["_backend"]
+        backend.download_files = MagicMock(
+            return_value=[FileDownloadResponse(path="/missing.png", error="file_not_found")]
+        )
+        result = read_file("/missing.png", mock_tool_context)
+        assert result["status"] == "error"
+
+    def test_read_non_image_unchanged(self, mock_tool_context):
+        result = read_file("/hello.txt", mock_tool_context)
+        assert result["status"] == "success"
+        assert isinstance(result["content"], str)
 
 
 class TestWriteFile:

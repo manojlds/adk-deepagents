@@ -178,3 +178,95 @@ class TestCompositeProperties:
         default = _make_backend()
         composite = CompositeBackend(default=default)
         assert composite.routes == []
+
+
+# ---------------------------------------------------------------------------
+# Async delegation
+# ---------------------------------------------------------------------------
+
+
+class TestCompositeAsyncDelegation:
+    async def test_als_info(self):
+        default = _make_backend(
+            {
+                "/dir/a.txt": create_file_data("a"),
+                "/dir/b.txt": create_file_data("b"),
+            }
+        )
+        composite = CompositeBackend(default=default)
+        files = await composite.als_info("/dir")
+        assert len(files) == 2
+
+    async def test_aread_default(self):
+        default = _make_backend({"/file.txt": create_file_data("hello")})
+        composite = CompositeBackend(default=default)
+        result = await composite.aread("/file.txt")
+        assert "hello" in result
+
+    async def test_aread_route(self):
+        default = _make_backend()
+        ws = _make_backend({"/workspace/file.txt": create_file_data("ws content")})
+        composite = CompositeBackend(default=default, routes={"/workspace": ws})
+        result = await composite.aread("/workspace/file.txt")
+        assert "ws content" in result
+
+    async def test_awrite(self):
+        default = _make_backend()
+        composite = CompositeBackend(default=default)
+        result = await composite.awrite("/new.txt", "content")
+        assert result.error is None
+
+    async def test_awrite_to_route(self):
+        default = _make_backend()
+        ws = _make_backend()
+        composite = CompositeBackend(default=default, routes={"/workspace": ws})
+        result = await composite.awrite("/workspace/new.txt", "ws content")
+        assert result.error is None
+        assert result.path == "/workspace/new.txt"
+
+    async def test_aedit(self):
+        default = _make_backend({"/file.txt": create_file_data("old text here")})
+        composite = CompositeBackend(default=default)
+        result = await composite.aedit("/file.txt", "old", "new")
+        assert result.error is None
+
+    async def test_agrep_raw_merges_backends(self):
+        default = _make_backend({"/a.txt": create_file_data("hello world")})
+        ws = _make_backend({"/workspace/b.txt": create_file_data("hello there")})
+        composite = CompositeBackend(default=default, routes={"/workspace": ws})
+        results = await composite.agrep_raw("hello")
+        assert isinstance(results, list)
+        assert len(results) == 2
+
+    async def test_aglob_info_merges_backends(self):
+        default = _make_backend({"/a.py": create_file_data("a")})
+        ws = _make_backend({"/workspace/b.py": create_file_data("b")})
+        composite = CompositeBackend(default=default, routes={"/workspace": ws})
+        results = await composite.aglob_info("**/*.py", "/")
+        paths = {r["path"] for r in results}
+        assert "/a.py" in paths
+        assert "/workspace/b.py" in paths
+
+    async def test_async_delegates_to_backend_async_methods(self):
+        """Verify CompositeBackend delegates to the backend's async method, not sync."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_backend = MagicMock(spec=Backend)
+        mock_backend.als_info = AsyncMock(return_value=[])
+        mock_backend.aread = AsyncMock(return_value="content")
+        mock_backend.awrite = AsyncMock(return_value=MagicMock(error=None))
+        mock_backend.aedit = AsyncMock(return_value=MagicMock(error=None))
+
+        composite = CompositeBackend(default=mock_backend)
+
+        await composite.als_info("/dir")
+        mock_backend.als_info.assert_called_once_with("/dir")
+
+        await composite.aread("/file.txt")
+        mock_backend.aread.assert_called_once_with("/file.txt", 0, 2000)
+
+        await composite.awrite("/new.txt", "content")
+        mock_backend.awrite.assert_called_once_with("/new.txt", "content")
+
+        await composite.aedit("/file.txt", "old", "new", False)
+        mock_backend.aedit.assert_called_once_with("/file.txt", "old", "new", False)

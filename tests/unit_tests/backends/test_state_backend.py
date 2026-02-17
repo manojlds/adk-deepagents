@@ -60,7 +60,7 @@ class TestStateBackendWrite:
 
     def test_write_existing_file_fails(self, state_backend):
         result = state_backend.write("/hello.txt", "overwrite")
-        assert result.error is not None
+        assert result.error == "already_exists"
 
     def test_write_updates_state(self, populated_state):
         backend = StateBackend(populated_state)
@@ -151,3 +151,87 @@ class TestStateBackendUpload:
     def test_upload_not_supported(self, state_backend):
         with pytest.raises(NotImplementedError):
             state_backend.upload_files([("test.txt", b"content")])
+
+
+# ---------------------------------------------------------------------------
+# Async method tests (direct overrides, no asyncio.to_thread)
+# ---------------------------------------------------------------------------
+
+
+class TestStateBackendAsyncMethods:
+    """Verify that StateBackend's async overrides produce the same
+    results as sync methods and do NOT use asyncio.to_thread.
+    """
+
+    async def test_als_info(self, state_backend):
+        sync_result = state_backend.ls_info("/")
+        async_result = await state_backend.als_info("/")
+        assert async_result == sync_result
+
+    async def test_aread(self, state_backend):
+        sync_result = state_backend.read("/hello.txt")
+        async_result = await state_backend.aread("/hello.txt")
+        assert async_result == sync_result
+
+    async def test_aread_with_offset(self, state_backend):
+        sync_result = state_backend.read("/src/main.py", offset=1, limit=1)
+        async_result = await state_backend.aread("/src/main.py", offset=1, limit=1)
+        assert async_result == sync_result
+
+    async def test_awrite(self, state_backend):
+        result = await state_backend.awrite("/async_file.txt", "async content")
+        assert result.error is None
+        assert result.path == "/async_file.txt"
+        assert result.files_update is not None
+
+    async def test_awrite_existing_fails(self, state_backend):
+        result = await state_backend.awrite("/hello.txt", "overwrite")
+        assert result.error == "already_exists"
+
+    async def test_aedit(self, state_backend):
+        result = await state_backend.aedit("/hello.txt", "World", "Async")
+        assert result.error is None
+        assert result.occurrences == 1
+        assert result.files_update is not None
+
+    async def test_aedit_nonexistent(self, state_backend):
+        result = await state_backend.aedit("/missing.txt", "a", "b")
+        assert result.error is not None
+
+    async def test_agrep_raw(self, state_backend):
+        sync_result = state_backend.grep_raw("def")
+        async_result = await state_backend.agrep_raw("def")
+        assert async_result == sync_result
+
+    async def test_agrep_raw_with_path(self, state_backend):
+        sync_result = state_backend.grep_raw("def", path="/src/main.py")
+        async_result = await state_backend.agrep_raw("def", path="/src/main.py")
+        assert async_result == sync_result
+
+    async def test_aglob_info(self, state_backend):
+        sync_result = state_backend.glob_info("**/*.py", "/")
+        async_result = await state_backend.aglob_info("**/*.py", "/")
+        assert async_result == sync_result
+
+    async def test_no_asyncio_to_thread(self, state_backend, monkeypatch):
+        """Verify StateBackend async methods do NOT call asyncio.to_thread."""
+        import asyncio
+
+        original_to_thread = asyncio.to_thread
+        called = False
+
+        async def patched_to_thread(*args, **kwargs):
+            nonlocal called
+            called = True
+            return await original_to_thread(*args, **kwargs)
+
+        monkeypatch.setattr(asyncio, "to_thread", patched_to_thread)
+
+        await state_backend.als_info("/")
+        await state_backend.aread("/hello.txt")
+        await state_backend.awrite("/no_thread.txt", "test")
+        await state_backend.aedit("/hello.txt", "World", "Direct")
+        await state_backend.agrep_raw("def")
+        await state_backend.aglob_info("**/*.py")
+
+        assert not called, "StateBackend async methods should not use asyncio.to_thread"
