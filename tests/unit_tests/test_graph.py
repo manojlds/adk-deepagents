@@ -154,3 +154,159 @@ class TestCreateDeepAgent:
         with patch.dict("sys.modules", {"adk_skills_agent": None}):
             agent = create_deep_agent()
             assert isinstance(agent, LlmAgent)
+
+
+class TestExtraCallbacks:
+    """Tests for the extra_callbacks parameter (US-010)."""
+
+    def test_extra_callbacks_none(self):
+        """No extra callbacks — agent is created normally."""
+        agent = create_deep_agent(extra_callbacks=None)
+        assert isinstance(agent, LlmAgent)
+
+    def test_extra_callbacks_empty(self):
+        """Empty dict — agent is created normally."""
+        agent = create_deep_agent(extra_callbacks={})
+        assert isinstance(agent, LlmAgent)
+
+    def test_before_agent_extra_called(self):
+        """Extra before_agent callback is called after built-in."""
+        call_log = []
+
+        def extra_before_agent(callback_context):
+            call_log.append("extra_before_agent")
+            return None
+
+        agent = create_deep_agent(
+            extra_callbacks={"before_agent": extra_before_agent},
+        )
+        # The agent's before_agent_callback should be a composed callback
+        assert agent.before_agent_callback is not None
+
+    def test_before_model_extra_called(self):
+        """Extra before_model callback is called after built-in."""
+        call_log = []
+
+        def extra_before_model(callback_context, llm_request):
+            call_log.append("extra_before_model")
+            return None
+
+        agent = create_deep_agent(
+            extra_callbacks={"before_model": extra_before_model},
+        )
+        assert agent.before_model_callback is not None
+
+    def test_after_tool_extra_called(self):
+        """Extra after_tool callback is called after built-in."""
+
+        def extra_after_tool(tool, args, tool_context):
+            return None
+
+        agent = create_deep_agent(
+            extra_callbacks={"after_tool": extra_after_tool},
+        )
+        assert agent.after_tool_callback is not None
+
+    def test_before_tool_extra_with_no_builtin(self):
+        """When no interrupt_on, before_tool builtin is None — extra is used directly."""
+
+        def extra_before_tool(tool, args, tool_context):
+            return None
+
+        agent = create_deep_agent(
+            extra_callbacks={"before_tool": extra_before_tool},
+        )
+        # With no interrupt_on, builtin is None, so extra is used directly
+        assert agent.before_tool_callback is extra_before_tool
+
+    def test_before_tool_extra_composed_with_builtin(self):
+        """When interrupt_on is set, extra is composed with builtin."""
+
+        def extra_before_tool(tool, args, tool_context):
+            return None
+
+        agent = create_deep_agent(
+            interrupt_on={"write_file": True},
+            extra_callbacks={"before_tool": extra_before_tool},
+        )
+        # Should be a composed callback (neither the builtin nor the extra alone)
+        assert agent.before_tool_callback is not None
+        assert agent.before_tool_callback is not extra_before_tool
+
+    def test_compose_builtin_runs_first(self):
+        """Built-in callback runs first, then extra."""
+        from adk_deepagents.graph import _compose_callbacks
+
+        call_log = []
+
+        def builtin(*args, **kwargs):
+            call_log.append("builtin")
+            return None
+
+        def extra(*args, **kwargs):
+            call_log.append("extra")
+            return None
+
+        composed = _compose_callbacks(builtin, extra)
+        composed()
+        assert call_log == ["builtin", "extra"]
+
+    def test_compose_short_circuit_skips_extra(self):
+        """If built-in returns non-None, extra is NOT called."""
+        from adk_deepagents.graph import _compose_callbacks
+
+        call_log = []
+
+        def builtin(*args, **kwargs):
+            call_log.append("builtin")
+            return {"short": "circuited"}
+
+        def extra(*args, **kwargs):
+            call_log.append("extra")
+            return None
+
+        composed = _compose_callbacks(builtin, extra)
+        result = composed()
+        assert result == {"short": "circuited"}
+        assert call_log == ["builtin"]
+
+    def test_compose_extra_result_returned(self):
+        """If built-in returns None, extra's result is returned."""
+        from adk_deepagents.graph import _compose_callbacks
+
+        def builtin(*args, **kwargs):
+            return None
+
+        def extra(*args, **kwargs):
+            return {"extra": "result"}
+
+        composed = _compose_callbacks(builtin, extra)
+        result = composed()
+        assert result == {"extra": "result"}
+
+    def test_compose_none_builtin(self):
+        """If builtin is None, extra is returned directly."""
+        from adk_deepagents.graph import _compose_callbacks
+
+        def extra(*args, **kwargs):
+            return None
+
+        result = _compose_callbacks(None, extra)
+        assert result is extra
+
+    def test_compose_none_extra(self):
+        """If extra is None, builtin is returned directly."""
+        from adk_deepagents.graph import _compose_callbacks
+
+        def builtin(*args, **kwargs):
+            return None
+
+        result = _compose_callbacks(builtin, None)
+        assert result is builtin
+
+    def test_compose_both_none(self):
+        """If both are None, returns None."""
+        from adk_deepagents.graph import _compose_callbacks
+
+        result = _compose_callbacks(None, None)
+        assert result is None

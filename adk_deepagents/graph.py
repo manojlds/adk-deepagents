@@ -39,6 +39,33 @@ def _default_backend_factory(state: dict[str, Any]) -> Backend:
     return StateBackend(state)
 
 
+def _compose_callbacks(
+    builtin: Callable | None,
+    extra: Callable | None,
+) -> Callable | None:
+    """Compose *builtin* and *extra* callbacks.
+
+    The built-in callback runs first.  If it returns a non-``None`` value
+    (short-circuit), the extra callback is **not** called and the built-in
+    result is returned.  Otherwise, the extra callback is called with the
+    same arguments and its result is returned.
+
+    If either side is ``None``, the other is returned as-is.
+    """
+    if extra is None:
+        return builtin
+    if builtin is None:
+        return extra
+
+    def composed(*args: Any, **kwargs: Any) -> Any:
+        result = builtin(*args, **kwargs)
+        if result is not None:
+            return result
+        return extra(*args, **kwargs)
+
+    return composed
+
+
 # ---------------------------------------------------------------------------
 # Main factory
 # ---------------------------------------------------------------------------
@@ -58,6 +85,7 @@ def create_deep_agent(
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
+    extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
 ) -> LlmAgent:
     """Create a deep agent with ADK primitives.
@@ -96,6 +124,12 @@ def create_deep_agent(
         Optional ``SummarizationConfig`` for context window management.
     interrupt_on:
         Tool names that require human approval before execution.
+    extra_callbacks:
+        Optional dict with keys ``before_agent``, ``before_model``,
+        ``before_tool``, ``after_tool``.  Each value is a callback that
+        is composed **after** the built-in callback.  If the built-in
+        callback short-circuits (returns a non-``None`` value), the
+        extra callback is **not** called.
     name:
         Agent name (default ``"deep_agent"``).
 
@@ -212,6 +246,13 @@ def create_deep_agent(
         interrupt_on=interrupt_on,
     )
 
+    # 6b. Compose extra callbacks (if provided)
+    if extra_callbacks:
+        before_agent_cb = _compose_callbacks(before_agent_cb, extra_callbacks.get("before_agent"))
+        before_model_cb = _compose_callbacks(before_model_cb, extra_callbacks.get("before_model"))
+        after_tool_cb = _compose_callbacks(after_tool_cb, extra_callbacks.get("after_tool"))
+        before_tool_cb = _compose_callbacks(before_tool_cb, extra_callbacks.get("before_tool"))
+
     # 7. Build instruction
     full_instruction = BASE_AGENT_PROMPT
     if instruction:
@@ -255,6 +296,7 @@ async def create_deep_agent_async(
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
+    extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
 ) -> tuple[LlmAgent, Callable | None]:
     """Async variant of ``create_deep_agent()`` that resolves MCP tools.
@@ -307,6 +349,7 @@ async def create_deep_agent_async(
         execution=effective_execution,
         summarization=summarization,
         interrupt_on=interrupt_on,
+        extra_callbacks=extra_callbacks,
         name=name,
     )
 
