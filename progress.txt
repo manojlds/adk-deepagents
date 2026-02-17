@@ -47,3 +47,15 @@ Thread: https://ampcode.com/threads/T-019c6d77-937b-74b1-8185-46ad542e12b1
   - Trigger/keep resolution functions (`_resolve_trigger_fraction`, `_resolve_keep_messages`) live alongside `_resolve_context_window` in the same file
   - The `maybe_summarize()` function takes already-resolved numeric values, not the config object
 ---
+
+## 2026-02-17 - US-004
+Thread: https://ampcode.com/threads/T-019c6d79-786c-725d-b0b5-b9a0379a08d5
+- Added 6 async methods to `Backend` ABC in `backends/protocol.py`: `als_info`, `aread`, `awrite`, `aedit`, `agrep_raw`, `aglob_info`
+- Default implementations wrap sync methods via `asyncio.to_thread()`
+- Added 7 async unit tests in `tests/unit_tests/backends/test_protocol.py` verifying async methods match sync results on StateBackend
+- Files changed: `adk_deepagents/backends/protocol.py`, `tests/unit_tests/backends/test_protocol.py`
+- **Learnings for future iterations:**
+  - `StateBackend.edit()` returns `files_update` dict but doesn't auto-apply it to `_state["files"]` — tests that chain edits must manually apply updates
+  - Async tests run automatically via `pytest-asyncio` with `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorator needed
+  - `ruff format` may reformat multi-line `asyncio.to_thread()` calls — run format check before committing
+---
