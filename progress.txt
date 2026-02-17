@@ -1,3 +1,22 @@
 # Ralph Progress Log
 Started: Tue Feb 17 09:14:02 PM GMT 2026
+
+## Codebase Patterns
+- **Error codes in backends:** `FileOperationError` in `backends/protocol.py` is a `Literal` type — add new error codes there. Both `StateBackend` and `FilesystemBackend` must be updated in tandem. The tool layer in `tools/filesystem.py` maps error codes to user-facing messages.
+- **Test structure:** Backend tests are in `tests/unit_tests/backends/test_<backend>_backend.py`, tool tests in `tests/unit_tests/tools/test_filesystem_tools.py`. Tests assert specific error codes, not just `is not None`.
+- **Write is create-only:** `Backend.write()` is create-only (no overwrites). Use `edit()` for modifications.
+---
+
+## 2026-02-17 - US-001
+Thread: https://ampcode.com/threads/T-019c6d73-fbc5-70ac-886b-a5dc2830f757
+- Added `"already_exists"` to `FileOperationError` Literal type in `backends/protocol.py`
+- Changed `StateBackend.write()` to return `error="already_exists"` instead of `"invalid_path"` when file exists
+- Changed `FilesystemBackend.write()` to return `error="already_exists"` instead of `"invalid_path"` when file exists
+- Updated `tools/filesystem.py` to check for `"already_exists"` error code
+- Updated tests in `test_state_backend.py` and `test_filesystem_backend.py` to assert `error == "already_exists"`
+- Files changed: `backends/protocol.py`, `backends/state.py`, `backends/filesystem.py`, `tools/filesystem.py`, `test_state_backend.py`, `test_filesystem_backend.py`
+- **Learnings for future iterations:**
+  - `FileOperationError` is a `Literal` union — keep it in sync across all backends
+  - `FilesystemBackend.write()` has two `invalid_path` returns: one for path resolution failure, one for file-already-exists — only the latter was changed
+  - The tool layer in `tools/filesystem.py` already had the right user message ("File already exists"), just needed the error code check updated
 ---
