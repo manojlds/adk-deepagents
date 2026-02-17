@@ -8,6 +8,7 @@ Started: Tue Feb 17 09:14:02 PM GMT 2026
 - **Write is create-only:** `Backend.write()` is create-only (no overwrites). Use `edit()` for modifications.
 - **StoreBackend namespace pattern:** `StoreBackend` uses `_ns_path()` / `_strip_ns()` to transparently prefix/strip namespace from paths. For grep/glob utilities, remap files to external paths before calling shared helpers.
 - **HITL via ADK ToolConfirmation:** Use `tool_context.request_confirmation()` to pause the agent. Check `tool_context.tool_confirmation` on resume: `None` = first call (pause), `.confirmed=True` = approved, `.confirmed=False` = rejected. Use `payload` dict for `modified_args`. Always set `actions.skip_summarization = True` when requesting confirmation.
+- **SubAgentSpec supports LlmAgent instances:** The `subagents` list in `create_deep_agent()` accepts both `SubAgentSpec` dicts and pre-built `LlmAgent` instances. `build_subagent_tools()` separates them: pre-built agents become `AgentTool` directly, specs are built as before. When checking for general_purpose, both pre-built names and spec names are considered.
 ---
 
 ## 2026-02-17 - US-001
@@ -151,3 +152,18 @@ Thread: https://ampcode.com/threads/T-019c6d7e-923b-7198-b35d-a4cbccf9cc08
   - `actions.skip_summarization = True` prevents ADK from summarizing the confirmation request as a tool response
   - The `payload` field on `ToolConfirmation` is `Any` (JSON serializable) — used to pass `modified_args` dict for the modified-args flow
   ---
+
+## 2026-02-17 - US-011
+Thread: https://ampcode.com/threads/T-019c6d88-9270-754a-b156-cdcaf456381f
+- Added `skills: list[str]` and `interrupt_on: dict[str, bool]` optional fields to `SubAgentSpec` in `types.py`
+- Updated `build_subagent_tools()` in `tools/task.py` to process `skills` (via `_resolve_skills_tools`) and `interrupt_on` (via `make_before_tool_callback`) per sub-agent
+- Added support for pre-built `LlmAgent` instances in the `subagents` list — they pass through as `AgentTool` directly
+- Updated `create_deep_agent()` in `graph.py` to handle `LlmAgent` instances in description building and pass `skills_config` to `build_subagent_tools`
+- Added 8 unit tests: skills import error, no-skills no-error, interrupt_on callback, no-interrupt_on, pre-built agent, mixed list, pre-built GP dedup
+- Files changed: `adk_deepagents/types.py`, `adk_deepagents/tools/task.py`, `adk_deepagents/graph.py`, `tests/unit_tests/test_graph.py`
+- **Learnings for future iterations:**
+  - `build_subagent_tools()` must separate pre-built `LlmAgent` from `SubAgentSpec` dicts at the start — `isinstance(item, LlmAgent)` check
+  - Sub-agent skills use the same `ImportError` guard pattern as the parent — centralized in `_resolve_skills_tools()`
+  - `ruff format` rewrites multi-line for-loops in graph.py — always run format before commit
+  - General-purpose dedup must check both pre-built agent names and spec names
+---

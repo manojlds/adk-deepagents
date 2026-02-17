@@ -196,7 +196,7 @@
         "uv run ruff format --check . passes"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-002 (skills error handling) and US-009 (HITL)"
     },
     {
