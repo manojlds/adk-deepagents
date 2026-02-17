@@ -5,6 +5,7 @@ Ported from deepagents.backends.protocol with adaptations for ADK.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -155,6 +156,43 @@ class Backend(ABC):
     @abstractmethod
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download files by path."""
+
+    # -- async wrappers (default: delegate to sync via asyncio.to_thread) ---
+
+    async def als_info(self, path: str) -> list[FileInfo]:
+        """Async version of :meth:`ls_info`."""
+        return await asyncio.to_thread(self.ls_info, path)
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+        """Async version of :meth:`read`."""
+        return await asyncio.to_thread(self.read, file_path, offset, limit)
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        """Async version of :meth:`write`."""
+        return await asyncio.to_thread(self.write, file_path, content)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        """Async version of :meth:`edit`."""
+        return await asyncio.to_thread(self.edit, file_path, old_string, new_string, replace_all)
+
+    async def agrep_raw(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,
+    ) -> list[GrepMatch] | str:
+        """Async version of :meth:`grep_raw`."""
+        return await asyncio.to_thread(self.grep_raw, pattern, path, glob)
+
+    async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
+        """Async version of :meth:`glob_info`."""
+        return await asyncio.to_thread(self.glob_info, pattern, path)
 
 
 class SandboxBackend(Backend):
