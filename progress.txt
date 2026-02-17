@@ -121,6 +121,19 @@ Thread: https://ampcode.com/threads/T-019c6d7e-923b-7198-b35d-a4cbccf9cc08
   - Always run `ruff format` after edits — ruff reformats spacing around `frozenset` and `dict` literals
   ---
 
+  ## 2026-02-17 - US-010
+  Thread: https://ampcode.com/threads/T-019c6d86-515e-767d-83ce-ba292f1a734e
+  - Added `extra_callbacks: dict[str, Callable] | None = None` parameter to `create_deep_agent()` and `create_deep_agent_async()`
+  - Added `_compose_callbacks()` helper in `graph.py` that composes built-in + extra: built-in runs first, extra runs second; short-circuit (non-None return) from built-in skips extra
+  - Supported keys: `before_agent`, `before_model`, `before_tool`, `after_tool`
+  - 13 unit tests covering: None/empty extra_callbacks, all 4 callback types, composition order, short-circuit behavior, None edge cases
+  - Files changed: `adk_deepagents/graph.py`, `tests/unit_tests/test_graph.py`
+  - **Learnings for future iterations:**
+  - `make_before_tool_callback()` returns `None` when no `interrupt_on` is set — `_compose_callbacks(None, extra)` must handle this by returning extra directly
+  - `ruff format` reformats multi-line keyword arguments in `_compose_callbacks` calls — always run format before committing
+  - The composition pattern is generic (`*args, **kwargs`) so it works for all 4 callback signatures without needing type-specific wrappers
+  ---
+
   ## 2026-02-17 - US-009
   Thread: https://ampcode.com/threads/T-019c6d83-225f-72c4-9743-28a6f38a184e
   - Rewrote `before_tool.py` to use ADK's native `tool_context.request_confirmation()` for true pause/resume instead of just setting state
