@@ -20,3 +20,17 @@ Thread: https://ampcode.com/threads/T-019c6d73-fbc5-70ac-886b-a5dc2830f757
   - `FilesystemBackend.write()` has two `invalid_path` returns: one for path resolution failure, one for file-already-exists — only the latter was changed
   - The tool layer in `tools/filesystem.py` already had the right user message ("File already exists"), just needed the error code check updated
 ---
+
+## 2026-02-17 - US-002
+Thread: https://ampcode.com/threads/T-019c6d75-77a0-7389-8546-75f7a90e8510
+- Changed `graph.py` to check `import adk_skills_agent` directly before calling `add_skills_tools()` when `skills` is provided
+- When import fails and skills are requested, raises `ImportError` with clear install instructions
+- When skills are NOT requested, the import is never attempted (existing `if skills:` guard)
+- `integration.py` unchanged — it still logs a warning internally, but `graph.py` now gates before it
+- Added 2 tests to `test_graph.py`: one for the error case, one for the no-error case
+- Files changed: `adk_deepagents/graph.py`, `tests/unit_tests/test_graph.py`
+- **Learnings for future iterations:**
+  - `integration.py` has its own `try/except ImportError` that catches silently — the gate must happen in `graph.py` before calling into integration
+  - Use `from None` on re-raised `ImportError` to satisfy ruff B904
+  - Ruff SIM117 requires combining nested `with` statements into a single `with` using `,`
+---
