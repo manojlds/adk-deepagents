@@ -104,4 +104,18 @@ Thread: https://ampcode.com/threads/T-019c6d7e-923b-7198-b35d-a4cbccf9cc08
   - For grep/glob, files must be remapped to external paths before passing to shared utility functions (`grep_matches_from_files`, `glob_search_files`)
   - `ruff format` rewrites long docstrings and method signatures — always run `ruff format` before committing
   - Import sorting: `asyncio` (stdlib) must come before `pytest` (third-party) — `ruff check --fix` handles this
----
+  ---
+
+  ## 2026-02-17 - US-008
+  Thread: https://ampcode.com/threads/T-019c6d81-6bc6-76ca-8245-77b1987cac4e
+  - Added image detection to `read_file` in `tools/filesystem.py` for extensions `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`
+  - Image files are read via `backend.download_files()` (binary read) and returned as base64-encoded dicts with `type`, `media_type`, and `data` keys
+  - Non-image files continue through the existing text `backend.read()` path
+  - Added 4 tests: PNG round-trip, JPEG media type, missing image error, non-image unchanged
+  - Files changed: `adk_deepagents/tools/filesystem.py`, `tests/unit_tests/tools/test_filesystem_tools.py`
+  - **Learnings for future iterations:**
+  - `download_files()` returns `FileDownloadResponse` with `.content` as `bytes | None` and `.error` — use it for binary reads
+  - Image detection uses `os.path.splitext` + a frozenset of extensions — simple and extensible
+  - Mock `backend.download_files` directly on the backend instance from `mock_tool_context.state["_backend"]` for image tests
+  - Always run `ruff format` after edits — ruff reformats spacing around `frozenset` and `dict` literals
+  ---

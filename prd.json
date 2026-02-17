@@ -137,7 +137,7 @@
         "uv run ruff format --check . passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
