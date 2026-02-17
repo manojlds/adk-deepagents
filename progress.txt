@@ -198,4 +198,21 @@ Thread: https://ampcode.com/threads/T-019c6d88-9270-754a-b156-cdcaf456381f
   - Sub-agent delegation tests should use concrete, verifiable answers (e.g., math) so assertions can check exact values
   - The `SubAgentSpec` only needs `name` and `description` for basic delegation — `model` and `tools` default from the parent
   - Integration test helpers (`_run_agent`, `_make_litellm_model`, `_backend_factory`) are duplicated per test file since they're lightweight — could be shared via conftest if more tests are added
+   ---
+
+  ## 2026-02-17 - US-014
+  Thread: https://ampcode.com/threads/T-019c6d90-e7c0-728e-8d5c-3b66509e4fc1
+  - Created `tests/integration_tests/test_summarization_memory.py` with two integration test scenarios
+  - Summarization trigger test: configures a tiny context window (500 tokens, 50% trigger), sends 3 turns of conversation with memorable facts, verifies the agent still recalls facts after summarization fires (via inline summary fallback)
+  - Memory loading test: pre-populates `/AGENTS.md` in backend files, creates agent with `memory=["/AGENTS.md"]`, verifies the agent references loaded memory content (mascot name "Buddy" or motto "Code with kindness")
+  - Both tests marked with `@pytest.mark.integration` and `@pytest.mark.timeout(120)`
+  - Tests skipped with clear message when `OPENCODE_API_KEY` is not set
+  - Follows same helper patterns as existing integration tests (`_run_agent`, `_make_litellm_model`, `_backend_factory`)
+  - Files changed: `tests/integration_tests/test_summarization_memory.py` (new)
+  - **Learnings for future iterations:**
+  - To trigger summarization in tests, use a very small `context_window` (e.g., 500) with a low `trigger` fraction (0.5) — this ensures summarization fires after 2-3 exchanges
+  - Use `use_llm_summary=False` in integration tests to avoid an extra LLM call for summary generation — inline summary is sufficient for verifying the mechanism works
+  - Memory loading requires the AGENTS.md file to exist in the backend's `files` dict — pass `state={"files": {"/AGENTS.md": content}}` to `_run_agent`
+  - The `before_agent_callback` loads memory once per session (guarded by `"memory_contents" not in state`), so the file must exist before the first agent turn
+  - `ruff format` rewrites multi-line string concatenations and assertion messages — always run format before committing
   ---

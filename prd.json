@@ -250,7 +250,7 @@
         "uv run ruff format --check . passes"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "Depends on US-012 (integration test setup) and US-003 (model-aware summarization)"
     }
   ]
