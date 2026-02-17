@@ -180,7 +180,9 @@ def make_before_model_callback(
         state = callback_context.state
 
         # 0. Patch dangling tool calls into the LLM request contents
-        dangling = state.pop("_dangling_tool_calls", None)
+        dangling = state.get("_dangling_tool_calls")
+        if "_dangling_tool_calls" in state:
+            del state["_dangling_tool_calls"]  # type: ignore[not-subscriptable]
         if dangling and llm_request.contents:
             _inject_dangling_tool_responses(llm_request, dangling)
 

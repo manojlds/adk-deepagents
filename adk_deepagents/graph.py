@@ -22,8 +22,6 @@ from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import (
-    GENERAL_PURPOSE_SUBAGENT,
-    _sanitize_agent_name,
     build_subagent_tools,
 )
 from adk_deepagents.tools.todos import read_todos, write_todos
@@ -80,7 +78,7 @@ def create_deep_agent(
     skills: list[str] | None = None,
     skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
-    output_schema: type | None = None,
+    output_schema: Any = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
@@ -274,14 +272,14 @@ def create_deep_agent(
         full_instruction = instruction + "\n\n" + BASE_AGENT_PROMPT
 
     # 8. Assemble all tools
-    all_tools: list = list(core_tools) + subagent_tools
+    all_tools: list[Any] = list(core_tools) + subagent_tools
 
     # 9. Create and return the agent
     agent = LlmAgent(
         name=name,
         model=model,
         instruction=full_instruction,
-        tools=all_tools,
+        tools=all_tools,  # type: ignore[invalid-argument-type]
         output_schema=output_schema,
         before_agent_callback=before_agent_cb,
         before_model_callback=before_model_cb,
@@ -306,7 +304,7 @@ async def create_deep_agent_async(
     skills: list[str] | None = None,
     skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
-    output_schema: type | None = None,
+    output_schema: Any = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,

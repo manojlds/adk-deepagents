@@ -55,6 +55,7 @@ class FileData(TypedDict, total=False):
     content: list[str]  # lines
     created_at: str  # ISO 8601
     modified_at: str  # ISO 8601
+    _binary: str  # base64-encoded binary content (for non-text files)
 
 
 @dataclass

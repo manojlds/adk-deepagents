@@ -21,6 +21,7 @@ import asyncio
 import os
 
 from dotenv import load_dotenv
+from google.genai import types
 
 from adk_deepagents import create_deep_agent, create_deep_agent_async
 
@@ -146,7 +147,7 @@ async def main():
             async for event in runner.run_async(
                 session_id=session.id,
                 user_id="user",
-                new_message=user_input,
+                new_message=types.Content(role="user", parts=[types.Part(text=user_input)]),
             ):
                 if event.content and event.content.parts:
                     for part in event.content.parts:

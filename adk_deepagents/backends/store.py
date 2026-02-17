@@ -261,7 +261,15 @@ class StoreBackend(Backend):
                     FileUploadResponse(path=normalize_path(file_name), error="already_exists")
                 )
             else:
-                file_data = create_file_data(content.decode("utf-8", errors="replace"))
+                # Try decoding as text; if it fails, store raw bytes as base64
+                try:
+                    text = content.decode("utf-8")
+                    file_data = create_file_data(text)
+                except UnicodeDecodeError:
+                    import base64
+
+                    file_data = create_file_data("")
+                    file_data["_binary"] = base64.b64encode(content).decode("ascii")
                 self._files[ns_path] = file_data
                 responses.append(FileUploadResponse(path=normalize_path(file_name)))
         return responses
@@ -275,12 +283,20 @@ class StoreBackend(Backend):
             if file_data is None:
                 results.append(FileDownloadResponse(path=normalize_path(p), error="file_not_found"))
             else:
-                content_str = file_data_to_string(file_data)
-                results.append(
-                    FileDownloadResponse(
-                        path=normalize_path(p), content=content_str.encode("utf-8")
+                # If the file was stored as binary, return the raw bytes
+                binary_b64 = file_data.get("_binary")
+                if binary_b64:
+                    import base64
+
+                    raw = base64.b64decode(binary_b64)
+                    results.append(FileDownloadResponse(path=normalize_path(p), content=raw))
+                else:
+                    content_str = file_data_to_string(file_data)
+                    results.append(
+                        FileDownloadResponse(
+                            path=normalize_path(p), content=content_str.encode("utf-8")
+                        )
                     )
-                )
         return results
 
     # -- async overrides (direct, no asyncio.to_thread needed) ---------------

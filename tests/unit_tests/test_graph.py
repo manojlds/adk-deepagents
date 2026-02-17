@@ -31,6 +31,7 @@ class TestCreateDeepAgent:
 
     def test_instruction_prepended(self):
         agent = create_deep_agent(instruction="Custom instruction.")
+        assert isinstance(agent.instruction, str)
         assert "Custom instruction." in agent.instruction
         assert BASE_AGENT_PROMPT in agent.instruction
 
@@ -248,6 +249,7 @@ class TestExtraCallbacks:
             return None
 
         composed = _compose_callbacks(builtin, extra)
+        assert composed is not None
         composed()
         assert call_log == ["builtin", "extra"]
 
@@ -266,6 +268,7 @@ class TestExtraCallbacks:
             return None
 
         composed = _compose_callbacks(builtin, extra)
+        assert composed is not None
         result = composed()
         assert result == {"short": "circuited"}
         assert call_log == ["builtin"]
@@ -281,6 +284,7 @@ class TestExtraCallbacks:
             return {"extra": "result"}
 
         composed = _compose_callbacks(builtin, extra)
+        assert composed is not None
         result = composed()
         assert result == {"extra": "result"}
 
@@ -361,6 +365,7 @@ class TestSubAgentSpecFields:
         # Find the cautious_agent
         cautious = [t for t in agent_tools if t.agent.name == "cautious_agent"]
         assert len(cautious) == 1
+        assert isinstance(cautious[0].agent, LlmAgent)
         assert cautious[0].agent.before_tool_callback is not None
 
     def test_subagent_without_interrupt_on_has_no_callback(self):
@@ -378,6 +383,7 @@ class TestSubAgentSpecFields:
         agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
         normal = [t for t in agent_tools if t.agent.name == "normal_agent"]
         assert len(normal) == 1
+        assert isinstance(normal[0].agent, LlmAgent)
         assert normal[0].agent.before_tool_callback is None
 
     def test_prebuilt_llmagent_in_subagents(self):

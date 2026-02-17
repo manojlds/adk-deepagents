@@ -93,7 +93,7 @@ async def test_summarization_trigger():
 
     We configure a very small context window so summarization fires after
     a few exchanges. Then we verify that the agent still knows about earlier
-    context (i.e., the summary preserved it).
+    context (i.e., the LLM-generated summary preserved it).
     """
     model = _make_litellm_model()
 
@@ -104,7 +104,7 @@ async def test_summarization_trigger():
         context_window=500,
         trigger=("fraction", 0.5),
         keep=("messages", 2),
-        use_llm_summary=False,  # Use inline summary to avoid extra LLM call
+        use_llm_summary=True,  # Use LLM summary to verify end-to-end summarization
     )
 
     agent = create_deep_agent(

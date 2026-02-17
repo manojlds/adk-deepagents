@@ -6,13 +6,15 @@ project:
   language: "Python"
 
 commands:
-  test: "pytest"
-  lint: "ruff check ."
-  # build: ""
+  test: "uv run pytest"
+  lint: "uv run ruff check ."
+  format: "uv run ruff format --check ."
+  typecheck: "uv run ty check"
 
-rules: []
-  # - "follow existing patterns"
-  # - "use TypeScript strict mode"
+rules:
+  - "use uv for all Python commands (uv run pytest, uv run ruff, etc.)"
+  - "follow existing patterns in neighboring files"
+  - "all new code must pass ruff check, ruff format, and ty check"
 
 boundaries:
   never_touch:

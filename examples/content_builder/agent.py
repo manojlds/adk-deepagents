@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 
 from dotenv import load_dotenv
+from google.genai import types
 
 from adk_deepagents import SubAgentSpec, create_deep_agent
 from adk_deepagents.backends import FilesystemBackend
@@ -75,7 +76,7 @@ async def main():
         async for event in runner.run_async(
             session_id=session.id,
             user_id="user",
-            new_message=user_input,
+            new_message=types.Content(role="user", parts=[types.Part(text=user_input)]),
         ):
             if event.content and event.content.parts:
                 for part in event.content.parts:

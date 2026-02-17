@@ -97,6 +97,7 @@ def test_partition_messages_split():
     to_summarize, to_keep = partition_messages(messages, keep_count=4)
     assert len(to_summarize) == 6
     assert len(to_keep) == 4
+    assert to_keep[-1].parts is not None
     assert to_keep[-1].parts[0].text == "msg9"
 
 
@@ -126,14 +127,18 @@ def test_format_messages_for_summary_empty_parts():
 def test_create_summary_content():
     summary = create_summary_content("This is a summary.")
     assert summary.role == "user"
+    assert summary.parts is not None
     assert len(summary.parts) == 1
+    assert summary.parts[0].text is not None
     assert "<conversation_summary>" in summary.parts[0].text
     assert "This is a summary." in summary.parts[0].text
 
 
 def test_create_summary_content_with_offload_path():
     summary = create_summary_content("Summary here.", offload_path="/history/session.md")
+    assert summary.parts is not None
     text = summary.parts[0].text
+    assert text is not None
     assert "/history/session.md" in text
     assert "<summary>" in text
     assert "Summary here." in text
@@ -192,7 +197,10 @@ def test_truncate_tool_args_truncates_large_write_file():
     assert modified is True
     assert len(result) == 2
 
+    assert result[0].parts is not None
     truncated_fc = result[0].parts[0].function_call
+    assert truncated_fc is not None
+    assert truncated_fc.args is not None
     assert len(truncated_fc.args["content"]) < 100
     assert "...(truncated)" in truncated_fc.args["content"]
     assert truncated_fc.args["file_path"] == "/test.py"
