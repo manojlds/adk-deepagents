@@ -11,7 +11,13 @@ from __future__ import annotations
 import pytest
 
 from adk_deepagents import create_deep_agent
-from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
+from tests.integration_tests.conftest import (
+    get_file_content,
+    make_litellm_model,
+    run_agent_with_events,
+    send_followup,
+    send_followup_with_events,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
@@ -31,12 +37,21 @@ async def test_multi_turn_file_operations():
     )
 
     # Turn 1: Create a Python file
-    texts, runner, session = await run_agent(
+    texts, function_calls, function_responses, runner, session = await run_agent_with_events(
         agent,
         "Use write_file to create /app.py with content:\n"
         "def greet(name):\n"
         '    return f"Hello, {name}!"\n\n'
         "Confirm when done.",
+    )
+    assert "write_file" in function_calls, f"Expected write_file call, got: {function_calls}"
+    assert "write_file" in function_responses, (
+        f"Expected write_file response, got: {function_responses}"
+    )
+    files = await get_file_content(runner, session)
+    assert "/app.py" in files, f"Expected /app.py in backend files, got: {list(files.keys())}"
+    assert "def greet(name):" in files["/app.py"], (
+        f"Expected greet function in /app.py, got: {files['/app.py']}"
     )
     response = " ".join(texts).lower()
     assert any(w in response for w in ("created", "written", "done", "success")), (
@@ -44,13 +59,24 @@ async def test_multi_turn_file_operations():
     )
 
     # Turn 2: Create another file
-    await send_followup(
+    _, function_calls2, function_responses2 = await send_followup_with_events(
         runner,
         session,
         "Now use write_file to create /test_app.py with content:\n"
         "from app import greet\n\n"
         "def test_greet():\n"
         '    assert greet("World") == "Hello, World!"\n',
+    )
+    assert "write_file" in function_calls2, f"Expected write_file call, got: {function_calls2}"
+    assert "write_file" in function_responses2, (
+        f"Expected write_file response, got: {function_responses2}"
+    )
+    files_after = await get_file_content(runner, session)
+    assert "/test_app.py" in files_after, (
+        f"Expected /test_app.py in backend files, got: {list(files_after.keys())}"
+    )
+    assert 'assert greet("World") == "Hello, World!"' in files_after["/test_app.py"], (
+        f"Expected test assertion in /test_app.py, got: {files_after['/test_app.py']}"
     )
 
     # Turn 3: List the files
@@ -83,34 +109,78 @@ async def test_multi_turn_todo_and_files():
     )
 
     # Turn 1: Create a plan
-    texts, runner, session = await run_agent(
+    _, function_calls, function_responses, runner, session = await run_agent_with_events(
         agent,
         "Create a todo list with write_todos:\n"
         "1. 'Write README' (status: pending)\n"
         "2. 'Create config' (status: pending)\n",
     )
+    assert "write_todos" in function_calls, f"Expected write_todos call, got: {function_calls}"
+    assert "write_todos" in function_responses, (
+        f"Expected write_todos response, got: {function_responses}"
+    )
+    updated = await runner.session_service.get_session(
+        app_name="integration_test",
+        user_id="test_user",
+        session_id=session.id,
+    )
+    todos = updated.state.get("todos", [])
+    assert len(todos) == 2, f"Expected 2 todos after initialization, got: {todos}"
 
     # Turn 2: Complete the first task
-    await send_followup(
+    _, function_calls2, function_responses2 = await send_followup_with_events(
         runner,
         session,
         "Now complete the first todo: use write_file to create /README.md "
         "with content '# My Project\\nA test project.'. "
         "Then update the todo list to mark 'Write README' as completed.",
     )
+    assert "write_file" in function_calls2, f"Expected write_file call, got: {function_calls2}"
+    assert "write_todos" in function_calls2, f"Expected write_todos call, got: {function_calls2}"
+    assert "write_file" in function_responses2, (
+        f"Expected write_file response, got: {function_responses2}"
+    )
+    assert "write_todos" in function_responses2, (
+        f"Expected write_todos response, got: {function_responses2}"
+    )
+    files = await get_file_content(runner, session)
+    assert "/README.md" in files, f"Expected /README.md in backend files, got: {list(files.keys())}"
+    assert "# My Project" in files["/README.md"], (
+        f"Expected README heading in /README.md, got: {files['/README.md']}"
+    )
+    updated = await runner.session_service.get_session(
+        app_name="integration_test",
+        user_id="test_user",
+        session_id=session.id,
+    )
+    todos_after = updated.state.get("todos", [])
+    write_readme = next(
+        (todo for todo in todos_after if todo.get("content") == "Write README"), None
+    )
+    assert write_readme is not None, f"Expected 'Write README' todo to exist, got: {todos_after}"
+    assert write_readme.get("status") == "completed", (
+        f"Expected 'Write README' to be completed, got: {todos_after}"
+    )
 
     # Turn 3: Verify both
-    verify_texts = await send_followup(
+    verify_texts, function_calls3, function_responses3 = await send_followup_with_events(
         runner,
         session,
         "Read the todos with read_todos and read /README.md. "
         "Tell me the status of each todo and what's in the README.",
     )
+    assert "read_todos" in function_calls3, f"Expected read_todos call, got: {function_calls3}"
+    assert "read_file" in function_calls3, f"Expected read_file call, got: {function_calls3}"
+    assert "read_todos" in function_responses3, (
+        f"Expected read_todos response, got: {function_responses3}"
+    )
+    assert "read_file" in function_responses3, (
+        f"Expected read_file response, got: {function_responses3}"
+    )
     verify_response = " ".join(verify_texts).lower()
-    # Should have some reference to completed or the README content
     has_readme = "my project" in verify_response or "readme" in verify_response
     has_status = "completed" in verify_response or "done" in verify_response
-    assert has_readme or has_status, (
+    assert has_readme and has_status, (
         f"Expected task progress and file content, got: {verify_response}"
     )
 
@@ -130,7 +200,7 @@ async def test_conversation_context_preserved():
     )
 
     # Turn 1: Tell the agent something
-    texts, runner, session = await run_agent(
+    _texts, _function_calls, _function_responses, runner, session = await run_agent_with_events(
         agent,
         "My favorite programming language is Elixir and I work at a company "
         "called NovaTech. Remember this.",
@@ -148,6 +218,6 @@ async def test_conversation_context_preserved():
     recall_response = " ".join(recall_texts).lower()
     has_elixir = "elixir" in recall_response
     has_company = "novatech" in recall_response
-    assert has_elixir or has_company, (
-        f"Expected Elixir or NovaTech from earlier context, got: {recall_response}"
+    assert has_elixir and has_company, (
+        f"Expected Elixir and NovaTech from earlier context, got: {recall_response}"
     )

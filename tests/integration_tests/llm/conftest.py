@@ -7,6 +7,7 @@ from tests.integration_tests.conftest import (
     run_agent,
     run_agent_with_events,
     send_followup,
+    send_followup_with_events,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "run_agent",
     "run_agent_with_events",
     "send_followup",
+    "send_followup_with_events",
 ]

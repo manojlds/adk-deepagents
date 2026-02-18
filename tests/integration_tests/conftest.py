@@ -128,9 +128,13 @@ async def run_agent_with_events(
                 if hasattr(part, "text") and part.text:
                     texts.append(part.text)
                 if hasattr(part, "function_call") and part.function_call:
-                    function_calls.append(part.function_call.name)
+                    name = part.function_call.name
+                    if isinstance(name, str) and name:
+                        function_calls.append(name)
                 if hasattr(part, "function_response") and part.function_response:
-                    function_responses.append(part.function_response.name)
+                    name = part.function_response.name
+                    if isinstance(name, str) and name:
+                        function_responses.append(name)
 
     return texts, function_calls, function_responses, runner, session
 
@@ -170,3 +174,37 @@ async def send_followup(runner, session, prompt: str) -> list[str]:
                     texts.append(part.text)
 
     return texts
+
+
+async def send_followup_with_events(
+    runner,
+    session,
+    prompt: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Send a follow-up and return text output plus tool call/response names."""
+    from google.genai import types
+
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
+    texts: list[str] = []
+    function_calls: list[str] = []
+    function_responses: list[str] = []
+
+    async for event in runner.run_async(
+        session_id=session.id,
+        user_id="test_user",
+        new_message=content,
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if hasattr(part, "text") and part.text:
+                    texts.append(part.text)
+                if hasattr(part, "function_call") and part.function_call:
+                    name = part.function_call.name
+                    if isinstance(name, str) and name:
+                        function_calls.append(name)
+                if hasattr(part, "function_response") and part.function_response:
+                    name = part.function_response.name
+                    if isinstance(name, str) and name:
+                        function_responses.append(name)
+
+    return texts, function_calls, function_responses
