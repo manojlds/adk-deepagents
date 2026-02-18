@@ -101,7 +101,7 @@ async def test_extra_after_tool_callback():
 
     tools_called: list[str] = []
 
-    def extra_after_tool(tool, args, tool_context):
+    def extra_after_tool(tool, args, tool_context, **kwargs):
         """Log which tools were called."""
         tool_name = getattr(tool, "name", "unknown")
         tools_called.append(tool_name)
