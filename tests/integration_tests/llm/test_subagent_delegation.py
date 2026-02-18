@@ -13,8 +13,7 @@ import pytest
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.types import SubAgentSpec
-
-from .conftest import make_litellm_model, run_agent
+from tests.integration_tests.conftest import make_litellm_model, run_agent
 
 pytestmark = pytest.mark.integration
 
