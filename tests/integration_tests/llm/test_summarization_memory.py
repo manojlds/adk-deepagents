@@ -19,7 +19,7 @@ from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.types import SummarizationConfig
 from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 
 @pytest.mark.timeout(120)

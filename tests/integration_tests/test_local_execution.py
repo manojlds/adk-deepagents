@@ -6,7 +6,11 @@ output truncation, and tool creation.  No API key required.
 
 from __future__ import annotations
 
+import pytest
+
 from adk_deepagents.execution.local import _execute_local, create_local_execute_tool
+
+pytestmark = pytest.mark.integration
 
 
 class TestExecuteLocal:

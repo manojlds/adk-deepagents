@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest
 from google.genai import types
@@ -26,6 +27,8 @@ from adk_deepagents.summarization import (
     truncate_tool_args,
 )
 from adk_deepagents.types import TruncateArgsConfig
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers

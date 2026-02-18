@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest
 from google.genai import types
@@ -23,6 +24,8 @@ from adk_deepagents.prompts import (
     TASK_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
 )
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers
