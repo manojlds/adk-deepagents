@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from adk_deepagents import create_deep_agent
-from tests.integration_tests.conftest import make_litellm_model, run_agent
+from tests.integration_tests.conftest import get_file_content, make_litellm_model, run_agent
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
@@ -124,14 +124,18 @@ async def test_custom_tools_alongside_builtin():
         ),
     )
 
-    texts, _runner, _session = await run_agent(
+    texts, runner, session = await run_agent(
         agent,
         "Use get_weather to check the weather in London, then use write_file "
         "to save the weather report to /weather.txt. Confirm when done.",
     )
 
-    response_text = " ".join(texts).lower()
-    assert any(
-        word in response_text
-        for word in ("london", "rainy", "weather", "created", "written", "saved", "done")
-    ), f"Expected weather + file creation confirmation, got: {response_text}"
+    # Verify the file was actually written to the backend
+    files = await get_file_content(runner, session)
+    assert "/weather.txt" in files, (
+        f"Expected /weather.txt in backend files, got: {list(files.keys())}"
+    )
+    file_content = files["/weather.txt"].lower()
+    assert "london" in file_content or "rainy" in file_content, (
+        f"Expected weather data in file, got: {files['/weather.txt']}"
+    )
