@@ -50,6 +50,7 @@ class TestBeforeToolNoInterrupt:
 class TestBeforeToolApprovalFlow:
     def test_first_invocation_requests_confirmation(self):
         cb = make_before_tool_callback(interrupt_on={"write_file": True})
+        assert cb is not None
         tool = _make_tool("write_file")
         tc = _make_tool_context(tool_confirmation=None)
         result = cb(tool, {"path": "/f.txt", "content": "data"}, tc)
@@ -59,6 +60,7 @@ class TestBeforeToolApprovalFlow:
 
     def test_non_interrupted_tool_passes_through(self):
         cb = make_before_tool_callback(interrupt_on={"write_file": True})
+        assert cb is not None
         tool = _make_tool("read_file")
         tc = _make_tool_context()
         result = cb(tool, {"path": "/f.txt"}, tc)
@@ -66,6 +68,7 @@ class TestBeforeToolApprovalFlow:
 
     def test_confirmed_proceeds(self):
         cb = make_before_tool_callback(interrupt_on={"write_file": True})
+        assert cb is not None
         tool = _make_tool("write_file")
         confirmation = ToolConfirmation(confirmed=True, payload=None)
         tc = _make_tool_context(tool_confirmation=confirmation)
@@ -74,6 +77,7 @@ class TestBeforeToolApprovalFlow:
 
     def test_rejected_returns_rejection(self):
         cb = make_before_tool_callback(interrupt_on={"write_file": True})
+        assert cb is not None
         tool = _make_tool("write_file")
         confirmation = ToolConfirmation(confirmed=False, payload=None)
         tc = _make_tool_context(tool_confirmation=confirmation)
@@ -84,6 +88,7 @@ class TestBeforeToolApprovalFlow:
 
     def test_modified_args_applied(self):
         cb = make_before_tool_callback(interrupt_on={"write_file": True})
+        assert cb is not None
         tool = _make_tool("write_file")
         confirmation = ToolConfirmation(
             confirmed=True,

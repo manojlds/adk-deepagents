@@ -106,6 +106,7 @@ class TestPartitionMessages:
         assert len(to_summarize) == 6
         assert len(to_keep) == 4
         # to_keep should be the last 4
+        assert to_keep[0].parts is not None
         assert to_keep[0].parts[0].text == "msg 6"
 
     def test_partition_messages_fewer_than_keep(self):
@@ -154,13 +155,18 @@ class TestCreateSummaryContent:
     def test_create_summary_content_without_offload(self):
         content = create_summary_content("This is the summary.")
         assert content.role == "user"
-        assert "This is the summary." in content.parts[0].text
-        assert "conversation_summary" in content.parts[0].text
+        assert content.parts is not None
+        text = content.parts[0].text
+        assert text is not None
+        assert "This is the summary." in text
+        assert "conversation_summary" in text
 
     def test_create_summary_content_with_offload(self):
         content = create_summary_content("Summary text.", offload_path="/history/session.md")
         assert content.role == "user"
+        assert content.parts is not None
         text = content.parts[0].text
+        assert text is not None
         assert "Summary text." in text
         assert "/history/session.md" in text
 
@@ -285,6 +291,9 @@ class TestTruncateToolArgs:
         )
         result, modified = truncate_tool_args(messages, config)
         assert modified is True
+        assert result[0].parts is not None
         fc = result[0].parts[0].function_call
+        assert fc is not None
+        assert fc.args is not None
         assert len(fc.args["content"]) < len(large_content)
         assert "truncated" in fc.args["content"]

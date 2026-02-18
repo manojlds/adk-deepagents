@@ -38,7 +38,7 @@ class TestCreateLocalExecuteTool:
     def test_create_local_execute_tool_returns_callable(self):
         tool = create_local_execute_tool()
         assert callable(tool)
-        assert tool.__name__ == "execute"
+        assert getattr(tool, "__name__", None) == "execute"
 
     def test_tool_invocation(self):
         tool = create_local_execute_tool()

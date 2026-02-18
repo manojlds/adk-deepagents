@@ -50,6 +50,7 @@ class TestComposeCallbacksBeforeAgent:
             return None
 
         composed = _compose_callbacks(builtin_cb, extra_cb)
+        assert composed is not None
         ctx = _make_callback_context()
         result = composed(ctx)
         assert result is None
@@ -68,6 +69,7 @@ class TestComposeCallbacksBeforeAgent:
             return None
 
         composed = _compose_callbacks(builtin_cb, extra_cb)
+        assert composed is not None
         ctx = _make_callback_context()
         result = composed(ctx)
         assert result is sentinel
@@ -87,6 +89,7 @@ class TestComposeCallbacksBeforeModel:
             return None
 
         composed = _compose_callbacks(builtin_cb, extra_cb)
+        assert composed is not None
         ctx = _make_callback_context()
         req = _make_llm_request()
         result = composed(ctx, req)
@@ -131,6 +134,7 @@ class TestComposeCallbacksEdgeCases:
         # Compose builtin + extra1, then compose result + extra2
         composed = _compose_callbacks(builtin_cb, extra1)
         composed = _compose_callbacks(composed, extra2)
+        assert composed is not None
         ctx = _make_callback_context()
         result = composed(ctx)
         assert result is None
