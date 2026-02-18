@@ -3,8 +3,7 @@
 Scenario: Main agent delegates a task to a sub-agent, verifies the sub-agent
 ran and returned a result.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

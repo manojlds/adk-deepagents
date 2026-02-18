@@ -3,8 +3,7 @@
 Scenario: Agent creates multiple files, then uses glob and grep to find
 files and search for content.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

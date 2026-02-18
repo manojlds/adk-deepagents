@@ -3,7 +3,7 @@
 Verifies that ``create_deep_agent`` can use filesystem tools end-to-end
 with a real LLM backend.
 
-Run with: uv run pytest tests/integration_tests/test_basic_agent.py -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

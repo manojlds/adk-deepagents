@@ -3,7 +3,7 @@
 Scenario: Agent creates a file via write_file, reads it back via read_file,
 edits it via edit_file, then verifies the final content.
 
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

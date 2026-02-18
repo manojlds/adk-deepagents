@@ -3,8 +3,7 @@
 Scenario: Agent with output_schema returns structured JSON matching
 a Pydantic model.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

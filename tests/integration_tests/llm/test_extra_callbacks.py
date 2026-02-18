@@ -3,8 +3,7 @@
 Tests that user-provided extra_callbacks compose correctly with built-in
 callbacks during actual LLM interactions.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations
