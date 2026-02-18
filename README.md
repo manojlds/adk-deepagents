@@ -263,6 +263,9 @@ Use `delegation_mode="dynamic"` to expose a single `task` tool that routes work
 to sub-agents at runtime (LangChain deepagents-style). The tool supports `task_id`
 to continue the same delegated sub-session across turns.
 
+`DynamicTaskConfig` also lets you enforce runtime guardrails like `max_depth`
+(recursive delegation depth) and `max_parallel` (simultaneous running tasks).
+
 ```python
 from adk_deepagents import DynamicTaskConfig, SubAgentSpec, create_deep_agent
 

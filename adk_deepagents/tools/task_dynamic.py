@@ -29,6 +29,8 @@ from adk_deepagents.types import DynamicTaskConfig, SkillsConfig, SubAgentSpec
 _TASK_STORE_KEY = "_dynamic_tasks"
 _TASK_COUNTER_KEY = "_dynamic_task_counter"
 _TASK_PARENT_ID_KEY = "_dynamic_parent_session_id"
+_TASK_DEPTH_KEY = "_dynamic_delegation_depth"
+_RUNNING_TASKS_KEY = "_dynamic_running_tasks"
 _RUNTIME_REGISTRY: dict[str, _TaskRuntime] = {}
 
 
@@ -203,6 +205,13 @@ def create_dynamic_task_tool(
             parent_session_id = uuid.uuid4().hex
             tool_context.state[_TASK_PARENT_ID_KEY] = parent_session_id
 
+        current_depth_raw = tool_context.state.get(_TASK_DEPTH_KEY, 0)
+        current_depth = current_depth_raw if isinstance(current_depth_raw, int) else 0
+
+        running_tasks = tool_context.state.setdefault(_RUNNING_TASKS_KEY, [])
+        if not isinstance(running_tasks, list):
+            return {"status": "error", "error": "Invalid dynamic running task tracker in state"}
+
         if task_id:
             existing = store.get(task_id)
             if not isinstance(existing, dict):
@@ -218,6 +227,14 @@ def create_dynamic_task_tool(
                 }
             normalized_type = runtime.subagent_type
         else:
+            if current_depth + 1 > task_config.max_depth:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Dynamic delegation depth limit exceeded: current depth {current_depth}, "
+                        f"max_depth={task_config.max_depth}"
+                    ),
+                }
             counter = int(tool_context.state.get(_TASK_COUNTER_KEY, 0)) + 1
             tool_context.state[_TASK_COUNTER_KEY] = counter
             task_id = f"task_{counter}"
@@ -259,6 +276,7 @@ def create_dynamic_task_tool(
                         "files": tool_context.state.get("files", {}),
                         "todos": tool_context.state.get("todos", []),
                         "_backend_factory": tool_context.state.get("_backend_factory"),
+                        _TASK_DEPTH_KEY: current_depth + 1,
                     },
                 )
             )
@@ -268,19 +286,39 @@ def create_dynamic_task_tool(
                 user_id="dynamic_task_user",
                 subagent_type=normalized_type,
             )
-            store[task_id] = {"subagent_type": normalized_type}
+            store[task_id] = {
+                "subagent_type": normalized_type,
+                "depth": current_depth + 1,
+            }
             _RUNTIME_REGISTRY[f"{parent_session_id}:{task_id}"] = runtime
 
         if runtime is None:
             return {"status": "error", "error": "Failed to initialize dynamic task runtime"}
 
-        result = _run_coro_sync(
-            _run_dynamic_task(
-                runtime,
-                prompt=resolved_prompt,
-                timeout_seconds=task_config.timeout_seconds,
+        if len(running_tasks) >= task_config.max_parallel:
+            return {
+                "status": "error",
+                "task_id": task_id,
+                "error": (
+                    f"Dynamic task concurrency limit exceeded: running={len(running_tasks)}, "
+                    f"max_parallel={task_config.max_parallel}"
+                ),
+            }
+
+        run_key = f"{parent_session_id}:{task_id}"
+        running_tasks.append(run_key)
+
+        try:
+            result = _run_coro_sync(
+                _run_dynamic_task(
+                    runtime,
+                    prompt=resolved_prompt,
+                    timeout_seconds=task_config.timeout_seconds,
+                )
             )
-        )
+        finally:
+            if run_key in running_tasks:
+                running_tasks.remove(run_key)
 
         tool_context.state["files"] = result["files"]
         tool_context.state["todos"] = result["todos"]
