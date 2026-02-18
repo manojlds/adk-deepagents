@@ -15,8 +15,7 @@ import pytest
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.backends import FilesystemBackend
-
-from .conftest import make_litellm_model, run_agent, send_followup
+from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
 
 pytestmark = pytest.mark.integration
 

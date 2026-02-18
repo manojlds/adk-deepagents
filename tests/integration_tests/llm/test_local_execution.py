@@ -12,8 +12,7 @@ from __future__ import annotations
 import pytest
 
 from adk_deepagents import create_deep_agent
-
-from .conftest import make_litellm_model, run_agent, send_followup
+from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
 
 pytestmark = pytest.mark.integration
 

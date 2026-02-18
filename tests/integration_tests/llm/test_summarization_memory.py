@@ -17,8 +17,7 @@ import pytest
 from adk_deepagents import create_deep_agent
 from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.types import SummarizationConfig
-
-from .conftest import make_litellm_model, run_agent, send_followup
+from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
 
 pytestmark = pytest.mark.integration
 
