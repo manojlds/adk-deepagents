@@ -5,27 +5,16 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import pytest
+import litellm
+from dotenv import load_dotenv
 
 from adk_deepagents.backends.state import StateBackend
 
-# ---------------------------------------------------------------------------
-# Skip gate
-# ---------------------------------------------------------------------------
+# Load local .env for developer-friendly LLM test runs.
+load_dotenv()
 
-
-def pytest_collection_modifyitems(config, items):
-    """Skip integration tests if no LLM API key is available."""
-    has_key = os.environ.get("OPENCODE_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if has_key:
-        return
-    skip_marker = pytest.mark.skip(
-        reason="No API key set (OPENCODE_API_KEY or OPENAI_API_KEY) — skipping integration tests"
-    )
-    for item in items:
-        if "llm" in item.keywords:
-            item.add_marker(skip_marker)
-
+# Use httpx transport to avoid aiohttp cleanup warnings on Python >=3.12.7.
+litellm.disable_aiohttp_transport = True
 
 # ---------------------------------------------------------------------------
 # Shared helpers
