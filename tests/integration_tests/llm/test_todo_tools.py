@@ -3,8 +3,7 @@
 Scenario: Agent uses write_todos to create a task list, then reads it back
 with read_todos to verify the data round-trips through the LLM correctly.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

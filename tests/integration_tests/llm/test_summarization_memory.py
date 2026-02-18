@@ -6,8 +6,7 @@ summarization, verify conversation history is preserved (not lost).
 Scenario 2 (Memory loading): Agent loads an AGENTS.md file via memory
 config, verify the content appears in the agent's system prompt.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations

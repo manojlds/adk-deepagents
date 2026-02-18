@@ -3,7 +3,7 @@
 Verifies that ``create_deep_agent`` can use filesystem tools end-to-end
 with a real LLM backend.
 
-Run with: uv run pytest tests/integration_tests/test_basic_agent.py -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from adk_deepagents import create_deep_agent
-from tests.integration_tests.conftest import make_litellm_model, run_agent
+from tests.integration_tests.conftest import get_file_content, make_litellm_model, run_agent
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
@@ -29,13 +29,15 @@ async def test_write_and_read_file():
         ),
     )
 
-    texts, _runner, _session = await run_agent(
+    texts, runner, session = await run_agent(
         agent,
         'Use write_file to create a file at /hello.txt with the content "Hello from deep agent". '
         "Then use read_file to read it back and show me the content.",
     )
 
-    response_text = " ".join(texts)
-    assert "Hello from deep agent" in response_text, (
-        f"Expected file content in response, got: {response_text}"
+    # Verify the file was actually written to the backend
+    files = await get_file_content(runner, session)
+    assert "/hello.txt" in files, f"Expected /hello.txt in backend files, got: {list(files.keys())}"
+    assert files["/hello.txt"] == "Hello from deep agent", (
+        f"Expected exact file content, got: {files['/hello.txt']}"
     )

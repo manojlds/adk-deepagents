@@ -3,8 +3,7 @@
 Tests that user-provided extra_callbacks compose correctly with built-in
 callbacks during actual LLM interactions.
 
-Requires OPENCODE_API_KEY environment variable to be set.
-Run with: uv run pytest -m integration
+Run with: uv run pytest -m llm
 """
 
 from __future__ import annotations
@@ -102,7 +101,7 @@ async def test_extra_after_tool_callback():
 
     tools_called: list[str] = []
 
-    def extra_after_tool(tool, args, tool_context):
+    def extra_after_tool(tool, args, tool_context, **kwargs):
         """Log which tools were called."""
         tool_name = getattr(tool, "name", "unknown")
         tools_called.append(tool_name)
