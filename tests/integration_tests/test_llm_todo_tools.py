@@ -53,8 +53,7 @@ async def test_todo_write_and_read():
     read_texts = await send_followup(
         runner,
         session,
-        "Now use read_todos to show me the current todo list. "
-        "List each item with its status.",
+        "Now use read_todos to show me the current todo list. List each item with its status.",
     )
     read_response = " ".join(read_texts).lower()
 
@@ -85,8 +84,7 @@ async def test_todo_update_status():
     # Step 1: Create initial todos
     texts, runner, session = await run_agent(
         agent,
-        "Create todos: 'Setup database' (pending), 'Write API' (pending). "
-        "Use write_todos.",
+        "Create todos: 'Setup database' (pending), 'Write API' (pending). Use write_todos.",
     )
 
     # Step 2: Update the first item to completed

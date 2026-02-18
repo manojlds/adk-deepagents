@@ -175,9 +175,7 @@ class TestBeforeModelSystemPromptInjection:
         ctx = make_callback_context(state={"_dangling_tool_calls": dangling})
         # Build contents with the dangling function_call
         fc = types.FunctionCall(id="call_abc", name="write_file", args={})
-        model_msg = types.Content(
-            role="model", parts=[types.Part(function_call=fc)]
-        )
+        model_msg = types.Content(role="model", parts=[types.Part(function_call=fc)])
         req = make_llm_request(contents=[model_msg])
         cb(ctx, req)
         # Should have inserted a synthetic function_response
@@ -255,9 +253,7 @@ class TestAfterToolCallback:
         cb = make_after_tool_callback(backend_factory=factory)
         tool = self._make_tool("custom_tool")
         large_content = "x" * 100_000
-        tc = self._make_tool_context(
-            state={**state, "_last_tool_result": large_content}
-        )
+        tc = self._make_tool_context(state={**state, "_last_tool_result": large_content})
         result = cb(tool, {}, tc)
         assert result is not None
         assert result["status"] == "result_too_large"

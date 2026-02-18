@@ -74,9 +74,7 @@ async def test_custom_tool_invocation():
     )
 
     response_text = " ".join(texts)
-    assert "50" in response_text, (
-        f"Expected 50 (or 50.0) in response, got: {response_text}"
-    )
+    assert "50" in response_text, f"Expected 50 (or 50.0) in response, got: {response_text}"
 
 
 @pytest.mark.timeout(120)

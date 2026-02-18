@@ -41,9 +41,7 @@ async def test_custom_instruction():
     response_text = " ".join(texts).lower()
     pirate_words = ("arr", "matey", "ye", "aye", "captain", "ship", "sail", "treasure")
     has_pirate = any(word in response_text for word in pirate_words)
-    assert has_pirate, (
-        f"Expected pirate speech in response, got: {response_text}"
-    )
+    assert has_pirate, f"Expected pirate speech in response, got: {response_text}"
 
 
 @pytest.mark.timeout(120)
@@ -64,12 +62,9 @@ async def test_no_instruction_uses_default():
     response_text = " ".join(texts).lower()
     # Agent should know about its tools from the base prompt
     has_tool_ref = any(
-        word in response_text
-        for word in ("tool", "file", "read", "write", "todo", "grep", "glob")
+        word in response_text for word in ("tool", "file", "read", "write", "todo", "grep", "glob")
     )
-    assert has_tool_ref, (
-        f"Expected agent to reference its tools, got: {response_text}"
-    )
+    assert has_tool_ref, f"Expected agent to reference its tools, got: {response_text}"
 
 
 @pytest.mark.timeout(120)
@@ -103,9 +98,6 @@ async def test_agent_with_prepopulated_files():
 
     response_text = " ".join(texts).lower()
     has_bug_ref = any(
-        word in response_text
-        for word in ("zero", "division", "bug", "error", "check", "divide")
+        word in response_text for word in ("zero", "division", "bug", "error", "check", "divide")
     )
-    assert has_bug_ref, (
-        f"Expected agent to find the division bug, got: {response_text}"
-    )
+    assert has_bug_ref, f"Expected agent to find the division bug, got: {response_text}"

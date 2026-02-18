@@ -109,8 +109,6 @@ class TestResumeApproval:
         assert conf.confirmed is False
 
     def test_resume_approval_with_modified_args(self):
-        conf = resume_approval(
-            approved=True, modified_args={"content": "updated"}
-        )
+        conf = resume_approval(approved=True, modified_args={"content": "updated"})
         assert conf.confirmed is True
         assert conf.payload == {"modified_args": {"content": "updated"}}

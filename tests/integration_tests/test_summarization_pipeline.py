@@ -72,9 +72,7 @@ class TestTokenCounting:
             role="model",
             parts=[
                 types.Part(
-                    function_call=types.FunctionCall(
-                        name="read_file", args={"path": "/hello.txt"}
-                    )
+                    function_call=types.FunctionCall(name="read_file", args={"path": "/hello.txt"})
                 )
             ],
         )
@@ -128,13 +126,7 @@ class TestFormatMessagesForSummary:
             _make_text_content("user", "Hello"),
             types.Content(
                 role="model",
-                parts=[
-                    types.Part(
-                        function_call=types.FunctionCall(
-                            name="ls", args={"path": "/"}
-                        )
-                    )
-                ],
+                parts=[types.Part(function_call=types.FunctionCall(name="ls", args={"path": "/"}))],
             ),
             types.Content(
                 role="user",
@@ -166,9 +158,7 @@ class TestCreateSummaryContent:
         assert "conversation_summary" in content.parts[0].text
 
     def test_create_summary_content_with_offload(self):
-        content = create_summary_content(
-            "Summary text.", offload_path="/history/session.md"
-        )
+        content = create_summary_content("Summary text.", offload_path="/history/session.md")
         assert content.role == "user"
         text = content.parts[0].text
         assert "Summary text." in text
@@ -187,7 +177,7 @@ class TestOffloadToBackend:
         path = offload_messages_to_backend(messages, backend)
         assert path == "/conversation_history/session_history.md"
         # Verify file was written to disk
-        written = (tmp_path / "conversation_history" / "session_history.md")
+        written = tmp_path / "conversation_history" / "session_history.md"
         assert written.exists()
         assert "Hello" in written.read_text()
 
@@ -200,7 +190,7 @@ class TestOffloadToBackend:
         offload_messages_to_backend(messages2, backend, chunk_index=1)
 
         # Verify both sections are in the file
-        written = (tmp_path / "conversation_history" / "session_history.md")
+        written = tmp_path / "conversation_history" / "session_history.md"
         content = written.read_text()
         assert "First batch" in content
         assert "Second batch" in content

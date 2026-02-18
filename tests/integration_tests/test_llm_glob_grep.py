@@ -28,8 +28,7 @@ async def test_glob_finds_files():
         model=model,
         name="glob_test_agent",
         instruction=(
-            "You are a test agent. Use the filesystem tools as directed. "
-            "Report results accurately."
+            "You are a test agent. Use the filesystem tools as directed. Report results accurately."
         ),
     )
 
@@ -71,19 +70,12 @@ async def test_grep_searches_content():
 
     initial_files = {
         "/src/auth.py": create_file_data(
-            "def login(user, password):\n"
-            "    # TODO: implement auth\n"
-            "    return True\n"
+            "def login(user, password):\n    # TODO: implement auth\n    return True\n"
         ),
         "/src/api.py": create_file_data(
-            "def get_users():\n"
-            "    # TODO: add pagination\n"
-            "    return []\n"
+            "def get_users():\n    # TODO: add pagination\n    return []\n"
         ),
-        "/src/db.py": create_file_data(
-            "def connect():\n"
-            "    return None\n"
-        ),
+        "/src/db.py": create_file_data("def connect():\n    return None\n"),
     }
 
     texts, _runner, _session = await run_agent(
@@ -111,8 +103,7 @@ async def test_ls_lists_directory():
         model=model,
         name="ls_test_agent",
         instruction=(
-            "You are a test agent. Use filesystem tools as directed. "
-            "List the results clearly."
+            "You are a test agent. Use filesystem tools as directed. List the results clearly."
         ),
     )
 
@@ -124,8 +115,7 @@ async def test_ls_lists_directory():
 
     texts, _runner, _session = await run_agent(
         agent,
-        "Use the ls tool to list all files and directories in /project. "
-        "What do you see?",
+        "Use the ls tool to list all files and directories in /project. What do you see?",
         state={"files": initial_files},
     )
 

@@ -36,8 +36,7 @@ async def test_multiple_subagents_routing():
     translator = SubAgentSpec(
         name="translator",
         description=(
-            "Translates text between languages. Delegate any translation "
-            "request to this agent."
+            "Translates text between languages. Delegate any translation request to this agent."
         ),
         system_prompt=(
             "You are a translator. Translate the given text accurately. "
@@ -65,9 +64,7 @@ async def test_multiple_subagents_routing():
     )
 
     response_text = " ".join(texts)
-    assert "16" in response_text, (
-        f"Expected '16' (256/16) in response, got: {response_text}"
-    )
+    assert "16" in response_text, f"Expected '16' (256/16) in response, got: {response_text}"
 
 
 @pytest.mark.timeout(120)
@@ -87,8 +84,7 @@ async def test_subagent_with_custom_model():
         model=model,
         name="custom_model_test",
         instruction=(
-            "You have an analyst sub-agent. Delegate analysis tasks to it. "
-            "Report the result."
+            "You have an analyst sub-agent. Delegate analysis tasks to it. Report the result."
         ),
         subagents=[analyst],
     )
@@ -100,9 +96,7 @@ async def test_subagent_with_custom_model():
     )
 
     response_text = " ".join(texts)
-    assert "20" in response_text, (
-        f"Expected '20%' growth in response, got: {response_text}"
-    )
+    assert "20" in response_text, f"Expected '20%' growth in response, got: {response_text}"
 
 
 @pytest.mark.timeout(120)

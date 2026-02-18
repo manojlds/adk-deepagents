@@ -60,9 +60,7 @@ async def test_memory_multiple_files():
     response_text = " ".join(texts).lower()
     has_name = "atlas" in response_text
     has_project = "starlight" in response_text
-    assert has_name or has_project, (
-        f"Expected Atlas or Starlight from memory, got: {response_text}"
-    )
+    assert has_name or has_project, f"Expected Atlas or Starlight from memory, got: {response_text}"
 
 
 @pytest.mark.timeout(120)

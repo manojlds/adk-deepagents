@@ -49,14 +49,13 @@ async def test_filesystem_backend_write_and_read(tmp_path):
 
     texts, runner, session = await run_agent(
         agent,
-        'Use write_file to create /hello.txt with content "Written to disk!". '
-        "Confirm when done.",
+        'Use write_file to create /hello.txt with content "Written to disk!". Confirm when done.',
     )
 
     response = " ".join(texts).lower()
-    assert any(
-        w in response for w in ("done", "created", "written", "success")
-    ), f"Expected confirmation, got: {response}"
+    assert any(w in response for w in ("done", "created", "written", "success")), (
+        f"Expected confirmation, got: {response}"
+    )
 
     # Verify the file actually exists on disk
     expected_path = tmp_path / "hello.txt"
@@ -90,8 +89,7 @@ async def test_filesystem_backend_reads_existing_files(tmp_path):
         name="fs_existing_agent",
         backend=backend,
         instruction=(
-            "You are a test agent. Use filesystem tools as directed. "
-            "Report results accurately."
+            "You are a test agent. Use filesystem tools as directed. Report results accurately."
         ),
     )
 
@@ -104,9 +102,7 @@ async def test_filesystem_backend_reads_existing_files(tmp_path):
     response_text = " ".join(texts).lower()
     has_listing = "existing" in response_text or "src" in response_text
     has_content = "before the agent" in response_text
-    assert has_listing or has_content, (
-        f"Expected listing and/or file content, got: {response_text}"
-    )
+    assert has_listing or has_content, f"Expected listing and/or file content, got: {response_text}"
 
 
 @pytest.mark.timeout(120)
@@ -127,8 +123,7 @@ async def test_filesystem_backend_glob_and_grep(tmp_path):
         name="fs_search_agent",
         backend=backend,
         instruction=(
-            "You are a test agent. Use glob and grep tools as directed. "
-            "Report all findings."
+            "You are a test agent. Use glob and grep tools as directed. Report all findings."
         ),
     )
 

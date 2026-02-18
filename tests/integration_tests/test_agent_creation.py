@@ -19,16 +19,18 @@ from adk_deepagents.prompts import BASE_AGENT_PROMPT
 # Helpers
 # ---------------------------------------------------------------------------
 
-CORE_TOOL_NAMES = frozenset({
-    "write_todos",
-    "read_todos",
-    "ls",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "glob",
-    "grep",
-})
+CORE_TOOL_NAMES = frozenset(
+    {
+        "write_todos",
+        "read_todos",
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+    }
+)
 
 
 def _tool_names(agent: LlmAgent) -> set[str]:

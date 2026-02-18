@@ -63,9 +63,7 @@ async def test_multi_turn_file_operations():
     assert "app" in ls_response, f"Expected app.py in listing, got: {ls_response}"
 
     # Turn 4: Read a file the agent created earlier
-    read_texts = await send_followup(
-        runner, session, "Read /app.py and show me the content."
-    )
+    read_texts = await send_followup(runner, session, "Read /app.py and show me the content.")
     read_response = " ".join(read_texts)
     assert "greet" in read_response, (
         f"Expected greet function in file content, got: {read_response}"
@@ -141,9 +139,7 @@ async def test_conversation_context_preserved():
     )
 
     # Turn 2: Ask about something unrelated
-    await send_followup(
-        runner, session, "What is 2 + 2?"
-    )
+    await send_followup(runner, session, "What is 2 + 2?")
 
     # Turn 3: Ask about the earlier context
     recall_texts = await send_followup(

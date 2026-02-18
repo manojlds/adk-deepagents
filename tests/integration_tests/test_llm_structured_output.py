@@ -102,6 +102,4 @@ async def test_structured_output_math():
         assert float(data["result"]) == 60.0, f"Expected 60, got: {data['result']}"
     except json.JSONDecodeError:
         # Fallback: check the answer appears in text
-        assert "60" in response_text, (
-            f"Expected 60 in response, got: {response_text}"
-        )
+        assert "60" in response_text, f"Expected 60 in response, got: {response_text}"
