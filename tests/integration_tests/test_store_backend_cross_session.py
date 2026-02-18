@@ -7,10 +7,7 @@ No API key or LLM required.
 
 from __future__ import annotations
 
-import pytest
-
 from adk_deepagents.backends.store import StoreBackend
-
 
 # ---------------------------------------------------------------------------
 # Tests

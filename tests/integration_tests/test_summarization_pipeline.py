@@ -17,7 +17,6 @@ from adk_deepagents.backends.filesystem import FilesystemBackend
 from adk_deepagents.summarization import (
     NUM_CHARS_PER_TOKEN,
     count_content_tokens,
-    count_messages_tokens,
     count_tokens_approximate,
     create_summary_content,
     format_messages_for_summary,
@@ -27,7 +26,6 @@ from adk_deepagents.summarization import (
     truncate_tool_args,
 )
 from adk_deepagents.types import TruncateArgsConfig
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -8,14 +8,12 @@ No API key required.
 
 from __future__ import annotations
 
-import pytest
 from google.adk.agents import LlmAgent
 from google.adk.tools import AgentTool
 
 from adk_deepagents import SubAgentSpec, SummarizationConfig, create_deep_agent
 from adk_deepagents.backends import FilesystemBackend, StateBackend
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
-
 
 # ---------------------------------------------------------------------------
 # Helpers

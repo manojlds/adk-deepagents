@@ -9,8 +9,6 @@ Run with: uv run pytest -m integration
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from adk_deepagents import create_deep_agent

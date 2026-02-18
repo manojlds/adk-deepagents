@@ -7,14 +7,12 @@ No API key or LLM required.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from adk_deepagents.backends.filesystem import FilesystemBackend
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

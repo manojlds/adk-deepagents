@@ -14,7 +14,6 @@ from google.genai import types
 
 from adk_deepagents.graph import _compose_callbacks
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

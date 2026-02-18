@@ -13,7 +13,6 @@ from google.adk.tools.tool_confirmation import ToolConfirmation
 
 from adk_deepagents.callbacks.before_tool import make_before_tool_callback, resume_approval
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

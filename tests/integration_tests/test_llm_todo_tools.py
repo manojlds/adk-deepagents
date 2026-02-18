@@ -90,7 +90,7 @@ async def test_todo_update_status():
     )
 
     # Step 2: Update the first item to completed
-    update_texts = await send_followup(
+    await send_followup(
         runner,
         session,
         "Update the todo list: mark 'Setup database' as completed, "

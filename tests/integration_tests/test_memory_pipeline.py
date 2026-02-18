@@ -17,8 +17,6 @@ from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.callbacks.before_agent import make_before_agent_callback
 from adk_deepagents.callbacks.before_model import make_before_model_callback
 from adk_deepagents.memory import format_memory, load_memory
-from adk_deepagents.prompts import MEMORY_SYSTEM_PROMPT
-
 
 # ---------------------------------------------------------------------------
 # Helpers
