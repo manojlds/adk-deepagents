@@ -14,6 +14,8 @@ import pytest
 from adk_deepagents.backends.state import StateBackend
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

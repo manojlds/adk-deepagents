@@ -23,7 +23,7 @@ def pytest_collection_modifyitems(config, items):
         reason="No API key set (OPENCODE_API_KEY or OPENAI_API_KEY) — skipping integration tests"
     )
     for item in items:
-        if "integration" in item.keywords:
+        if "llm" in item.keywords:
             item.add_marker(skip_marker)
 
 

@@ -18,7 +18,7 @@ from tests.integration_tests.conftest import (
     send_followup,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 
 @pytest.mark.timeout(120)

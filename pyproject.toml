@@ -37,7 +37,8 @@ packages = ["adk_deepagents"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
-    "integration: end-to-end tests requiring OPENAI_API_KEY (deselect with '-m \"not integration\"')",
+    "integration: integration tests that test multiple components together",
+    "llm: tests requiring a live LLM API key (deselect with '-m \"not llm\"')",
 ]
 
 [tool.ruff]

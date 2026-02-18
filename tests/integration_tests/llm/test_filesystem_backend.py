@@ -17,7 +17,7 @@ from adk_deepagents import create_deep_agent
 from adk_deepagents.backends import FilesystemBackend
 from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 
 def _fs_backend_factory(tmp_path: Path):

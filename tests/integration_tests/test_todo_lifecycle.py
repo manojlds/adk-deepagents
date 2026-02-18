@@ -13,6 +13,8 @@ import pytest
 
 from adk_deepagents.tools.todos import read_todos, write_todos
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

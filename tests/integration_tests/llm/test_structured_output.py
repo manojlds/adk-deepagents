@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from adk_deepagents import create_deep_agent
 from tests.integration_tests.conftest import make_litellm_model, run_agent
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 
 class SentimentResult(BaseModel):

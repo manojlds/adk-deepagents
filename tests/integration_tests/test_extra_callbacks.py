@@ -8,11 +8,14 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest
 from google.genai import types
 
 from adk_deepagents.graph import _compose_callbacks
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers
