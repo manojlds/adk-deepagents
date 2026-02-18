@@ -5,6 +5,7 @@ from tests.integration_tests.conftest import (
     get_file_content,
     make_litellm_model,
     run_agent,
+    run_agent_with_events,
     send_followup,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "get_file_content",
     "make_litellm_model",
     "run_agent",
+    "run_agent_with_events",
     "send_followup",
 ]
