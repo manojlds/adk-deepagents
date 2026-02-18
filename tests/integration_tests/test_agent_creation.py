@@ -8,6 +8,8 @@ No API key required.
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from google.adk.agents import LlmAgent
 from google.adk.tools import AgentTool
@@ -138,6 +140,30 @@ class TestSubagentsCreatesAgentTools:
         assert len(at) >= 2  # researcher + general_purpose
         names = _agent_tool_names(agent)
         assert "researcher" in names
+
+
+class TestDelegationModes:
+    def test_dynamic_mode_adds_task_without_static_agent_tools(self):
+        agent = create_deep_agent(
+            subagents=[SubAgentSpec(name="researcher", description="Research agent")],
+            delegation_mode="dynamic",
+        )
+        names = _tool_names(agent)
+        assert "task" in names
+        assert len(_agent_tools(agent)) == 0
+
+    def test_both_mode_adds_task_and_static_agent_tools(self):
+        agent = create_deep_agent(
+            subagents=[SubAgentSpec(name="researcher", description="Research agent")],
+            delegation_mode="both",
+        )
+        names = _tool_names(agent)
+        assert "task" in names
+        assert "researcher" in _agent_tool_names(agent)
+
+    def test_invalid_delegation_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid delegation_mode"):
+            create_deep_agent(delegation_mode=cast(Any, "invalid"))
 
 
 class TestSubagentsGeneralPurposeIncluded:

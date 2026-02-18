@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -68,6 +69,36 @@ class TestCreateDeepAgent:
         agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
         # Should have general_purpose + researcher
         assert len(agent_tools) >= 2
+
+    def test_delegation_mode_dynamic_adds_task_tool(self):
+        agent = create_deep_agent(
+            delegation_mode="dynamic",
+            subagents=[{"name": "researcher", "description": "Research agent"}],
+        )
+        tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "task" in tool_names
+
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        assert len(agent_tools) == 0
+
+    def test_delegation_mode_both_includes_static_and_dynamic(self):
+        agent = create_deep_agent(
+            delegation_mode="both",
+            subagents=[{"name": "researcher", "description": "Research agent"}],
+        )
+        tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "task" in tool_names
+
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        assert len(agent_tools) >= 2
+
+    def test_invalid_delegation_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid delegation_mode"):
+            create_deep_agent(delegation_mode=cast(Any, "nope"))
 
     def test_local_execution(self):
         agent = create_deep_agent(execution="local")

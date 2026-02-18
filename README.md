@@ -123,6 +123,8 @@ agent = create_deep_agent(
     backend=None,                    # Backend instance or factory
     execution=None,                  # "local", "heimdall", or MCP config dict
     summarization=None,              # SummarizationConfig
+    delegation_mode="static",       # "static", "dynamic", or "both"
+    dynamic_task_config=None,        # DynamicTaskConfig for task tool behavior
     interrupt_on=None,               # Tool names requiring approval
     name="deep_agent",              # Agent name
 )
@@ -252,6 +254,37 @@ agent = create_deep_agent(
 )
 ```
 
+By default (`delegation_mode="static"`), each sub-agent is exposed as its own tool
+(`researcher`, `writer`, etc.) and the parent delegates by calling those tools.
+
+### Dynamic Task Delegation
+
+Use `delegation_mode="dynamic"` to expose a single `task` tool that routes work
+to sub-agents at runtime (LangChain deepagents-style). The tool supports `task_id`
+to continue the same delegated sub-session across turns.
+
+`DynamicTaskConfig` also lets you enforce runtime guardrails like `max_depth`
+(recursive delegation depth) and `max_parallel` (simultaneous running tasks).
+
+```python
+from adk_deepagents import DynamicTaskConfig, SubAgentSpec, create_deep_agent
+
+agent = create_deep_agent(
+    subagents=[
+        SubAgentSpec(name="explore", description="Searches files and code patterns."),
+        SubAgentSpec(name="coder", description="Writes and edits files."),
+    ],
+    delegation_mode="dynamic",
+    dynamic_task_config=DynamicTaskConfig(
+        timeout_seconds=90,
+        allow_model_override=False,
+    ),
+)
+```
+
+Use `delegation_mode="both"` to keep static sub-agent tools and add the dynamic
+`task` tool side by side.
+
 ### Summarization
 
 Automatic context window management. When the conversation exceeds a configurable fraction of the context window, older messages are replaced with a condensed summary.
@@ -332,7 +365,9 @@ Every agent created with `create_deep_agent()` includes these tools:
 
 With `execution="local"` or `execution="heimdall"`, an `execute` tool is also available for shell commands.
 
-With `subagents=[...]`, task delegation tools are generated for each sub-agent specification.
+With `subagents=[...]` and `delegation_mode="static"` (default), one tool is generated per sub-agent specification.
+
+With `delegation_mode="dynamic"` or `"both"`, a single `task` tool is added for runtime delegation.
 
 ## Project Structure
 

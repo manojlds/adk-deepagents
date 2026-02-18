@@ -26,6 +26,23 @@ SubAgentSpec.__required_keys__ = frozenset({"name", "description"})
 
 
 @dataclass
+class DynamicTaskConfig:
+    """Configuration for dynamic task-based sub-agent delegation."""
+
+    max_parallel: int = 4
+    """Maximum number of concurrent dynamic tasks per parent session."""
+
+    max_depth: int = 2
+    """Maximum delegation depth for dynamically spawned sub-agents."""
+
+    timeout_seconds: float = 120.0
+    """Per-task timeout when running a dynamic sub-agent."""
+
+    allow_model_override: bool = False
+    """Allow callers to override the sub-agent model per task invocation."""
+
+
+@dataclass
 class TruncateArgsConfig:
     """Settings for truncating large tool arguments in older messages.
 

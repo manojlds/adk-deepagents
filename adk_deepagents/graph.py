@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from google.adk.agents import LlmAgent
 
@@ -24,8 +24,9 @@ from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file
 from adk_deepagents.tools.task import (
     build_subagent_tools,
 )
+from adk_deepagents.tools.task_dynamic import create_dynamic_task_tool
 from adk_deepagents.tools.todos import read_todos, write_todos
-from adk_deepagents.types import SkillsConfig, SubAgentSpec, SummarizationConfig
+from adk_deepagents.types import DynamicTaskConfig, SkillsConfig, SubAgentSpec, SummarizationConfig
 
 # ---------------------------------------------------------------------------
 # Default backend factory
@@ -82,6 +83,8 @@ def create_deep_agent(
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
+    delegation_mode: Literal["static", "dynamic", "both"] = "static",
+    dynamic_task_config: DynamicTaskConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
     extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
@@ -120,6 +123,13 @@ def create_deep_agent(
         or pre-resolve MCP tools via ``tools``.
     summarization:
         Optional ``SummarizationConfig`` for context window management.
+    delegation_mode:
+        Sub-agent delegation style. ``"static"`` uses one ``AgentTool`` per
+        configured sub-agent (default behavior). ``"dynamic"`` exposes a single
+        ``task`` tool with runtime sub-agent/session routing. ``"both"`` exposes
+        both interfaces.
+    dynamic_task_config:
+        Optional configuration for the dynamic ``task`` delegation tool.
     interrupt_on:
         Tool names that require human approval before execution.
     extra_callbacks:
@@ -202,7 +212,13 @@ def create_deep_agent(
     # 5. Build sub-agent tools
     subagent_descriptions: list[dict[str, str]] = []
     subagent_tools = []
-    if subagents is not None:
+    if delegation_mode not in {"static", "dynamic", "both"}:
+        raise ValueError(
+            f"Invalid delegation_mode={delegation_mode!r}. "
+            "Expected one of: 'static', 'dynamic', 'both'."
+        )
+
+    if subagents is not None and delegation_mode in {"static", "both"}:
         subagent_tools = build_subagent_tools(
             subagents,
             default_model=model,
@@ -210,6 +226,19 @@ def create_deep_agent(
             include_general_purpose=True,
             skills_config=skills_config,
         )
+
+    if delegation_mode in {"dynamic", "both"}:
+        core_tools.append(
+            create_dynamic_task_tool(
+                default_model=model,
+                default_tools=list(core_tools),
+                subagents=subagents,
+                skills_config=skills_config,
+                config=dynamic_task_config,
+            )
+        )
+
+    if subagents is not None:
         subagent_descriptions = []
         for s in subagents:
             if isinstance(s, LlmAgent):
@@ -308,6 +337,8 @@ async def create_deep_agent_async(
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     summarization: SummarizationConfig | None = None,
+    delegation_mode: Literal["static", "dynamic", "both"] = "static",
+    dynamic_task_config: DynamicTaskConfig | None = None,
     interrupt_on: dict[str, bool] | None = None,
     extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
@@ -361,6 +392,8 @@ async def create_deep_agent_async(
         backend=backend,
         execution=effective_execution,
         summarization=summarization,
+        delegation_mode=delegation_mode,
+        dynamic_task_config=dynamic_task_config,
         interrupt_on=interrupt_on,
         extra_callbacks=extra_callbacks,
         name=name,
