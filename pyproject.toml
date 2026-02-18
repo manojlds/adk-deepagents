@@ -36,6 +36,7 @@ packages = ["adk_deepagents"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not llm'"
 markers = [
     "integration: integration tests that test multiple components together",
     "llm: tests requiring a live LLM API key (deselect with '-m \"not llm\"')",

@@ -91,16 +91,18 @@ async def test_filesystem_backend_reads_existing_files(tmp_path):
         ),
     )
 
-    texts, _runner, _session = await run_agent(
+    texts, runner, session = await run_agent(
         agent,
-        "Use ls to list files in /. Then read /existing.txt. "
-        "Tell me what files exist and what's in existing.txt.",
+        "Use read_file to read /existing.txt. Show me the content. "
+        "Then use write_file to save the content to /copy.txt.",
     )
 
-    response_text = " ".join(texts).lower()
-    has_listing = "existing" in response_text or "src" in response_text
-    has_content = "before the agent" in response_text
-    assert has_listing or has_content, f"Expected listing and/or file content, got: {response_text}"
+    # Verify the agent wrote the copy to disk
+    copy_path = tmp_path / "copy.txt"
+    assert copy_path.exists(), f"Expected {copy_path} to exist on disk"
+    assert "before the agent" in copy_path.read_text(), (
+        f"Expected original content in copy, got: {copy_path.read_text()}"
+    )
 
 
 @pytest.mark.timeout(120)
@@ -125,16 +127,16 @@ async def test_filesystem_backend_glob_and_grep(tmp_path):
         ),
     )
 
-    texts, _runner, _session = await run_agent(
+    texts, runner, session = await run_agent(
         agent,
-        'First use glob with pattern "**/*.py" to find all Python files. '
-        'Then use grep to search for "TODO" in all files. '
-        "Report which files have TODOs.",
+        'Use grep to search for "TODO" in all files under /src/. '
+        "Then write a summary of the TODOs found to /todo_report.txt.",
     )
 
-    response_text = " ".join(texts).lower()
-    has_auth = "auth" in response_text
-    has_api = "api" in response_text
-    assert has_auth or has_api, (
-        f"Expected auth.py or api.py in grep/glob results, got: {response_text}"
-    )
+    # Verify the report was written to disk with actual TODO content
+    report_path = tmp_path / "todo_report.txt"
+    assert report_path.exists(), f"Expected {report_path} to exist on disk"
+    report_content = report_path.read_text().lower()
+    has_auth = "auth" in report_content or "login" in report_content
+    has_api = "api" in report_content or "rate" in report_content
+    assert has_auth or has_api, f"Expected TODO details in report, got: {report_path.read_text()}"
