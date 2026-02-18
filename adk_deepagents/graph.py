@@ -70,7 +70,7 @@ def _compose_callbacks(
 
 
 def create_deep_agent(
-    model: str = "gemini-2.5-flash",
+    model: str | Any = "gemini-2.5-flash",
     tools: Sequence[Callable] | None = None,
     *,
     instruction: str | None = None,
@@ -296,7 +296,7 @@ def create_deep_agent(
 
 
 async def create_deep_agent_async(
-    model: str = "gemini-2.5-flash",
+    model: str | Any = "gemini-2.5-flash",
     tools: Sequence[Callable] | None = None,
     *,
     instruction: str | None = None,
