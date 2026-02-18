@@ -3,7 +3,6 @@
 Scenario: Agent creates a file via write_file, reads it back via read_file,
 edits it via edit_file, then verifies the final content.
 
-Requires OPENCODE_API_KEY environment variable to be set.
 Run with: uv run pytest -m integration
 """
 
@@ -13,7 +12,7 @@ import pytest
 
 from adk_deepagents import create_deep_agent
 
-from .conftest import make_litellm_model, run_agent, send_followup
+from .conftest import get_file_content, make_litellm_model, run_agent, send_followup
 
 pytestmark = pytest.mark.integration
 
@@ -40,37 +39,23 @@ async def test_filesystem_roundtrip():
         "Confirm when done.",
     )
 
-    response_text = " ".join(texts).lower()
-    assert any(
-        word in response_text for word in ("done", "created", "written", "success", "file")
-    ), f"Expected confirmation of file creation, got: {response_text}"
-
-    # Step 2: Read it back (same session)
-    read_texts = await send_followup(
-        runner, session, "Now use read_file to read /test.txt. Show me the content."
-    )
-    read_response = " ".join(read_texts)
-    assert "Hello World" in read_response, (
-        f"Expected file content in response, got: {read_response}"
+    # Verify file was actually created in backend
+    files = await get_file_content(runner, session)
+    assert "/test.txt" in files, f"Expected /test.txt in backend, got: {list(files.keys())}"
+    assert files["/test.txt"] == "Hello World", (
+        f"Expected 'Hello World' in file, got: {files['/test.txt']}"
     )
 
-    # Step 3: Edit the file
-    edit_texts = await send_followup(
+    # Step 2: Edit the file (same session)
+    await send_followup(
         runner,
         session,
         'Use edit_file to replace "Hello World" with "Hello Universe" '
         "in /test.txt. Confirm when done.",
     )
-    edit_response = " ".join(edit_texts).lower()
-    assert any(
-        word in edit_response for word in ("done", "edited", "replaced", "success", "updated")
-    ), f"Expected confirmation of edit, got: {edit_response}"
 
-    # Step 4: Read again to verify the edit
-    verify_texts = await send_followup(
-        runner, session, "Read /test.txt again and show me the current content."
-    )
-    verify_response = " ".join(verify_texts)
-    assert "Hello Universe" in verify_response, (
-        f"Expected edited content in response, got: {verify_response}"
+    # Verify the edit in the backend
+    files = await get_file_content(runner, session)
+    assert files["/test.txt"] == "Hello Universe", (
+        f"Expected 'Hello Universe' after edit, got: {files['/test.txt']}"
     )

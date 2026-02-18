@@ -96,6 +96,23 @@ async def run_agent(agent, prompt: str, *, state: dict[str, Any] | None = None):
     return texts, runner, session
 
 
+async def get_file_content(runner, session) -> dict[str, str]:
+    """Return a dict of {path: content_str} from the session's file state."""
+    updated = await runner.session_service.get_session(
+        app_name="integration_test",
+        user_id="test_user",
+        session_id=session.id,
+    )
+    files = updated.state.get("files", {})
+    result: dict[str, str] = {}
+    for path, file_data in files.items():
+        if isinstance(file_data, dict) and "content" in file_data:
+            result[path] = "\n".join(file_data["content"])
+        elif isinstance(file_data, str):
+            result[path] = file_data
+    return result
+
+
 async def send_followup(runner, session, prompt: str) -> list[str]:
     """Send a follow-up message on an existing session and return text responses."""
     from google.genai import types
