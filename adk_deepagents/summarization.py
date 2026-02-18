@@ -276,9 +276,16 @@ def generate_llm_summary(
     model: str = "gemini-2.5-flash",
     max_input_tokens: int = 4000,
 ) -> str | None:
-    """Generate a summary of messages using an LLM call.
+    """Generate a summary of messages using an LLM call via LiteLLM.
 
-    Calls the configured model with the structured summary prompt.
+    All LLM calls go through ``litellm.completion()`` so any model
+    supported by LiteLLM works (including OpenAI-compatible endpoints
+    configured via env vars).
+
+    The *model* can differ from the main agent model, allowing a cheaper
+    or faster model to be used for summarization (configured via
+    ``SummarizationConfig.model``).
+
     Returns ``None`` on error (caller should fall back to inline summary).
 
     Parameters
@@ -286,12 +293,13 @@ def generate_llm_summary(
     messages:
         Messages to summarize.
     model:
-        Model name to use for the summarization call.
+        LiteLLM model string (e.g. ``"openai/glm-5-free"``,
+        ``"gemini/gemini-2.5-flash"``).
     max_input_tokens:
         Maximum tokens of conversation text to include in the prompt.
     """
     try:
-        from google import genai
+        import litellm
 
         formatted = format_messages_for_summary(messages)
 
@@ -303,13 +311,13 @@ def generate_llm_summary(
 
         prompt = LLM_SUMMARY_PROMPT.format(messages=formatted)
 
-        client = genai.Client()
-        response = client.models.generate_content(
+        response = litellm.completion(
             model=model,
-            contents=prompt,
+            messages=[{"role": "user", "content": prompt}],
         )
-        if response.text:
-            return response.text.strip()
+        text = response.choices[0].message.content
+        if text:
+            return text.strip()
         return None
     except Exception:
         logger.exception("LLM summary generation failed, falling back to inline")

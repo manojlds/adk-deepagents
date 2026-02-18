@@ -74,6 +74,7 @@ def make_after_tool_callback(
         tool: BaseTool,
         args: dict[str, Any],
         tool_context: ToolContext,
+        **kwargs: Any,
     ) -> dict | None:
         # Skip eviction for excluded tools (they handle truncation inline)
         tool_name = getattr(tool, "name", "")

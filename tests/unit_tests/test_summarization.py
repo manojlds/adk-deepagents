@@ -259,13 +259,12 @@ def test_generate_llm_summary_success():
     messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
 
     mock_response = MagicMock()
-    mock_response.text = "## SESSION INTENT\nGreeting exchange."
+    mock_response.choices = [
+        MagicMock(message=MagicMock(content="## SESSION INTENT\nGreeting exchange."))
+    ]
 
-    mock_client = MagicMock()
-    mock_client.models.generate_content.return_value = mock_response
-
-    with patch("google.genai.Client", return_value=mock_client):
-        result = generate_llm_summary(messages, model="gemini-2.5-flash")
+    with patch("litellm.completion", return_value=mock_response):
+        result = generate_llm_summary(messages, model="openai/test-model")
 
     assert result is not None
     assert "SESSION INTENT" in result
@@ -275,8 +274,8 @@ def test_generate_llm_summary_failure_returns_none():
     """LLM summary returns None when API call fails."""
     messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
 
-    with patch("google.genai.Client", side_effect=Exception("API error")):
-        result = generate_llm_summary(messages)
+    with patch("litellm.completion", side_effect=Exception("API error")):
+        result = generate_llm_summary(messages, model="openai/test-model")
 
     assert result is None
 
@@ -342,12 +341,9 @@ def test_maybe_summarize_triggers_with_llm():
     req = _make_mock_request(messages)
 
     mock_response = MagicMock()
-    mock_response.text = "## SESSION INTENT\nTest task."
+    mock_response.choices = [MagicMock(message=MagicMock(content="## SESSION INTENT\nTest task."))]
 
-    mock_client = MagicMock()
-    mock_client.models.generate_content.return_value = mock_response
-
-    with patch("google.genai.Client", return_value=mock_client):
+    with patch("litellm.completion", return_value=mock_response):
         result = maybe_summarize(
             ctx,
             req,
@@ -355,6 +351,7 @@ def test_maybe_summarize_triggers_with_llm():
             trigger_fraction=0.5,
             keep_messages=2,
             use_llm_summary=True,
+            summary_model="openai/test-model",
         )
 
     assert result is True

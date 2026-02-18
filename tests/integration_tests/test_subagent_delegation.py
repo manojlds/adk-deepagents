@@ -9,85 +9,20 @@ Run with: uv run pytest -m integration
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
 import pytest
 
 from adk_deepagents import create_deep_agent
-from adk_deepagents.backends.state import StateBackend
 from adk_deepagents.types import SubAgentSpec
 
+from .conftest import make_litellm_model, run_agent
+
 pytestmark = pytest.mark.integration
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-OPENCODE_API_KEY = os.environ.get("OPENCODE_API_KEY", "")
-OPENCODE_API_BASE = "https://opencode.ai/zen/v1/chat/completions"
-
-
-def _make_litellm_model():
-    """Create a LiteLlm model pointing at the OpenCode Zen endpoint."""
-    from google.adk.models.lite_llm import LiteLlm
-
-    return LiteLlm(
-        model="openai/gpt-4o-mini",
-        api_key=OPENCODE_API_KEY,
-        api_base=OPENCODE_API_BASE,
-    )
-
-
-def _backend_factory(state: dict[str, Any]) -> StateBackend:
-    return StateBackend(state)
-
-
-async def _run_agent(agent, prompt: str, *, state: dict[str, Any] | None = None):
-    """Run *agent* with a single user prompt and return all text responses."""
-    from google.adk.runners import InMemoryRunner
-    from google.genai import types
-
-    runner = InMemoryRunner(agent=agent, app_name="integration_test")
-
-    initial_state: dict[str, Any] = {
-        "files": {},
-        "_backend_factory": _backend_factory,
-    }
-    if state:
-        initial_state.update(state)
-
-    session = await runner.session_service.create_session(
-        app_name="integration_test",
-        user_id="test_user",
-        state=initial_state,
-    )
-
-    content = types.Content(role="user", parts=[types.Part(text=prompt)])
-    texts: list[str] = []
-
-    async for event in runner.run_async(
-        session_id=session.id,
-        user_id="test_user",
-        new_message=content,
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    texts.append(part.text)
-
-    return texts, runner, session
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.timeout(120)
 async def test_subagent_delegation():
     """Main agent delegates a task to a named sub-agent and gets a result."""
-    model = _make_litellm_model()
+    model = make_litellm_model()
 
     math_subagent: SubAgentSpec = SubAgentSpec(
         name="math_expert",
@@ -106,7 +41,7 @@ async def test_subagent_delegation():
         subagents=[math_subagent],
     )
 
-    texts, _runner, _session = await _run_agent(
+    texts, _runner, _session = await run_agent(
         agent,
         "Please delegate this math question to the math_expert sub-agent: "
         "What is 15 multiplied by 7? Report the answer back to me.",
