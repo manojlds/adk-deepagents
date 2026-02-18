@@ -139,6 +139,4 @@ async def test_filesystem_backend_glob_and_grep(tmp_path):
     report_content = report_path.read_text().lower()
     has_auth = "auth" in report_content or "login" in report_content
     has_api = "api" in report_content or "rate" in report_content
-    assert has_auth or has_api, (
-        f"Expected TODO details in report, got: {report_path.read_text()}"
-    )
+    assert has_auth or has_api, f"Expected TODO details in report, got: {report_path.read_text()}"
