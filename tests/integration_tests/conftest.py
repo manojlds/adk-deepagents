@@ -85,6 +85,56 @@ async def run_agent(agent, prompt: str, *, state: dict[str, Any] | None = None):
     return texts, runner, session
 
 
+async def run_agent_with_events(
+    agent,
+    prompt: str,
+    *,
+    state: dict[str, Any] | None = None,
+) -> tuple[list[str], list[str], list[str], Any, Any]:
+    """Run *agent* and return text output plus tool call/response names.
+
+    Returns ``(texts, function_calls, function_responses, runner, session)``.
+    """
+    from google.adk.runners import InMemoryRunner
+    from google.genai import types
+
+    runner = InMemoryRunner(agent=agent, app_name="integration_test")
+
+    initial_state: dict[str, Any] = {
+        "files": {},
+        "_backend_factory": backend_factory,
+    }
+    if state:
+        initial_state.update(state)
+
+    session = await runner.session_service.create_session(
+        app_name="integration_test",
+        user_id="test_user",
+        state=initial_state,
+    )
+
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
+    texts: list[str] = []
+    function_calls: list[str] = []
+    function_responses: list[str] = []
+
+    async for event in runner.run_async(
+        session_id=session.id,
+        user_id="test_user",
+        new_message=content,
+    ):
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if hasattr(part, "text") and part.text:
+                    texts.append(part.text)
+                if hasattr(part, "function_call") and part.function_call:
+                    function_calls.append(part.function_call.name)
+                if hasattr(part, "function_response") and part.function_response:
+                    function_responses.append(part.function_response.name)
+
+    return texts, function_calls, function_responses, runner, session
+
+
 async def get_file_content(runner, session) -> dict[str, str]:
     """Return a dict of {path: content_str} from the session's file state."""
     updated = await runner.session_service.get_session(
