@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,18 +39,6 @@ class _TaskRuntime:
     session_id: str
     user_id: str
     subagent_type: str
-
-
-def _run_coro_sync(coro: Any) -> Any:
-    """Run a coroutine from sync code in both loop/no-loop contexts."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
-        return future.result()
 
 
 def _normalize_subagent_type(subagent_type: str) -> str:
@@ -174,7 +161,7 @@ def create_dynamic_task_tool(
     task_config = config or DynamicTaskConfig()
     registry = _build_dynamic_registry(subagents)
 
-    def task(
+    async def task(
         description: str,
         prompt: str,
         subagent_type: str = "general",
@@ -268,17 +255,15 @@ def create_dynamic_task_tool(
                     return {"status": "error", "error": str(exc), "task_id": task_id}
 
             runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
-            session = _run_coro_sync(
-                runner.session_service.create_session(
-                    app_name="dynamic_task",
-                    user_id="dynamic_task_user",
-                    state={
-                        "files": tool_context.state.get("files", {}),
-                        "todos": tool_context.state.get("todos", []),
-                        "_backend_factory": tool_context.state.get("_backend_factory"),
-                        _TASK_DEPTH_KEY: current_depth + 1,
-                    },
-                )
+            session = await runner.session_service.create_session(
+                app_name="dynamic_task",
+                user_id="dynamic_task_user",
+                state={
+                    "files": tool_context.state.get("files", {}),
+                    "todos": tool_context.state.get("todos", []),
+                    "_backend_factory": tool_context.state.get("_backend_factory"),
+                    _TASK_DEPTH_KEY: current_depth + 1,
+                },
             )
             runtime = _TaskRuntime(
                 runner=runner,
@@ -309,12 +294,10 @@ def create_dynamic_task_tool(
         running_tasks.append(run_key)
 
         try:
-            result = _run_coro_sync(
-                _run_dynamic_task(
-                    runtime,
-                    prompt=resolved_prompt,
-                    timeout_seconds=task_config.timeout_seconds,
-                )
+            result = await _run_dynamic_task(
+                runtime,
+                prompt=resolved_prompt,
+                timeout_seconds=task_config.timeout_seconds,
             )
         finally:
             if run_key in running_tasks:

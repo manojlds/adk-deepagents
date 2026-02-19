@@ -1,48 +1,33 @@
 # Deep Research Agent
 
-A multi-model deep research agent that uses parallel sub-agent delegation to
-conduct thorough web research, synthesize findings, and produce structured
-reports with proper citations.
-
-Port of langchain deepagents
-[`examples/deep_research/`](https://github.com/langchain-ai/deepagents/tree/main/examples/deep_research).
+A deep-research ADK app built on `adk_deepagents` with dynamic task delegation,
+search-provider routing, and report quality grading.
 
 ## Features
 
-- **Multi-model support** — Gemini (default), OpenAI, Anthropic, Groq, or any
-  ADK-compatible model
-- **Parallel sub-agent delegation** — Research tasks are delegated to
-  specialized sub-agents that run independently
-- **Web search with full page content** — Uses Tavily (preferred) or
-  DuckDuckGo fallback, fetches full page content for deep analysis
-- **Strategic thinking tool** — Mandatory reflection after each search to
-  assess findings and plan next steps
-- **Todo-based planning** — Orchestrator creates and tracks research tasks
-- **Citation consolidation** — Unique URLs get one citation number across all
-  sub-agent findings
-- **Conversation summarization** — Manages long sessions by summarizing older
-  context
+- **Dynamic delegation** — Uses the dynamic `task` tool with specialist roles:
+  `planner`, `researcher`, `reporter`, `grader`
+- **ADK-native app** — Works with `adk run`, `adk web`, and `adk api_server`
+- **Provider-routed web search** — `auto` mode prioritizes `serper` first
+- **Hard-fail search semantics** — If selected provider fails, search returns
+  an explicit error (no silent provider fallback)
+- **Citation-oriented workflow** — Encourages inline citations and source list
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
 │           Orchestrator (deep_research)           │
-│  - Plans research via write_todos                │
-│  - Delegates to research sub-agents              │
-│  - Consolidates citations                        │
-│  - Writes final report to /final_report.md       │
+│  - Plans via write_todos + planner task          │
+│  - Delegates research with dynamic task tool      │
+│  - Drafts report via reporter, grades via grader  │
+│  - Writes final report to /final_report.md        │
 └────────┬────────────┬────────────┬──────────────┘
          │            │            │
-    ┌────▼────┐  ┌────▼────┐  ┌───▼─────┐
-    │Research │  │Research │  │Research │  (up to 3 parallel)
-    │Agent 1  │  │Agent 2  │  │Agent 3  │
-    │         │  │         │  │         │
-    │ search  │  │ search  │  │ search  │
-    │ think   │  │ think   │  │ think   │
-    │ search  │  │ search  │  │ search  │
-    │ think   │  │ think   │  │ think   │
-    └─────────┘  └─────────┘  └─────────┘
+ ┌───────▼──────┐ ┌────▼─────┐ ┌────▼─────┐ ┌────▼─────┐
+ │ planner task │ │ research │ │ reporter │ │  grader  │
+ │              │ │  tasks   │ │   task   │ │   task   │
+ └──────────────┘ └──────────┘ └──────────┘ └──────────┘
 ```
 
 ## Quick Start
@@ -56,102 +41,74 @@ uv sync
 ### 2. Set API keys
 
 ```bash
-# For Gemini (default)
-export GOOGLE_API_KEY=your-key
+# Model setup (same convention as integration tests)
+export LITELLM_MODEL=openai/gpt-4o-mini
+export OPENAI_API_KEY=your-key
 
-# Optional: For better web search results
-export TAVILY_API_KEY=your-key
+# Search provider setup (Serper first)
+export SERPER_API_KEY=your-serper-key
+
+# Optional provider keys (used only if selected/available)
+export TAVILY_API_KEY=your-tavily-key
+export BRAVE_SEARCH_API_KEY=your-brave-key
+
+# Optional provider selector (default: auto)
+export DEEP_RESEARCH_SEARCH_PROVIDER=auto
 ```
 
 ### 3. Run
 
 ```bash
-# Default (Gemini 2.5 Flash)
+# Interactive runner
 python -m examples.deep_research.agent
 
-# Or with ADK CLI
+# ADK CLI runtime
 adk run examples/deep_research/
+
+# ADK Dev UI
+adk web
+
+# ADK FastAPI server
+adk api_server
 ```
 
-## Multi-Model Support
+## Search Provider Configuration
 
-ADK supports any model through its LLM registry. Non-Gemini models require
-[`litellm`](https://docs.litellm.ai/):
+Provider selection is controlled by `DEEP_RESEARCH_SEARCH_PROVIDER`:
 
-```bash
-pip install litellm
-```
+- `auto` (default): `serper` -> `tavily` -> `brave` -> `duckduckgo`
+- `serper`
+- `tavily`
+- `brave`
+- `duckduckgo`
 
-### OpenAI
+Hard-fail behavior:
 
-```bash
-export OPENAI_API_KEY=sk-...
-python -m examples.deep_research.agent --model openai/gpt-4o
-```
-
-### Anthropic
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-python -m examples.deep_research.agent --model anthropic/claude-sonnet-4-20250514
-```
-
-### Groq
-
-```bash
-export GROQ_API_KEY=...
-python -m examples.deep_research.agent --model groq/llama3-70b-8192
-```
-
-### Programmatic usage with any model
-
-```python
-from examples.deep_research.agent import build_agent
-
-# OpenAI
-agent = build_agent("openai/gpt-4o")
-
-# Anthropic
-agent = build_agent("anthropic/claude-sonnet-4-20250514")
-
-# Gemini Pro
-agent = build_agent("gemini-2.5-pro")
-```
-
-## Web Search Configuration
-
-The agent uses a tiered search approach:
-
-1. **Tavily** (preferred) — Set `TAVILY_API_KEY` for high-quality results with
-   full page content. Install: `pip install tavily-python`
-2. **DuckDuckGo** (fallback) — No API key needed, basic HTML scraping
-
-Both backends fetch full page content (not just snippets) for deeper analysis.
+- If the selected provider fails, the tool returns an explicit error.
+- In `auto` mode, if a keyed provider is selected and fails, it does not silently fallback.
+- DuckDuckGo is used in `auto` only when no keyed provider is configured.
 
 ## Example Session
 
 ```
 You: Research the current state of quantum computing in 2025
 
-Agent: I'll create a research plan for quantum computing in 2025.
+Agent: I'll build a research plan and delegate focused tasks.
 [writes todos]
-[delegates to research_agent: "Research current quantum computing hardware
- advances in 2025, including qubit counts, error rates, and major milestones"]
-[delegates to research_agent: "Research quantum computing applications and
- commercialization progress in 2025"]
+[task subagent_type=researcher ...]
+[task subagent_type=reporter ...]
+[task subagent_type=grader ...]
 
-Agent: [synthesizes findings, consolidates citations]
-[writes /final_report.md with structured report and numbered sources]
+Agent: [writes /final_report.md with structured report and numbered sources]
 
-Agent: I've completed the research. The final report has been saved to
-/final_report.md with 12 cited sources covering hardware advances,
-software developments, and commercial applications.
+Agent: I've completed the research. The final report is saved to
+/final_report.md with citations and a graded quality pass.
 ```
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `agent.py` | Main agent, sub-agent definitions, CLI runner |
-| `prompts.py` | Research workflow, delegation, and researcher prompts |
-| `tools.py` | Web search (Tavily/DuckDuckGo) and think tools |
+| `agent.py` | Main agent, dynamic delegation configuration, CLI runner |
+| `prompts.py` | Orchestrator + planner/researcher/reporter/grader prompts |
+| `tools.py` | Provider-routed web search (Serper-first auto) and think tool |
