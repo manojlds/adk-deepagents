@@ -92,6 +92,8 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Getting Started](getting-started.md) | Installation, first agent, running interactively, ADK CLI, models |
 | [Backends](backends.md) | StateBackend, FilesystemBackend, CompositeBackend, StoreBackend, custom backends |
 | [Tools](tools.md) | Filesystem tools, todo tools, execution tools — signatures, arguments, examples |
+| [Sub-Agent Delegation](subagents.md) | Static `AgentTool` delegation, `SubAgentSpec`, general-purpose sub-agent behavior |
+| [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
 
 ## Project Structure
 
