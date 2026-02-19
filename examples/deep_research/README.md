@@ -7,7 +7,7 @@ search-provider routing, and report quality grading.
 
 - **Dynamic delegation** — Uses the dynamic `task` tool with specialist roles:
   `planner`, `researcher`, `reporter`, `grader`
-- **ADK-native app** — Works with `adk run`, `adk web`, and `adk api_server`
+- **ADK-native app** — Works with `uv run adk run`, `uv run adk web`, and `uv run adk api_server`
 - **Provider-routed web search** — `auto` mode prioritizes `serper` first
 - **Hard-fail search semantics** — If selected provider fails, search returns
   an explicit error (no silent provider fallback)
@@ -60,17 +60,27 @@ export DEEP_RESEARCH_SEARCH_PROVIDER=auto
 
 ```bash
 # Interactive runner
-python -m examples.deep_research.agent
+uv run python -m examples.deep_research.agent
 
 # ADK CLI runtime
-adk run examples/deep_research/
+uv run adk run examples/deep_research/
 
 # ADK Dev UI
-adk web
+uv run adk web
 
 # ADK FastAPI server
-adk api_server
+uv run adk api_server
 ```
+
+Note: `adk web` discovers agents from an **agents directory** where each
+subfolder is an app. From inside `examples/deep_research/`, run:
+
+```bash
+uv run adk web ..
+```
+
+Running `uv run adk web .` in this folder shows no agents because `.` is an
+app directory, not an agents directory.
 
 ## Search Provider Configuration
 

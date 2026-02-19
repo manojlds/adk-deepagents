@@ -9,13 +9,15 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import InMemoryRunner
-from google.adk.tools import ToolContext
+from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
+from adk_deepagents.backends.protocol import BackendFactory
+from adk_deepagents.backends.runtime import get_registered_backend_factory, register_backend_factory
 from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import DEFAULT_SUBAGENT_PROMPT
 from adk_deepagents.tools.task import (
@@ -46,6 +48,12 @@ def _normalize_subagent_type(subagent_type: str) -> str:
     if normalized in {"general", "generalpurpose"}:
         return "general_purpose"
     return normalized
+
+
+def _coerce_backend_factory(value: Any) -> BackendFactory | None:
+    if callable(value):
+        return cast(BackendFactory, value)
+    return None
 
 
 def _build_dynamic_registry(
@@ -187,10 +195,22 @@ def create_dynamic_task_tool(
 
         runtime: _TaskRuntime | None = None
         normalized_type = _normalize_subagent_type(subagent_type)
-        parent_session_id = tool_context.state.get(_TASK_PARENT_ID_KEY)
-        if not isinstance(parent_session_id, str) or not parent_session_id:
-            parent_session_id = uuid.uuid4().hex
-            tool_context.state[_TASK_PARENT_ID_KEY] = parent_session_id
+        logical_parent_id = tool_context.state.get(_TASK_PARENT_ID_KEY)
+        if not isinstance(logical_parent_id, str) or not logical_parent_id:
+            logical_parent_id = uuid.uuid4().hex
+            tool_context.state[_TASK_PARENT_ID_KEY] = logical_parent_id
+
+        adk_parent_session_id = getattr(getattr(tool_context, "session", None), "id", None)
+        runtime_backend_factory: BackendFactory | None = (
+            get_registered_backend_factory(adk_parent_session_id)
+            if isinstance(adk_parent_session_id, str) and adk_parent_session_id
+            else None
+        )
+
+        if runtime_backend_factory is None:
+            runtime_backend_factory = _coerce_backend_factory(
+                tool_context.state.get("_backend_factory")
+            )
 
         current_depth_raw = tool_context.state.get(_TASK_DEPTH_KEY, 0)
         current_depth = current_depth_raw if isinstance(current_depth_raw, int) else 0
@@ -203,7 +223,7 @@ def create_dynamic_task_tool(
             existing = store.get(task_id)
             if not isinstance(existing, dict):
                 return {"status": "error", "error": f"Unknown task_id: {task_id}"}
-            runtime = _RUNTIME_REGISTRY.get(f"{parent_session_id}:{task_id}")
+            runtime = _RUNTIME_REGISTRY.get(f"{logical_parent_id}:{task_id}")
             if runtime is None:
                 return {
                     "status": "error",
@@ -261,7 +281,6 @@ def create_dynamic_task_tool(
                 state={
                     "files": tool_context.state.get("files", {}),
                     "todos": tool_context.state.get("todos", []),
-                    "_backend_factory": tool_context.state.get("_backend_factory"),
                     _TASK_DEPTH_KEY: current_depth + 1,
                 },
             )
@@ -275,7 +294,10 @@ def create_dynamic_task_tool(
                 "subagent_type": normalized_type,
                 "depth": current_depth + 1,
             }
-            _RUNTIME_REGISTRY[f"{parent_session_id}:{task_id}"] = runtime
+            _RUNTIME_REGISTRY[f"{logical_parent_id}:{task_id}"] = runtime
+
+            if runtime_backend_factory is not None:
+                register_backend_factory(runtime.session_id, runtime_backend_factory)
 
         if runtime is None:
             return {"status": "error", "error": "Failed to initialize dynamic task runtime"}
@@ -290,7 +312,7 @@ def create_dynamic_task_tool(
                 ),
             }
 
-        run_key = f"{parent_session_id}:{task_id}"
+        run_key = f"{logical_parent_id}:{task_id}"
         running_tasks.append(run_key)
 
         try:

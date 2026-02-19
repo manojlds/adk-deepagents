@@ -13,6 +13,7 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest
 from google.genai import types
 
+from adk_deepagents.backends.runtime import get_registered_backend_factory
 from adk_deepagents.backends.state import StateBackend
 from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.callbacks.after_tool import make_after_tool_callback
@@ -51,12 +52,15 @@ def make_llm_request(system_instruction=None, contents=None):
 
 
 class TestBeforeAgentBackendFactory:
-    def test_backend_factory_stored_in_state(self):
+    def test_backend_factory_registered_without_state_serialization(self):
         factory = lambda state: StateBackend(state)  # noqa: E731
         cb = make_before_agent_callback(backend_factory=factory)
         ctx = make_callback_context(state={})
+        ctx.session = MagicMock()
+        ctx.session.id = "session_123"
         cb(ctx)
-        assert ctx.state["_backend_factory"] is factory
+        assert "_backend_factory" not in ctx.state
+        assert get_registered_backend_factory("session_123") is factory
 
     def test_memory_loaded_on_first_invocation(self):
         state = {

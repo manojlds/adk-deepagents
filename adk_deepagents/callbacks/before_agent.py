@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from typing import cast
 
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types
 
 from adk_deepagents.backends.protocol import Backend, BackendFactory
+from adk_deepagents.backends.runtime import register_backend_factory
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +114,26 @@ def make_before_agent_callback(
         callback_context: CallbackContext,
     ) -> types.Content | None:
         state = callback_context.state
+        session = getattr(callback_context, "session", None)
 
-        # 0. Store backend factory so filesystem tools can resolve it
-        if backend_factory is not None and "_backend_factory" not in state:
-            state["_backend_factory"] = backend_factory
+        # 0. Register backend factory for this ADK session without writing it
+        #    into state (functions are not JSON-serializable in sqlite-backed
+        #    session services used by adk web/api_server).
+        if backend_factory is not None:
+            session_id = getattr(session, "id", None)
+            if isinstance(session_id, str) and session_id:
+                register_backend_factory(session_id, backend_factory)
 
         # 1. Patch dangling tool calls
         _patch_dangling_tool_calls(callback_context)
 
         # 2. Load memory files (once per session)
         if memory_sources and backend_factory and "memory_contents" not in state:
-            backend = backend_factory(state)
+            session_state = getattr(session, "state", None)
+            if isinstance(session_state, dict):
+                backend = backend_factory(session_state)
+            else:
+                backend = backend_factory(cast(dict, state))
             contents = _load_memory_files(backend, memory_sources)
             state["memory_contents"] = contents
 

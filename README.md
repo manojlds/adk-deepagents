@@ -21,10 +21,10 @@ Build autonomous, tool-using AI agents with filesystem access, shell execution, 
 Requires Python 3.11+.
 
 ```bash
-pip install adk-deepagents
+uv pip install adk-deepagents
 ```
 
-Or with [uv](https://docs.astral.sh/uv/):
+Or add it to a project with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv add adk-deepagents
@@ -34,10 +34,10 @@ uv add adk-deepagents
 
 ```bash
 # For skills integration
-pip install adk-deepagents[skills]
+uv pip install "adk-deepagents[skills]"
 
 # For Heimdall MCP sandboxed execution
-pip install google-adk[mcp]
+uv pip install "google-adk[mcp]"
 npm i -g @heimdall-ai/heimdall
 ```
 
@@ -99,7 +99,7 @@ root_agent = create_deep_agent(
 Then run:
 
 ```bash
-adk run my_project/
+uv run adk run my_project/
 ```
 
 ## API Reference
