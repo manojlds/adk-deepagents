@@ -4,6 +4,10 @@
 
 In deepagents, a single `task` tool routes work to sub-agents by name. In adk-deepagents, each sub-agent becomes its own [`AgentTool`](https://google.github.io/adk-python/) instance, so the parent agent calls them like any other tool. The `build_subagent_tools` function in `adk_deepagents.tools.task` converts a list of `SubAgentSpec` dicts (or pre-built `LlmAgent` objects) into `AgentTool` instances that are added to the parent agent's tool list.
 
+For the dynamic `task` implementation (`delegation_mode="dynamic"`) and runtime
+details (`task_id`, state keys, registries, timeout/error behavior), see
+[`Task System Internals`](task-system.md).
+
 ## SubAgentSpec
 
 `SubAgentSpec` is a `TypedDict` that describes a sub-agent:

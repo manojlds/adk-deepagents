@@ -133,36 +133,36 @@ python examples/content_builder/agent.py
 
 **Location:** `examples/deep_research/`
 
-A multi-model research agent with parallel sub-agent delegation, web search, strategic thinking, and conversation summarization.
+A dynamic deep-research agent with task-based specialist delegation, provider-routed web search, strategic thinking, and conversation summarization.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      deep_research                           │
-│  Model: configurable (default gemini-2.5-flash)              │
+│  Model: configurable (default from LITELLM_MODEL)            │
 │  Backend: StateBackend (default)                             │
 │  Summarization: trigger=0.75, keep=8 messages                │
 │                                                              │
 │  Tools:                                                      │
 │  ├─ Filesystem (ls, read, write, edit, glob, grep)          │
 │  ├─ Todos (write_todos, read_todos)                         │
-│  ├─ web_search (Tavily → DuckDuckGo fallback)              │
+│  ├─ web_search (auto: Serper -> Tavily -> Brave -> DDG)      │
 │  └─ think (structured reflection)                           │
 │                                                              │
-│  Sub-agents:                                                 │
-│  ├─ general_purpose (auto-included)                         │
-│  └─ research_agent                                           │
-│     ├─ Tools: web_search, think                             │
-│     └─ Prompt: researcher instructions with date, limits    │
+│  Dynamic subagent types:                                     │
+│  ├─ planner                                                  │
+│  ├─ researcher                                               │
+│  ├─ reporter                                                 │
+│  └─ grader                                                   │
 │                                                              │
 │  Workflow:                                                   │
 │  1. Plan → create todo list                                 │
 │  2. Save request → /research_request.md                     │
-│  3. Research → delegate to sub-agents (parallel)            │
-│  4. Synthesize → consolidate citations                      │
-│  5. Write → /final_report.md                                │
-│  6. Verify → cross-check against original request           │
+│  3. Research → delegate via dynamic task tool               │
+│  4. Draft → reporter task writes report                     │
+│  5. Grade → grader task reviews quality                     │
+│  6. Revise + finalize → /final_report.md                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -171,15 +171,15 @@ A multi-model research agent with parallel sub-agent delegation, web search, str
 | Feature | Choice | Why |
 |---|---|---|
 | Model | Configurable via `--model` | Supports Gemini, OpenAI, Anthropic via litellm |
-| Sub-agents | `research_agent` with `web_search` + `think` | Focused research with reflection cycle |
+| Delegation | Dynamic `task` tool (`planner/researcher/reporter/grader`) | Deepagents-style orchestration |
 | Summarization | `trigger=0.75`, `keep=8` | Long research sessions need context management |
-| Custom tools | `web_search`, `think` | Web search with Tavily/DuckDuckGo; think for reflection |
+| Custom tools | `web_search`, `think` | Serper-first provider routing + reflection loop |
 
 ### Custom Tools
 
 **`web_search(query, max_results=3, topic="general")`**
 
-Searches the web using Tavily (if available) with DuckDuckGo as fallback. Fetches full page content for each result. Supports `topic` hints: `"general"`, `"news"`, `"finance"`.
+Searches the web using provider routing (`auto` by default): Serper -> Tavily -> Brave -> DuckDuckGo. Hard-fails on selected provider errors.
 
 **`think(reflection)`**
 
@@ -201,13 +201,13 @@ python examples/deep_research/agent.py --model anthropic/claude-sonnet-4-2025051
 ### Key Code
 
 ```python
-from adk_deepagents import SubAgentSpec, SummarizationConfig, create_deep_agent
+from adk_deepagents import DynamicTaskConfig, SubAgentSpec, SummarizationConfig, create_deep_agent
 
 from .tools import think, web_search
 
-research_subagent = SubAgentSpec(
-    name="research_agent",
-    description="Delegate a research task to this sub-agent...",
+researcher_subagent = SubAgentSpec(
+    name="researcher",
+    description="Research specialist...",
     system_prompt=_build_researcher_prompt(),
     tools=[web_search, think],
 )
@@ -217,9 +217,11 @@ agent = create_deep_agent(
     model=model,
     instruction=_build_orchestrator_prompt(),
     tools=[web_search, think],
-    subagents=[research_subagent],
+    subagents=[planner_subagent, researcher_subagent, reporter_subagent, grader_subagent],
+    delegation_mode="dynamic",
+    dynamic_task_config=DynamicTaskConfig(max_parallel=4, max_depth=2),
     summarization=SummarizationConfig(
-        model=model if model.startswith("gemini") else "gemini-2.5-flash",
+            model=model,
         trigger=("fraction", 0.75),
         keep=("messages", 8),
     ),
@@ -232,8 +234,8 @@ agent = create_deep_agent(
 # Basic
 python examples/deep_research/agent.py
 
-# With Tavily (better search results)
-export TAVILY_API_KEY=your-key
+# With Serper
+export SERPER_API_KEY=your-key
 python examples/deep_research/agent.py
 
 # With ADK CLI

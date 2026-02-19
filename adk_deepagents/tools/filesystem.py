@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import base64
 import os
+from typing import cast
 
-from google.adk.tools import ToolContext
+from google.adk.tools.tool_context import ToolContext
 
 from adk_deepagents.backends.protocol import Backend, FileData
+from adk_deepagents.backends.runtime import get_or_create_backend_for_session
+from adk_deepagents.backends.state import StateBackend
 from adk_deepagents.backends.utils import (
     format_grep_matches,
     truncate_if_too_long,
@@ -48,18 +51,26 @@ def _is_image_file(file_path: str) -> bool:
 
 
 def _get_backend(tool_context: ToolContext) -> Backend:
-    """Resolve the backend from tool context state."""
+    """Resolve backend without storing non-serializable objects in state."""
+    state_dict = cast(dict, tool_context.state)
+
     backend = tool_context.state.get("_backend")
-    if backend is None:
-        factory = tool_context.state.get("_backend_factory")
-        if factory is not None:
-            backend = factory(tool_context.state)
-            tool_context.state["_backend"] = backend
-    if backend is None:
-        raise RuntimeError(
-            "No backend configured. Set state['_backend'] or state['_backend_factory']."
-        )
-    return backend
+    if backend is not None:
+        return cast(Backend, backend)
+
+    factory = tool_context.state.get("_backend_factory")
+    if callable(factory):
+        return cast(Backend, factory(state_dict))
+
+    session = getattr(tool_context, "session", None)
+    session_id = getattr(session, "id", None)
+    if isinstance(session_id, str) and session_id:
+        runtime_backend = get_or_create_backend_for_session(session_id, state_dict)
+        if runtime_backend is not None:
+            return runtime_backend
+
+    # Safe default for sessions with no custom backend registration.
+    return StateBackend(state_dict)
 
 
 def _apply_files_update(

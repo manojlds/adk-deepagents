@@ -1,29 +1,21 @@
-"""Deep research agent — parallel sub-agent research with web search.
+"""Deep research agent — dynamic task delegation with web search.
 
 Demonstrates:
-- Multi-model support (Gemini, OpenAI, Anthropic, etc.)
-- Specialized sub-agents with parallel delegation
-- Web search with full page content extraction
+- Dynamic task delegation with specialist sub-agents (planner/researcher/reporter/grader)
+- Search provider routing (Serper-first auto mode)
 - Strategic thinking/reflection tool
 - Todo-based planning and tracking
 - Conversation summarization for long sessions
-- Citation consolidation across sub-agents
-- Final report generation
+- Final report generation with citations
 
 Port of langchain deepagents ``examples/deep_research/``.
 
 Usage:
-    # Default (Gemini)
+    # Interactive runner (model from LITELLM_MODEL or default)
     python examples/deep_research/agent.py
 
-    # With OpenAI (requires OPENAI_API_KEY, pip install litellm)
-    python examples/deep_research/agent.py --model openai/gpt-4o
-
-    # With Anthropic (requires ANTHROPIC_API_KEY, pip install litellm)
-    python examples/deep_research/agent.py --model anthropic/claude-sonnet-4-20250514
-
-    # With Tavily web search (optional, better results)
-    export TAVILY_API_KEY=your-key
+    # With Serper search (recommended)
+    export SERPER_API_KEY=your-key
     python examples/deep_research/agent.py
 
     # Or use with ADK CLI:
@@ -32,16 +24,25 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import asyncio
+import os
 from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 from google.genai import types
 
-from adk_deepagents import SubAgentSpec, SummarizationConfig, create_deep_agent
+from adk_deepagents import (
+    DynamicTaskConfig,
+    SubAgentSpec,
+    SummarizationConfig,
+    create_deep_agent,
+)
+from adk_deepagents.tools.filesystem import read_file, write_file
 
 from .prompts import (
+    GRADER_INSTRUCTIONS,
+    PLANNER_INSTRUCTIONS,
+    REPORTER_INSTRUCTIONS,
     RESEARCH_WORKFLOW_INSTRUCTIONS,
     RESEARCHER_INSTRUCTIONS,
     SUBAGENT_DELEGATION_INSTRUCTIONS,
@@ -54,9 +55,9 @@ load_dotenv()
 # Configuration
 # ---------------------------------------------------------------------------
 
-MAX_CONCURRENT_RESEARCH_UNITS = 3
+MAX_CONCURRENT_RESEARCH_UNITS = 4
 MAX_RESEARCHER_ITERATIONS = 3
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -83,16 +84,39 @@ def _build_researcher_prompt() -> str:
 # Sub-agent definitions
 # ---------------------------------------------------------------------------
 
-research_subagent = SubAgentSpec(
-    name="research_agent",
+planner_subagent = SubAgentSpec(
+    name="planner",
     description=(
-        "Delegate a research task to this sub-agent. Give it ONE focused "
-        "research topic at a time. It will search the web, analyze sources, "
-        "and return structured findings with citations. For comparisons, "
-        "launch multiple research agents in parallel (one per element)."
+        "Planning specialist that breaks large research requests into concise, high-impact tasks."
+    ),
+    system_prompt=PLANNER_INSTRUCTIONS,
+    tools=[think],
+)
+
+researcher_subagent = SubAgentSpec(
+    name="researcher",
+    description=(
+        "Research specialist that gathers evidence from web search and returns "
+        "structured findings with citations."
     ),
     system_prompt=_build_researcher_prompt(),
     tools=[web_search, think],
+)
+
+reporter_subagent = SubAgentSpec(
+    name="reporter",
+    description=(
+        "Reporting specialist that synthesizes findings into a polished report with citations."
+    ),
+    system_prompt=REPORTER_INSTRUCTIONS,
+    tools=[write_file, think],
+)
+
+grader_subagent = SubAgentSpec(
+    name="grader",
+    description="Quality specialist that grades report completeness and citation quality.",
+    system_prompt=GRADER_INSTRUCTIONS,
+    tools=[read_file, think],
 )
 
 
@@ -114,14 +138,22 @@ def build_agent(model: str = DEFAULT_MODEL):
         - ``"anthropic/claude-sonnet-4-20250514"`` (requires ANTHROPIC_API_KEY + litellm)
         - ``"groq/llama3-70b-8192"`` (requires GROQ_API_KEY + litellm)
     """
+    resolved_model = os.environ.get("LITELLM_MODEL", model)
     return create_deep_agent(
         name="deep_research",
-        model=model,
+        model=resolved_model,
         instruction=_build_orchestrator_prompt(),
         tools=[web_search, think],
-        subagents=[research_subagent],
+        subagents=[planner_subagent, researcher_subagent, reporter_subagent, grader_subagent],
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            max_parallel=MAX_CONCURRENT_RESEARCH_UNITS,
+            max_depth=2,
+            timeout_seconds=240.0,
+            allow_model_override=False,
+        ),
         summarization=SummarizationConfig(
-            model=model if model.startswith("gemini") else "gemini-2.5-flash",
+            model=resolved_model,
             trigger=("fraction", 0.75),
             keep=("messages", 8),
         ),
@@ -139,18 +171,7 @@ root_agent = build_agent()
 
 async def main():
     """Run the deep research agent interactively."""
-    parser = argparse.ArgumentParser(description="Deep Research Agent")
-    parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL,
-        help=(
-            "Model to use. Examples: gemini-2.5-flash, gemini-2.5-pro, "
-            "openai/gpt-4o, anthropic/claude-sonnet-4-20250514"
-        ),
-    )
-    args = parser.parse_args()
-
-    agent = build_agent(args.model)
+    agent = build_agent()
 
     from google.adk.runners import InMemoryRunner
 
@@ -160,7 +181,7 @@ async def main():
         user_id="user",
     )
 
-    print(f"Deep Research Agent ready (model: {args.model}).")
+    print(f"Deep Research Agent ready (model: {os.environ.get('LITELLM_MODEL', DEFAULT_MODEL)}).")
     print("Type 'quit' to exit.\n")
 
     while True:
