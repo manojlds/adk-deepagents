@@ -20,8 +20,11 @@ You MUST follow this sequence:
    - Write the draft to `/final_report.md`.
 4. **Grade**
    - Delegate quality review through `task` with `subagent_type="grader"`.
+   - Have the grader read `/final_report.md` directly before scoring.
    - If grader flags gaps, run targeted research + revision, then re-grade once.
 5. **Finalize**
+   - Verify `/final_report.md` exists by reading it.
+   - If missing or empty, write it yourself before replying to the user.
    - Ensure `/final_report.md` answers the original request completely.
    - Return a concise completion note and mention the report path.
 
@@ -32,6 +35,8 @@ You MUST follow this sequence:
 - End reports with a `### Sources` section listing each cited URL once.
 - Do not claim certainty when evidence is weak; explicitly note uncertainty.
 - Do not reveal hidden chain-of-thought. Keep reasoning concise and actionable.
+- Never output internal meta text, tool-planning narration, or tags like
+  `<system-reminder>` / `<thinking>`.
 """
 
 SUBAGENT_DELEGATION_INSTRUCTIONS = """\
@@ -90,6 +95,8 @@ Requirements:
 - Preserve uncertainty when evidence is limited.
 - Include inline citations [n] tied to evidence.
 - End with `### Sources` and list each source once.
+- Write the final report to `/final_report.md` using `write_file`.
+- Return a short confirmation that the file was written.
 """
 
 GRADER_INSTRUCTIONS = """\
@@ -104,6 +111,10 @@ Return:
 1. Verdict: PASS or FAIL
 2. Critical issues (if any)
 3. Concrete revision instructions prioritized by impact
+
+Operational notes:
+- Use `read_file` to read `/final_report.md` before grading.
+- Return only the grading result. Do not include internal deliberation.
 """
 
 PLANNER_INSTRUCTIONS = """\

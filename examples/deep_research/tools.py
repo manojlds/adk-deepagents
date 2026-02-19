@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -59,8 +60,19 @@ def _post_json(url: str, payload: dict, headers: dict[str, str], timeout: int = 
         **headers,
     }
     request = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as err:
+        body_text = ""
+        try:
+            body_text = err.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            body_text = ""
+        detail = f"; response={body_text}" if body_text else ""
+        raise RuntimeError(f"HTTP {err.code} {err.reason}{detail}") from err
+    except urllib.error.URLError as err:
+        raise RuntimeError(f"Network error: {err.reason}") from err
     return json.loads(raw)
 
 
@@ -330,7 +342,7 @@ def web_search(query: str, max_results: int = 3, topic: str = "general") -> str:
     try:
         results = _dispatch_provider(provider, query, max_results, topic)
     except Exception as exc:
-        logger.exception("Web search provider '%s' failed", provider)
+        logger.error("Web search provider '%s' failed: %s", provider, exc)
         return f"Web search error via provider '{provider}': {exc}"
 
     return _format_results(results)

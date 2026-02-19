@@ -37,6 +37,7 @@ from adk_deepagents import (
     SummarizationConfig,
     create_deep_agent,
 )
+from adk_deepagents.tools.filesystem import read_file, write_file
 
 from .prompts import (
     GRADER_INSTRUCTIONS,
@@ -108,14 +109,14 @@ reporter_subagent = SubAgentSpec(
         "Reporting specialist that synthesizes findings into a polished report with citations."
     ),
     system_prompt=REPORTER_INSTRUCTIONS,
-    tools=[think],
+    tools=[write_file, think],
 )
 
 grader_subagent = SubAgentSpec(
     name="grader",
     description="Quality specialist that grades report completeness and citation quality.",
     system_prompt=GRADER_INSTRUCTIONS,
-    tools=[think],
+    tools=[read_file, think],
 )
 
 
@@ -148,7 +149,7 @@ def build_agent(model: str = DEFAULT_MODEL):
         dynamic_task_config=DynamicTaskConfig(
             max_parallel=MAX_CONCURRENT_RESEARCH_UNITS,
             max_depth=2,
-            timeout_seconds=120.0,
+            timeout_seconds=240.0,
             allow_model_override=False,
         ),
         summarization=SummarizationConfig(
