@@ -93,6 +93,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Backends](backends.md) | StateBackend, FilesystemBackend, CompositeBackend, StoreBackend, custom backends |
 | [Tools](tools.md) | Filesystem tools, todo tools, execution tools — signatures, arguments, examples |
 | [Sub-Agent Delegation](subagents.md) | Static `AgentTool` delegation, `SubAgentSpec`, general-purpose sub-agent behavior |
+| [Skills Integration](skills.md) | Root-agent and sub-agent skills, `add_skills_tools`, prompt injection |
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
 
 ## Project Structure

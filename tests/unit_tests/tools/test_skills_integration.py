@@ -45,7 +45,7 @@ class TestAddSkillsTools:
         assert len(result) == 3
 
     def test_passes_config_to_registry(self):
-        """SkillsConfig.extra is forwarded to SkillsRegistry constructor."""
+        """SkillsConfig.extra is forwarded via adk-skills SkillsConfig."""
         from adk_deepagents.types import SkillsConfig
 
         mock_registry = MagicMock()
@@ -56,26 +56,44 @@ class TestAddSkillsTools:
         mock_module = MagicMock()
         mock_module.SkillsRegistry.return_value = mock_registry
 
+        class MockRegistryConfig:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        mock_models_module = MagicMock()
+        mock_models_module.SkillsConfig = MockRegistryConfig
+
         config = SkillsConfig(extra={"db_url": "sqlite:///skills.db"})
 
-        with patch.dict("sys.modules", {"adk_skills_agent": mock_module}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "adk_skills_agent": mock_module,
+                "adk_skills_agent.core.models": mock_models_module,
+            },
+        ):
             add_skills_tools(
                 [],
                 skills_dirs=["/skills"],
                 skills_config=config,
             )
 
-        mock_module.SkillsRegistry.assert_called_once_with(db_url="sqlite:///skills.db")
+        mock_module.SkillsRegistry.assert_called_once()
+        args, kwargs = mock_module.SkillsRegistry.call_args
+        assert len(args) == 0
+        assert "config" in kwargs
+        assert isinstance(kwargs["config"], MockRegistryConfig)
+        assert kwargs["config"].kwargs == {"db_url": "sqlite:///skills.db"}
 
     def test_handles_discovery_error_gracefully(self):
         """If one directory fails, others are still tried."""
         mock_registry = MagicMock()
         call_count = 0
 
-        def mock_discover(directory):
+        def mock_discover(directories):
             nonlocal call_count
             call_count += 1
-            if directory == "/bad":
+            if directories == ["/bad"]:
                 raise RuntimeError("Discovery failed")
 
         mock_registry.discover = mock_discover

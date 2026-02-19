@@ -47,6 +47,21 @@ runtime contract:
 - `"completed"` when child execution finishes normally
 - `"error"` for validation failures, timeout, runtime failures, and policy blocks
 
+### Dynamic delegation with skills
+
+When a dynamic child agent is created from a `SubAgentSpec`:
+
+- it starts from the parent `default_tools` snapshot (filesystem/todo/custom tools,
+  plus parent-level skills tools if `skills=[...]` is configured on the parent)
+- if that sub-agent spec also sets `skills`, those skill tools are discovered and
+  appended to the child tool list
+- the dynamic `task` tool is not included in this default snapshot, so skill usage
+  does not recursively spawn more dynamic tasks unless you explicitly pass `task`
+  through `SubAgentSpec.tools`
+
+In other words, skills can *instruct* the model to call `task`, but skills do not
+automatically spawn dynamic tasks on their own.
+
 ### Dynamic task lifecycle
 
 For each tool call:
