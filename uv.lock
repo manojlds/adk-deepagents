@@ -24,6 +24,7 @@ skills = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "adk-skills-agent" },
     { name = "litellm" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -43,6 +44,7 @@ provides-extras = ["skills"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "adk-skills-agent", specifier = ">=0.1.0" },
     { name = "litellm", specifier = ">=1.81.13" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "pytest-asyncio", specifier = ">=0.21" },

@@ -18,6 +18,7 @@ skills = [
 
 [dependency-groups]
 dev = [
+    "adk-skills-agent>=0.1.0",
     "litellm>=1.81.13",
     "pytest>=7.0",
     "pytest-asyncio>=0.21",

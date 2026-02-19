@@ -58,7 +58,30 @@ def add_skills_tools(
         config_kwargs.update(skills_config.extra)
 
     try:
-        registry = SkillsRegistry(**config_kwargs)
+        if config_kwargs:
+            registry = None
+
+            # adk-skills-agent >=0.1.0 expects a SkillsConfig object.
+            try:
+                from adk_skills_agent.core.models import SkillsConfig as RegistrySkillsConfig
+
+                registry_config = RegistrySkillsConfig(**config_kwargs)
+                registry = SkillsRegistry(config=registry_config)
+            except Exception:
+                logger.debug(
+                    "Unable to build adk-skills SkillsConfig from extras; trying kwargs fallback",
+                    exc_info=True,
+                )
+
+            # Backward compatibility for older adk-skills-agent constructor shapes.
+            if registry is None:
+                try:
+                    registry = SkillsRegistry(**config_kwargs)
+                except Exception:
+                    logger.exception("Failed to apply skills_config extras; using default registry")
+                    registry = SkillsRegistry()
+        else:
+            registry = SkillsRegistry()
     except Exception:
         logger.exception("Failed to create SkillsRegistry")
         return tools
@@ -67,7 +90,8 @@ def add_skills_tools(
     discovered_count = 0
     for directory in skills_dirs:
         try:
-            registry.discover(directory)
+            # adk-skills-agent expects a sequence of directories.
+            registry.discover([directory])
             discovered_count += 1
         except Exception:
             logger.exception("Failed to discover skills from %s", directory)

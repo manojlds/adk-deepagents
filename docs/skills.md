@@ -121,6 +121,33 @@ agent = create_deep_agent(
 
 When building sub-agent tools, `_resolve_skills_tools` is called for sub-agents that have `skills` set. This creates a separate `SkillsRegistry` for each sub-agent and appends the skills tools to that sub-agent's tool list.
 
+## Skills with Dynamic `task` Delegation
+
+Skills also work with `delegation_mode="dynamic"`:
+
+- Dynamic child agents start from the parent `default_tools` snapshot.
+- If a dynamic `SubAgentSpec` includes `skills`, those skill tools are discovered
+  and appended when that child is spawned.
+- Skills can instruct the model to call the dynamic `task` tool, but skill
+  activation itself does not automatically spawn delegated tasks.
+
+Example:
+
+```python
+from adk_deepagents import SubAgentSpec, create_deep_agent
+
+researcher = SubAgentSpec(
+    name="researcher",
+    description="Research worker that uses domain skills.",
+    skills=["./skills/research/"],
+)
+
+agent = create_deep_agent(
+    delegation_mode="dynamic",
+    subagents=[researcher],
+)
+```
+
 ## Bridge with Heimdall
 
 Skills that include scripts can be executed in Heimdall's sandbox via the `HeimdallScriptExecutor` bridge (see [Execution](./execution.md#heimdallscriptexecutor-bridge)):
