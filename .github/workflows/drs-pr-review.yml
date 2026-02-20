@@ -56,7 +56,7 @@ jobs:
       - name: Install OpenCode CLI
         run: npm install -g opencode-ai
       - name: Install DRS
-        run: npm install -g @diff-review-system/drs
+        run: npm install -g @diff-review-system/drs@2.2.1
       - name: Setup OpenCode Zen Authentication
         if: env.OPENCODE_ZEN_API_KEY != ''
         env:
@@ -112,7 +112,7 @@ jobs:
       - name: Install OpenCode CLI
         run: npm install -g opencode-ai
       - name: Install DRS
-        run: npm install -g @diff-review-system/drs
+        run: npm install -g @diff-review-system/drs@2.2.1
       - name: Setup OpenCode Zen Authentication
         if: env.OPENCODE_ZEN_API_KEY != ''
         env:
