@@ -89,9 +89,7 @@ async def main():
 
     print(f"Browser Skill Agent ready (model: {model}).")
     print("Uses agent-browser CLI via skill activation. Type 'quit' to exit.\n")
-    print(
-        "Example: Open https://example.com and tell me what's on the page\n"
-    )
+    print("Example: Open https://example.com and tell me what's on the page\n")
 
     while True:
         user_input = input("You: ").strip()
@@ -101,9 +99,7 @@ async def main():
         async for event in runner.run_async(
             session_id=session.id,
             user_id="user",
-            new_message=types.Content(
-                role="user", parts=[types.Part(text=user_input)]
-            ),
+            new_message=types.Content(role="user", parts=[types.Part(text=user_input)]),
         ):
             if event.content and event.content.parts:
                 for part in event.content.parts:

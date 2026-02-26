@@ -145,9 +145,7 @@ class TestCreateDeepAgentBrowser:
             warnings.simplefilter("always")
             agent = create_deep_agent(browser="_resolved")
             # _resolved should not warn
-            browser_warnings = [
-                x for x in w if "browser" in str(x.message).lower()
-            ]
+            browser_warnings = [x for x in w if "browser" in str(x.message).lower()]
             assert len(browser_warnings) == 0
         # But prompt should still be injected
         assert BROWSER_SYSTEM_PROMPT in agent.instruction

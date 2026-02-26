@@ -150,9 +150,7 @@ async def get_playwright_browser_tools(
     try:
         from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
     except ImportError as e:
-        raise ImportError(
-            "MCP toolset not available. Ensure google-adk[mcp] is installed."
-        ) from e
+        raise ImportError("MCP toolset not available. Ensure google-adk[mcp] is installed.") from e
 
     if config is None:
         config = BrowserConfig()
