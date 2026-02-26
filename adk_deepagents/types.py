@@ -85,6 +85,35 @@ class SummarizationConfig:
 
 
 @dataclass
+class BrowserConfig:
+    """Configuration for browser automation via Playwright MCP.
+
+    Controls how the ``@playwright/mcp`` server is launched and configured.
+    """
+
+    provider: str = "playwright"
+    """Browser automation provider. Currently only ``"playwright"`` is supported."""
+
+    headless: bool = True
+    """Run the browser in headless mode (no visible window)."""
+
+    browser: str = "chromium"
+    """Browser engine: ``"chromium"``, ``"firefox"``, or ``"webkit"``."""
+
+    viewport: tuple[int, int] = (1280, 720)
+    """Browser viewport size as ``(width, height)``."""
+
+    caps: list[str] = field(default_factory=list)
+    """Extra capabilities to enable: ``"vision"``, ``"pdf"``, ``"testing"``."""
+
+    cdp_endpoint: str | None = None
+    """Connect to an existing browser via Chrome DevTools Protocol URL."""
+
+    storage_state: str | None = None
+    """Path to a saved browser authentication state file."""
+
+
+@dataclass
 class SkillsConfig:
     """Configuration passed to adk-skills SkillsRegistry."""
 

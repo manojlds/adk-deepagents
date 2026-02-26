@@ -15,6 +15,9 @@ dependencies = [
 skills = [
     "adk-skills-agent>=0.1.0",
 ]
+browser = [
+    "google-adk[mcp]>=1.0.0",
+]
 
 [dependency-groups]
 dev = [
@@ -37,10 +40,11 @@ packages = ["adk_deepagents"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "-m 'not llm'"
+addopts = "-m 'not llm and not browser'"
 markers = [
     "integration: integration tests that test multiple components together",
     "llm: tests requiring a live LLM API key (deselect with '-m \"not llm\"')",
+    "browser: tests requiring Playwright MCP + browser (npx @playwright/mcp, chromium)",
 ]
 
 [tool.ruff]

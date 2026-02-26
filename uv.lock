@@ -18,6 +18,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+browser = [
+    { name = "google-adk" },
+]
 skills = [
     { name = "adk-skills-agent" },
 ]
@@ -37,10 +40,11 @@ dev = [
 requires-dist = [
     { name = "adk-skills-agent", marker = "extra == 'skills'", specifier = ">=0.1.0" },
     { name = "google-adk", specifier = ">=1.0.0" },
+    { name = "google-adk", extras = ["mcp"], marker = "extra == 'browser'", specifier = ">=1.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "wcmatch", specifier = ">=8.5" },
 ]
-provides-extras = ["skills"]
+provides-extras = ["skills", "browser"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -8,6 +8,7 @@ Build autonomous, tool-using AI agents with filesystem access, shell execution, 
 
 - **Filesystem tools** — `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` backed by pluggable storage
 - **Shell execution** — Local subprocess or sandboxed execution via [Heimdall MCP](https://github.com/heimdall-ai/heimdall)
+- **Browser automation** — Navigate websites, fill forms, extract data via [@playwright/mcp](https://github.com/microsoft/playwright-mcp) or [agent-browser](https://github.com/vercel-labs/agent-browser) CLI skill
 - **Sub-agent delegation** — Spawn child agents for isolated, parallelizable sub-tasks
 - **Conversation summarization** — Automatic context window management for long-running sessions
 - **Persistent memory** — Load `AGENTS.md` files into the system prompt across sessions
@@ -39,6 +40,9 @@ uv pip install "adk-deepagents[skills]"
 # For Heimdall MCP sandboxed execution
 uv pip install "google-adk[mcp]"
 npm i -g @heimdall-ai/heimdall
+
+# For browser automation via Playwright MCP
+uv pip install "adk-deepagents[browser]"
 ```
 
 ## Quickstart
@@ -122,6 +126,7 @@ agent = create_deep_agent(
     output_schema=None,              # Pydantic BaseModel for structured output
     backend=None,                    # Backend instance or factory
     execution=None,                  # "local", "heimdall", or MCP config dict
+    browser=None,                    # "playwright" or BrowserConfig
     summarization=None,              # SummarizationConfig
     delegation_mode="static",       # "static", "dynamic", or "both"
     dynamic_task_config=None,        # DynamicTaskConfig for task tool behavior
@@ -132,7 +137,7 @@ agent = create_deep_agent(
 
 ### `create_deep_agent_async()`
 
-Async variant that resolves MCP tools before creating the agent. Required for `execution="heimdall"` or dict-based MCP configs.
+Async variant that resolves MCP tools before creating the agent. Required for `execution="heimdall"`, dict-based MCP configs, or `browser="playwright"`.
 
 ```python
 from adk_deepagents import create_deep_agent_async
@@ -140,6 +145,19 @@ from adk_deepagents import create_deep_agent_async
 agent, cleanup = await create_deep_agent_async(
     execution="heimdall",
     # ... same parameters as create_deep_agent()
+)
+
+# When done:
+if cleanup:
+    await cleanup()
+```
+
+```python
+# Browser automation
+from adk_deepagents import BrowserConfig, create_deep_agent_async
+
+agent, cleanup = await create_deep_agent_async(
+    browser="playwright",  # or BrowserConfig(headless=False)
 )
 
 # When done:
@@ -365,6 +383,8 @@ Every agent created with `create_deep_agent()` includes these tools:
 
 With `execution="local"` or `execution="heimdall"`, an `execute` tool is also available for shell commands.
 
+With `browser="playwright"`, browser tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, etc.) are added for web page interaction.
+
 With `subagents=[...]` and `delegation_mode="static"` (default), one tool is generated per sub-agent specification.
 
 With `delegation_mode="dynamic"` or `"both"`, a single `task` tool is added for runtime delegation.
@@ -375,7 +395,7 @@ With `delegation_mode="dynamic"` or `"both"`, a single `task` tool is added for 
 adk_deepagents/
 ├── __init__.py          # Public API exports
 ├── graph.py             # create_deep_agent() and create_deep_agent_async()
-├── types.py             # SubAgentSpec, SummarizationConfig, SkillsConfig
+├── types.py             # SubAgentSpec, SummarizationConfig, SkillsConfig, BrowserConfig
 ├── prompts.py           # System prompt templates
 ├── memory.py            # AGENTS.md loading and formatting
 ├── summarization.py     # Context window management
@@ -394,6 +414,10 @@ adk_deepagents/
 │   ├── local.py         # Local subprocess execution
 │   ├── heimdall.py      # Heimdall MCP integration
 │   └── bridge.py        # Skills-to-Heimdall script execution bridge
+├── browser/
+│   ├── __init__.py      # Browser module exports
+│   ├── playwright_mcp.py # Playwright MCP integration
+│   └── prompts.py       # Browser agent system prompts
 ├── skills/
 │   └── integration.py   # adk-skills registry integration
 └── tools/

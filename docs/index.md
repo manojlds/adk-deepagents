@@ -10,6 +10,7 @@ Build autonomous, tool-using AI agents with filesystem access, shell execution, 
 |---------|-------------|
 | **Filesystem tools** | `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` — backed by pluggable storage backends |
 | **Shell execution** | Local subprocess or sandboxed execution via [Heimdall MCP](https://github.com/heimdall-ai/heimdall) |
+| **Browser automation** | Navigate, interact with, and extract data from websites via [@playwright/mcp](https://github.com/microsoft/playwright-mcp) or [agent-browser](https://github.com/vercel-labs/agent-browser) CLI skill |
 | **Sub-agent delegation** | Spawn child agents for isolated, parallelizable sub-tasks with `AgentTool` |
 | **Conversation summarization** | Automatic context window management — older messages are replaced with condensed summaries |
 | **Persistent memory** | Load `AGENTS.md` files into the system prompt across sessions |
@@ -92,6 +93,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Getting Started](getting-started.md) | Installation, first agent, running interactively, ADK CLI, models |
 | [Backends](backends.md) | StateBackend, FilesystemBackend, CompositeBackend, StoreBackend, custom backends |
 | [Tools](tools.md) | Filesystem tools, todo tools, execution tools — signatures, arguments, examples |
+| [Browser Automation](browser.md) | Playwright MCP integration, agent-browser CLI skill, BrowserConfig |
 | [Sub-Agent Delegation](subagents.md) | Static `AgentTool` delegation, `SubAgentSpec`, general-purpose sub-agent behavior |
 | [Skills Integration](skills.md) | Root-agent and sub-agent skills, `add_skills_tools`, prompt injection |
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
@@ -102,7 +104,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 adk_deepagents/
 ├── __init__.py          # Public API: create_deep_agent, create_deep_agent_async
 ├── graph.py             # Main factory functions
-├── types.py             # SubAgentSpec, SummarizationConfig, SkillsConfig
+├── types.py             # SubAgentSpec, SummarizationConfig, SkillsConfig, BrowserConfig
 ├── prompts.py           # System prompt templates
 ├── memory.py            # AGENTS.md loading and formatting
 ├── summarization.py     # Context window management
@@ -122,6 +124,10 @@ adk_deepagents/
 │   ├── local.py         # Local subprocess execution
 │   ├── heimdall.py      # Heimdall MCP sandboxed execution
 │   └── bridge.py        # Skills-to-Heimdall execution bridge
+├── browser/
+│   ├── __init__.py      # Browser module exports
+│   ├── playwright_mcp.py # Playwright MCP integration
+│   └── prompts.py       # Browser agent system prompts
 ├── skills/
 │   └── integration.py   # adk-skills registry integration
 └── tools/

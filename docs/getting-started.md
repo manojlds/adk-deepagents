@@ -31,6 +31,9 @@ pip install adk-deepagents[skills]
 # For Heimdall MCP sandboxed execution
 pip install google-adk[mcp]
 npm i -g @heimdall-ai/heimdall
+
+# For browser automation via Playwright MCP
+pip install adk-deepagents[browser]
 ```
 
 ## Environment Setup
