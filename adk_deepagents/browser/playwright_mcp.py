@@ -148,9 +148,8 @@ async def get_playwright_browser_tools(
         If connection to the Playwright MCP server fails.
     """
     try:
-        from mcp.client.stdio import StdioServerParameters
-
         from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StdioConnectionParams
+        from mcp.client.stdio import StdioServerParameters
     except ImportError as e:
         raise ImportError("MCP toolset not available. Ensure google-adk[mcp] is installed.") from e
 
