@@ -154,7 +154,13 @@ class TestCreateDeepAgentBrowser:
 class TestGetPlaywrightBrowserTools:
     @pytest.mark.asyncio
     async def test_import_error_without_mcp(self):
-        with patch.dict("sys.modules", {"google.adk.tools.mcp_tool.mcp_toolset": None}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "mcp.client.stdio": None,
+                "google.adk.tools.mcp_tool.mcp_toolset": None,
+            },
+        ):
             from adk_deepagents.browser.playwright_mcp import get_playwright_browser_tools
 
             with pytest.raises(ImportError, match="MCP toolset not available"):

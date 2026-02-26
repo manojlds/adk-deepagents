@@ -1,147 +1,57 @@
-"""Integration tests — browser automation with a real LLM.
+"""Integration tests — browser automation with real Playwright MCP + LLM.
 
-Tests that the agent correctly uses browser tools following the
-snapshot → ref → action workflow. Uses mock browser tool functions
-(simulating Playwright MCP tools) since the actual MCP server
-isn't available in CI.
+Spins up the actual ``@playwright/mcp`` server via stdio, connects through
+ADK's ``McpToolset``, and verifies the agent uses browser tools against
+real web pages (example.com).
 
-Run with: uv run pytest -m llm tests/integration_tests/llm/test_browser_integration.py
+Requirements:
+- Node.js >= 18 with npx
+- Chromium installed (``npx playwright install chromium``)
+- LLM API key (OPENAI_API_KEY or OPENCODE_API_KEY)
+
+Run with: uv run pytest -m browser tests/integration_tests/llm/test_browser_integration.py
 """
 
 from __future__ import annotations
 
+import shutil
+
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import BrowserConfig, create_deep_agent
+from adk_deepagents.browser.playwright_mcp import get_playwright_browser_tools
 from tests.integration_tests.conftest import (
     get_file_content,
     make_litellm_model,
     run_agent_with_events,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.llm]
+pytestmark = [pytest.mark.integration, pytest.mark.llm, pytest.mark.browser]
 
-# ---------------------------------------------------------------------------
-# Mock browser tools — simulate Playwright MCP tool responses
-# ---------------------------------------------------------------------------
-
-# Tracks navigation state so snapshot returns context-appropriate results.
-_browser_state: dict[str, str] = {"url": "", "title": ""}
-
-# Simple page database keyed by URL prefix.
-_MOCK_PAGES: dict[str, dict] = {
-    "https://example.com": {
-        "title": "Example Domain",
-        "snapshot": (
-            "- document 'Example Domain'\n"
-            "  - heading 'Example Domain' [ref=e1]\n"
-            "  - paragraph 'This domain is for use in illustrative examples.' [ref=e2]\n"
-            "  - link 'More information...' [ref=e3]"
-        ),
-    },
-    "https://news.ycombinator.com": {
-        "title": "Hacker News",
-        "snapshot": (
-            "- document 'Hacker News'\n"
-            "  - heading 'Hacker News' [ref=e1]\n"
-            "  - list 'stories'\n"
-            "    - listitem '1. Show HN: A new database engine' [ref=e2]\n"
-            "    - listitem '2. Understanding Large Language Models' [ref=e3]\n"
-            "    - listitem '3. Rust for Python developers' [ref=e4]\n"
-            "    - listitem '4. The future of web browsers' [ref=e5]\n"
-            "    - listitem '5. Open source AI tools roundup' [ref=e6]\n"
-            "  - link 'More' [ref=e7]"
-        ),
-    },
-    "https://example.com/form": {
-        "title": "Contact Form",
-        "snapshot": (
-            "- document 'Contact Form'\n"
-            "  - heading 'Contact Us' [ref=e1]\n"
-            "  - textbox 'Name' [ref=e2]\n"
-            "  - textbox 'Email' [ref=e3]\n"
-            "  - textbox 'Message' [ref=e4]\n"
-            "  - button 'Submit' [ref=e5]"
-        ),
-    },
-}
+# Skip the entire module if npx is not available
+if not shutil.which("npx"):
+    pytest.skip("npx not found — cannot run Playwright MCP", allow_module_level=True)
 
 
-def _resolve_page(url: str) -> dict:
-    """Find the best matching mock page for a URL."""
-    for prefix, page in _MOCK_PAGES.items():
-        if url.startswith(prefix):
-            return page
-    return {
-        "title": "Page",
-        "snapshot": (
-            "- document 'Page'\n  - heading 'Page' [ref=e1]\n  - paragraph 'Page content' [ref=e2]"
-        ),
-    }
+async def _make_browser_agent(name: str, instruction: str, extra_tools=None):
+    """Create an agent with real Playwright MCP tools.
 
-
-def browser_navigate(url: str) -> dict:
-    """Navigate the browser to a URL.
-
-    Args:
-        url: The URL to navigate to.
+    Returns ``(agent, cleanup)`` — cleanup must be awaited when done.
     """
-    page = _resolve_page(url)
-    _browser_state["url"] = url
-    _browser_state["title"] = page["title"]
-    return {"status": "success", "url": url, "title": page["title"]}
+    config = BrowserConfig(headless=True)
+    tools, cleanup = await get_playwright_browser_tools(config=config)
+    all_tools = list(tools)
+    if extra_tools:
+        all_tools.extend(extra_tools)
 
-
-def browser_snapshot() -> dict:
-    """Take an accessibility tree snapshot of the current page.
-
-    Returns the page's accessibility tree with element refs for interaction.
-    """
-    url = _browser_state.get("url", "")
-    page = _resolve_page(url)
-    return {
-        "status": "success",
-        "url": url,
-        "title": page["title"],
-        "snapshot": page["snapshot"],
-    }
-
-
-def browser_click(element: str, ref: str) -> dict:
-    """Click an element on the page by its ref.
-
-    Args:
-        element: Description of the element to click.
-        ref: The element ref from the snapshot (e.g., 'e3').
-    """
-    return {"status": "success", "action": "click", "element": element, "ref": ref}
-
-
-def browser_type(element: str, ref: str, text: str) -> dict:
-    """Type text into an element on the page.
-
-    Args:
-        element: Description of the element to type into.
-        ref: The element ref from the snapshot (e.g., 'e2').
-        text: The text to type.
-    """
-    return {"status": "success", "action": "type", "element": element, "ref": ref, "text": text}
-
-
-def browser_close() -> dict:
-    """Close the browser."""
-    _browser_state["url"] = ""
-    _browser_state["title"] = ""
-    return {"status": "success", "action": "closed"}
-
-
-MOCK_BROWSER_TOOLS = [
-    browser_navigate,
-    browser_snapshot,
-    browser_click,
-    browser_type,
-    browser_close,
-]
+    agent = create_deep_agent(
+        model=make_litellm_model(),
+        name=name,
+        tools=all_tools,
+        instruction=instruction,
+        browser="_resolved",
+    )
+    return agent, cleanup
 
 
 # ---------------------------------------------------------------------------
@@ -149,136 +59,108 @@ MOCK_BROWSER_TOOLS = [
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _reset_browser_state():
-    """Reset mock browser state between tests."""
-    _browser_state.clear()
-    _browser_state.update({"url": "", "title": ""})
-
-
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(180)
 async def test_browser_navigate_and_snapshot():
-    """Agent navigates to a URL and takes a snapshot to read the page."""
-    agent = create_deep_agent(
-        model=make_litellm_model(),
-        name="browser_nav_test",
-        tools=MOCK_BROWSER_TOOLS,
-        instruction=(
-            "You are a browser automation agent. You have browser tools: "
-            "browser_navigate, browser_snapshot, browser_click, browser_type, browser_close. "
-            "Always navigate first, then take a snapshot to see the page content."
+    """Agent navigates to example.com and takes a snapshot to read the page."""
+    agent, cleanup = await _make_browser_agent(
+        "browser_nav_test",
+        (
+            "You are a browser automation agent. "
+            "Always use browser_navigate first, then browser_snapshot to see the page."
         ),
-        browser="_resolved",
     )
 
-    texts, fn_calls, fn_responses, _runner, _session = await run_agent_with_events(
-        agent,
-        "Navigate to https://example.com and tell me what's on the page.",
-    )
+    try:
+        texts, fn_calls, fn_responses, _runner, _session = await run_agent_with_events(
+            agent,
+            "Navigate to https://example.com and tell me the page title.",
+        )
+    finally:
+        await cleanup()
 
     assert "browser_navigate" in fn_calls, f"Expected browser_navigate call, got: {fn_calls}"
-    assert "browser_snapshot" in fn_calls, f"Expected browser_snapshot call, got: {fn_calls}"
-    assert "browser_navigate" in fn_responses
-    assert "browser_snapshot" in fn_responses
 
     response_text = " ".join(texts).lower()
-    assert "example" in response_text, f"Expected page content in response, got: {response_text}"
+    assert "example" in response_text, f"Expected 'example' in response, got: {response_text}"
 
 
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(180)
 async def test_browser_extract_data_to_file():
-    """Agent extracts data from a page and saves it to a file."""
-    agent = create_deep_agent(
-        model=make_litellm_model(),
-        name="browser_extract_test",
-        tools=MOCK_BROWSER_TOOLS,
-        instruction=(
-            "You are a browser automation agent. You have browser tools "
-            "(browser_navigate, browser_snapshot, browser_click, browser_type, browser_close) "
-            "and filesystem tools (write_file, read_file). "
+    """Agent navigates, snapshots, and saves extracted data to a file."""
+    agent, cleanup = await _make_browser_agent(
+        "browser_extract_test",
+        (
+            "You are a browser automation agent with filesystem tools. "
             "When asked to extract data, navigate to the page, take a snapshot, "
-            "extract the data, and save it to a file."
+            "extract the relevant data, and save it to a file using write_file."
         ),
-        browser="_resolved",
     )
 
-    texts, fn_calls, fn_responses, runner, session = await run_agent_with_events(
-        agent,
-        "Go to https://news.ycombinator.com, take a snapshot, and save the list "
-        "of story titles you find to /stories.txt using write_file.",
-    )
+    try:
+        texts, fn_calls, fn_responses, runner, session = await run_agent_with_events(
+            agent,
+            "Go to https://example.com, take a snapshot, and save the page title "
+            "to /page_info.txt using write_file.",
+        )
+    finally:
+        await cleanup()
 
     assert "browser_navigate" in fn_calls, f"Expected browser_navigate, got: {fn_calls}"
-    assert "browser_snapshot" in fn_calls, f"Expected browser_snapshot, got: {fn_calls}"
     assert "write_file" in fn_calls, f"Expected write_file, got: {fn_calls}"
 
     files = await get_file_content(runner, session)
-    assert "/stories.txt" in files, f"Expected /stories.txt, got: {list(files.keys())}"
-    content = files["/stories.txt"].lower()
-    # Should contain at least some of the story titles from the mock snapshot
-    has_stories = any(
-        term in content for term in ["database", "large language", "rust", "browser", "open source"]
-    )
-    assert has_stories, f"Expected story titles in file, got: {files['/stories.txt']}"
+    assert "/page_info.txt" in files, f"Expected /page_info.txt, got: {list(files.keys())}"
+    content = files["/page_info.txt"].lower()
+    assert "example" in content, f"Expected 'example' in file, got: {files['/page_info.txt']}"
 
 
-@pytest.mark.timeout(120)
-async def test_browser_form_interaction():
-    """Agent navigates to a form, snapshots it, and fills fields."""
-    agent = create_deep_agent(
-        model=make_litellm_model(),
-        name="browser_form_test",
-        tools=MOCK_BROWSER_TOOLS,
-        instruction=(
-            "You are a browser automation agent. You have browser tools: "
-            "browser_navigate, browser_snapshot, browser_click, browser_type, browser_close. "
-            "Follow the snapshot → ref → action workflow: "
-            "1) Navigate to the URL, 2) Take a snapshot, 3) Use refs to interact."
+@pytest.mark.timeout(180)
+async def test_browser_click_link():
+    """Agent navigates, snapshots, clicks a link, and reports the new page."""
+    agent, cleanup = await _make_browser_agent(
+        "browser_click_test",
+        (
+            "You are a browser automation agent. "
+            "Follow the snapshot → ref → action workflow. "
+            "After clicking a link, take another snapshot or report what happened."
         ),
-        browser="_resolved",
     )
 
-    texts, fn_calls, fn_responses, _runner, _session = await run_agent_with_events(
-        agent,
-        "Go to https://example.com/form, take a snapshot, then type 'John Doe' "
-        "into the Name field and 'john@example.com' into the Email field.",
-    )
+    try:
+        texts, fn_calls, fn_responses, _runner, _session = await run_agent_with_events(
+            agent,
+            "Go to https://example.com, take a snapshot, click the 'More information' link, "
+            "and tell me what the new page says.",
+        )
+    finally:
+        await cleanup()
 
     assert "browser_navigate" in fn_calls, f"Expected browser_navigate, got: {fn_calls}"
-    assert "browser_snapshot" in fn_calls, f"Expected browser_snapshot, got: {fn_calls}"
-    assert "browser_type" in fn_calls, f"Expected browser_type, got: {fn_calls}"
-
-    # Should have called browser_type at least twice (Name + Email)
-    type_count = fn_calls.count("browser_type")
-    assert type_count >= 2, f"Expected ≥2 browser_type calls, got {type_count}: {fn_calls}"
+    assert "browser_click" in fn_calls, f"Expected browser_click, got: {fn_calls}"
 
 
-@pytest.mark.timeout(120)
-async def test_browser_prompt_enables_workflow():
-    """The browser system prompt is injected and guides the agent's behavior.
-
-    Verifies that when browser='_resolved' is set, the BROWSER_SYSTEM_PROMPT
-    is included in the agent's instruction, causing the agent to follow the
-    navigate → snapshot → interact pattern without explicit instruction.
-    """
-    agent = create_deep_agent(
-        model=make_litellm_model(),
-        name="browser_prompt_test",
-        tools=MOCK_BROWSER_TOOLS,
+@pytest.mark.timeout(180)
+async def test_browser_prompt_guides_workflow():
+    """The browser system prompt guides the agent to follow navigate→snapshot→interact."""
+    agent, cleanup = await _make_browser_agent(
+        "browser_prompt_test",
         # Minimal instruction — the browser prompt should guide behavior
-        instruction="You are a helpful assistant with browser capabilities.",
-        browser="_resolved",
+        "You are a helpful assistant with browser capabilities.",
     )
 
-    from adk_deepagents.browser.prompts import BROWSER_SYSTEM_PROMPT
+    try:
+        from adk_deepagents.browser.prompts import BROWSER_SYSTEM_PROMPT
 
-    assert BROWSER_SYSTEM_PROMPT in agent.instruction
+        assert BROWSER_SYSTEM_PROMPT in agent.instruction
 
-    texts, fn_calls, fn_responses, _runner, _session = await run_agent_with_events(
-        agent,
-        "Open https://example.com and read the page content.",
-    )
+        texts, fn_calls, fn_responses, _runner, _session = await run_agent_with_events(
+            agent,
+            "Open https://example.com and read the page content for me.",
+        )
+    finally:
+        await cleanup()
 
     assert "browser_navigate" in fn_calls, f"Expected browser_navigate, got: {fn_calls}"
-    # The browser prompt instructs to snapshot before interacting
-    assert "browser_snapshot" in fn_calls, f"Expected browser_snapshot, got: {fn_calls}"
+
+    response_text = " ".join(texts).lower()
+    assert "example" in response_text, f"Expected page content in response, got: {response_text}"

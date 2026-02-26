@@ -148,7 +148,9 @@ async def get_playwright_browser_tools(
         If connection to the Playwright MCP server fails.
     """
     try:
-        from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
+        from mcp.client.stdio import StdioServerParameters
+
+        from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StdioConnectionParams
     except ImportError as e:
         raise ImportError("MCP toolset not available. Ensure google-adk[mcp] is installed.") from e
 
@@ -158,12 +160,16 @@ async def get_playwright_browser_tools(
     server_args = _build_server_args(config)
 
     try:
-        tools, exit_stack = await MCPToolset.from_server(
-            connection_params=StdioServerParameters(
-                command=command,
-                args=server_args,
+        toolset = McpToolset(
+            connection_params=StdioConnectionParams(
+                server_params=StdioServerParameters(
+                    command=command,
+                    args=server_args,
+                ),
+                timeout=60.0,
             ),
         )
+        tools = await toolset.get_tools()
     except Exception as e:
         raise RuntimeError(
             f"Failed to connect to Playwright MCP server: {e}. "
@@ -183,7 +189,7 @@ async def get_playwright_browser_tools(
     async def cleanup() -> None:
         """Close the MCP server connection."""
         try:
-            await exit_stack.aclose()
+            await toolset.close()
         except Exception:
             logger.exception("Error closing Playwright MCP connection")
 
