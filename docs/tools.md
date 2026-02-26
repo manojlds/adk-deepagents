@@ -541,6 +541,46 @@ Tool call: install_packages(packages=["requests", "pandas"])
 
 ---
 
+## Browser Tools
+
+When you set `browser="playwright"` or pass a `BrowserConfig` to `create_deep_agent_async()`, browser automation tools are added via the [@playwright/mcp](https://github.com/microsoft/playwright-mcp) MCP server. These tools use accessibility tree snapshots for reliable, token-efficient page interaction.
+
+> **Note:** Browser tools require `create_deep_agent_async()` since the MCP connection is resolved asynchronously. See the [Browser Automation](browser.md) guide for full details.
+
+```python
+from adk_deepagents import create_deep_agent_async
+
+agent, cleanup = await create_deep_agent_async(
+    browser="playwright",
+)
+```
+
+**Core browser tools:**
+
+| Tool | Description |
+|---|---|
+| `browser_navigate(url)` | Navigate to a URL |
+| `browser_snapshot()` | Capture accessibility tree with element refs |
+| `browser_click(element, ref)` | Click an element by ref |
+| `browser_type(element, ref, text)` | Type text into an element |
+| `browser_fill_form(values)` | Fill multiple form fields at once |
+| `browser_select_option(element, ref, values)` | Select dropdown option(s) |
+| `browser_hover(element, ref)` | Hover over an element |
+| `browser_press_key(key)` | Press a keyboard key |
+| `browser_wait_for(...)` | Wait for text, element, or time |
+| `browser_take_screenshot(...)` | Capture a screenshot |
+| `browser_close()` | Close the browser |
+
+**Example usage by the LLM:**
+```
+Tool call: browser_navigate(url="https://example.com")
+Tool call: browser_snapshot()
+Tool call: browser_click(element="Submit button", ref="e5")
+Tool call: browser_type(element="Email input", ref="e1", text="user@example.com")
+```
+
+---
+
 ## Sub-Agent Tools
 
 When you pass `subagents=[...]` to `create_deep_agent()`, each sub-agent specification becomes an `AgentTool` — an ADK tool that spawns a child `LlmAgent` to handle a task.

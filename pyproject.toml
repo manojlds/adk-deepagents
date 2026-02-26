@@ -15,6 +15,9 @@ dependencies = [
 skills = [
     "adk-skills-agent>=0.1.0",
 ]
+browser = [
+    "google-adk[mcp]>=1.0.0",
+]
 
 [dependency-groups]
 dev = [

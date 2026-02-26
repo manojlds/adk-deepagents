@@ -358,3 +358,193 @@ async def main():
         if cleanup:
             await cleanup()
 ```
+
+---
+
+## Browser Agent
+
+**Location:** `examples/browser_agent/`
+
+Demonstrates autonomous web interaction via [@playwright/mcp](https://github.com/microsoft/playwright-mcp) — navigating websites, filling forms, extracting data, and performing multi-step browser workflows.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│          Browser Agent                  │
+│  Model: gemini-2.5-flash                │
+│  Backend: StateBackend (default)        │
+│                                         │
+│  Tools:                                 │
+│  ├─ Filesystem (ls, read, write, ...)   │
+│  ├─ Todos (write_todos, read_todos)     │
+│  └─ Browser (via @playwright/mcp):      │
+│     ├─ browser_navigate                 │
+│     ├─ browser_snapshot                 │
+│     ├─ browser_click                    │
+│     ├─ browser_type                     │
+│     ├─ browser_fill_form                │
+│     ├─ browser_take_screenshot          │
+│     └─ ... (20+ tools)                  │
+└─────────────────────────────────────────┘
+```
+
+### Configuration Choices
+
+| Feature | Choice | Why |
+|---|---|---|
+| Browser | `BrowserConfig(headless=True, browser="chromium")` | Default headless Chromium via Playwright MCP |
+| Async | `create_deep_agent_async(browser=...)` | MCP tools require async resolution |
+| Approach | ARIA accessibility tree snapshots | Token-efficient, deterministic element targeting |
+
+### Key Code
+
+```python
+from adk_deepagents import BrowserConfig, create_deep_agent_async
+
+agent, cleanup = await create_deep_agent_async(
+    name="browser_agent",
+    instruction=_build_prompt(),
+    browser=BrowserConfig(headless=True, browser="chromium"),
+)
+```
+
+### How to Run
+
+```bash
+# Requires Node.js >= 18 (for @playwright/mcp via npx)
+python -m examples.browser_agent.agent
+```
+
+---
+
+## Browser Research
+
+**Location:** `examples/browser_research/`
+
+A hybrid research agent combining web search APIs with browser automation. Uses search for discovery and simple pages, and Playwright MCP browser tools for JavaScript-heavy sites and interactive content.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│         Orchestrator (browser_research)          │
+│  Model: configurable                             │
+│  Tools: web_search, think, browser_*             │
+│  Summarization: trigger=0.75, keep=8             │
+│                                                  │
+│  Dynamic subagent types:                         │
+│  └─ browser_researcher                           │
+│     └─ Navigates complex/JS-heavy pages          │
+│                                                  │
+│  Workflow:                                       │
+│  1. Plan → create todo list                      │
+│  2. Search → web_search for discovery            │
+│  3. Browse → browser tools for complex pages     │
+│  4. Synthesize → combine findings                │
+│  5. Write → /report.md                           │
+└─────────────────────────────────────────────────┘
+```
+
+### Configuration Choices
+
+| Feature | Choice | Why |
+|---|---|---|
+| Search | Reuses deep_research web_search tool | Provider-routed (Serper/Tavily/Brave/DDG) |
+| Browser | Playwright MCP via `BrowserConfig` | For JS-heavy pages search APIs can't access |
+| Delegation | Dynamic `task` tool with browser_researcher | Isolates browser context from main agent |
+
+### Key Code
+
+```python
+from adk_deepagents import BrowserConfig, DynamicTaskConfig, create_deep_agent_async
+
+agent, cleanup = await create_deep_agent_async(
+    name="browser_research",
+    tools=[web_search, think],
+    subagents=[browser_researcher_subagent],
+    browser=BrowserConfig(headless=True),
+    delegation_mode="dynamic",
+    dynamic_task_config=DynamicTaskConfig(max_parallel=2, max_depth=2),
+)
+```
+
+### How to Run
+
+```bash
+# Requires SERPER_API_KEY or TAVILY_API_KEY + Node.js >= 18
+python -m examples.browser_research.agent
+```
+
+---
+
+## Browser Skill
+
+**Location:** `examples/browser_skill/`
+
+Demonstrates the skill-based approach to browser automation using [agent-browser](https://github.com/vercel-labs/agent-browser) CLI. The agent discovers the browser skill via adk-skills and executes `agent-browser` CLI commands through shell execution.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────┐
+│                 browser_skill                     │
+│  Model: gemini-2.5-flash                          │
+│  Execution: local (subprocess)                    │
+│  Skills: ../skills/ (agent-browser SKILL.md)      │
+│                                                   │
+│  Tools:                                           │
+│  ├─ Filesystem (ls, read, write, ...)             │
+│  ├─ Todos (write_todos, read_todos)               │
+│  ├─ Skills (use_skill, run_script, read_reference)│
+│  └─ execute (subprocess.run)                      │
+│                                                   │
+│  Workflow:                                        │
+│  1. Activate skill → use_skill("agent-browser")   │
+│  2. Learn CLI → skill teaches commands            │
+│  3. Execute → agent-browser via execute tool      │
+│  4. Parse output → read CLI JSON output           │
+└──────────────────────────────────────────────────┘
+```
+
+### Configuration Choices
+
+| Feature | Choice | Why |
+|---|---|---|
+| Approach | CLI skill via adk-skills | Agent learns commands on demand, no async needed |
+| Execution | `"local"` | Runs agent-browser CLI via subprocess |
+| Skills | `[SKILLS_DIR]` pointing to `../skills/` | Discovers `agent-browser/SKILL.md` |
+
+### Two Approaches Compared
+
+| | Browser Skill (this) | Browser Agent (MCP) |
+|---|---|---|
+| Integration | adk-skills + shell | McpToolset (ADK-native) |
+| How agent uses it | `execute("agent-browser open ...")` | `browser_navigate(url=...)` |
+| Async required | No | Yes |
+| Best for | Agents with shell access | Autonomous programmatic agents |
+
+### Key Code
+
+```python
+from adk_deepagents import create_deep_agent
+
+agent = create_deep_agent(
+    name="browser_skill",
+    instruction=BROWSER_SKILL_INSTRUCTIONS,
+    skills=[SKILLS_DIR],    # Discovers agent-browser SKILL.md
+    execution="local",      # Shell access for CLI commands
+)
+```
+
+### How to Run
+
+```bash
+# Requires agent-browser CLI
+npm install -g agent-browser
+
+python -m examples.browser_skill.agent
+
+# Or with ADK CLI
+adk run examples/browser_skill/
+```

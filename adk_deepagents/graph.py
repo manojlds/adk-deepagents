@@ -26,7 +26,13 @@ from adk_deepagents.tools.task import (
 )
 from adk_deepagents.tools.task_dynamic import create_dynamic_task_tool
 from adk_deepagents.tools.todos import read_todos, write_todos
-from adk_deepagents.types import DynamicTaskConfig, SkillsConfig, SubAgentSpec, SummarizationConfig
+from adk_deepagents.types import (
+    BrowserConfig,
+    DynamicTaskConfig,
+    SkillsConfig,
+    SubAgentSpec,
+    SummarizationConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Default backend factory
@@ -82,6 +88,7 @@ def create_deep_agent(
     output_schema: Any = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
+    browser: BrowserConfig | str | None = None,
     summarization: SummarizationConfig | None = None,
     delegation_mode: Literal["static", "dynamic", "both"] = "static",
     dynamic_task_config: DynamicTaskConfig | None = None,
@@ -121,6 +128,10 @@ def create_deep_agent(
         ``"local"`` for subprocess, or a dict of MCP config. For
         ``"heimdall"`` or dict configs, use ``create_deep_agent_async()``
         or pre-resolve MCP tools via ``tools``.
+    browser:
+        Browser automation backend. ``"playwright"`` for Playwright MCP,
+        or a ``BrowserConfig`` for custom configuration. Requires
+        ``create_deep_agent_async()`` to resolve MCP tools.
     summarization:
         Optional ``SummarizationConfig`` for context window management.
     delegation_mode:
@@ -205,6 +216,18 @@ def create_deep_agent(
             warnings.warn(
                 f"execution={execution!r} requires async MCP tool resolution. "
                 "Use create_deep_agent_async() or pre-resolve MCP tools "
+                "and pass them via the `tools` parameter.",
+                stacklevel=2,
+            )
+
+    # 4b. Browser tools
+    has_browser = False
+    if browser:
+        has_browser = True
+        if browser != "_resolved":
+            warnings.warn(
+                f"browser={browser!r} requires async MCP tool resolution. "
+                "Use create_deep_agent_async() or pre-resolve browser MCP tools "
                 "and pass them via the `tools` parameter.",
                 stacklevel=2,
             )
@@ -300,6 +323,11 @@ def create_deep_agent(
     if instruction:
         full_instruction = instruction + "\n\n" + BASE_AGENT_PROMPT
 
+    if has_browser:
+        from adk_deepagents.browser.prompts import BROWSER_SYSTEM_PROMPT
+
+        full_instruction = full_instruction + "\n\n" + BROWSER_SYSTEM_PROMPT
+
     # 8. Assemble all tools
     all_tools: list[Any] = list(core_tools) + subagent_tools
 
@@ -336,6 +364,7 @@ async def create_deep_agent_async(
     output_schema: Any = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
+    browser: BrowserConfig | str | None = None,
     summarization: SummarizationConfig | None = None,
     delegation_mode: Literal["static", "dynamic", "both"] = "static",
     dynamic_task_config: DynamicTaskConfig | None = None,
@@ -345,7 +374,8 @@ async def create_deep_agent_async(
 ) -> tuple[LlmAgent, Callable | None]:
     """Async variant of ``create_deep_agent()`` that resolves MCP tools.
 
-    Use this when ``execution="heimdall"`` or ``execution=dict(...)``.
+    Use this when ``execution="heimdall"``, ``execution=dict(...)``,
+    or ``browser="playwright"``.
     Returns ``(agent, cleanup_fn)`` where ``cleanup_fn`` must be awaited
     when the agent is no longer needed.
 
@@ -358,18 +388,35 @@ async def create_deep_agent_async(
     tuple[LlmAgent, Callable | None]
         The agent and an optional async cleanup function for MCP connections.
     """
-    cleanup_fn: Callable | None = None
+    cleanup_fns: list[Callable] = []
     mcp_tools: list = []
 
-    # Resolve MCP tools if needed
+    # Resolve execution MCP tools if needed
     if execution == "heimdall":
         from adk_deepagents.execution.heimdall import get_heimdall_tools
 
-        mcp_tools, cleanup_fn = await get_heimdall_tools()
+        exec_tools, exec_cleanup = await get_heimdall_tools()
+        mcp_tools.extend(exec_tools)
+        cleanup_fns.append(exec_cleanup)
     elif isinstance(execution, dict):
         from adk_deepagents.execution.heimdall import get_heimdall_tools_from_config
 
-        mcp_tools, cleanup_fn = await get_heimdall_tools_from_config(execution)
+        exec_tools, exec_cleanup = await get_heimdall_tools_from_config(execution)
+        mcp_tools.extend(exec_tools)
+        cleanup_fns.append(exec_cleanup)
+
+    # Resolve browser MCP tools if needed
+    browser_config: BrowserConfig | None = None
+    if browser == "playwright" or isinstance(browser, BrowserConfig):
+        from adk_deepagents.browser.playwright_mcp import get_playwright_browser_tools
+
+        browser_config = browser if isinstance(browser, BrowserConfig) else BrowserConfig()
+
+        browser_tools, browser_cleanup = await get_playwright_browser_tools(
+            config=browser_config,
+        )
+        mcp_tools.extend(browser_tools)
+        cleanup_fns.append(browser_cleanup)
 
     # Merge MCP tools with user tools
     combined_tools: list[Callable] = list(tools or []) + mcp_tools
@@ -379,6 +426,16 @@ async def create_deep_agent_async(
     effective_execution: str | dict | None = execution
     if execution == "heimdall" or isinstance(execution, dict):
         effective_execution = "_resolved" if mcp_tools else None
+
+    # Signal that browser tools are resolved
+    effective_browser: BrowserConfig | str | None = browser
+    if browser == "playwright" or isinstance(browser, BrowserConfig):
+        effective_browser = "_resolved" if browser_config else None
+
+    # Build a single cleanup function
+    async def cleanup() -> None:
+        for fn in cleanup_fns:
+            await fn()
 
     agent = create_deep_agent(
         model=model,
@@ -391,6 +448,7 @@ async def create_deep_agent_async(
         output_schema=output_schema,
         backend=backend,
         execution=effective_execution,
+        browser=effective_browser,
         summarization=summarization,
         delegation_mode=delegation_mode,
         dynamic_task_config=dynamic_task_config,
@@ -399,4 +457,4 @@ async def create_deep_agent_async(
         name=name,
     )
 
-    return agent, cleanup_fn
+    return agent, cleanup
