@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 from adk_deepagents import __version__
 from adk_deepagents.cli.config import (
@@ -19,6 +23,42 @@ from adk_deepagents.cli.config import (
     resolve_cli_paths,
     save_cli_defaults,
 )
+
+MODEL_ENV_VAR = "ADK_DEEPAGENTS_MODEL"
+
+
+def _normalize_model(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+
+    stripped = raw.strip()
+    return stripped or None
+
+
+def _load_workspace_env() -> None:
+    """Load environment variables from the current workspace `.env` file."""
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+
+
+def resolve_model(cli_model: str | None, defaults: CliDefaults) -> str | None:
+    """Resolve model precedence as CLI flag > env var > config default."""
+    explicit_model = _normalize_model(cli_model)
+    if explicit_model is not None:
+        return explicit_model
+
+    env_model = _normalize_model(os.environ.get(MODEL_ENV_VAR))
+    if env_model is not None:
+        return env_model
+
+    return _normalize_model(defaults.default_model)
+
+
+def _parse_model(raw: str) -> str:
+    """Parse and normalize a model argument value."""
+    value = raw.strip()
+    if not value:
+        raise argparse.ArgumentTypeError("--model cannot be empty.")
+    return value
 
 
 def _parse_shell_allow_list(raw: str) -> list[str]:
@@ -63,7 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        help="Override the model for this run and persist as the new default.",
+        type=_parse_model,
+        help=(
+            "Override the model for this run and persist as the new default "
+            f"(precedence: --model > {MODEL_ENV_VAR} > config default)."
+        ),
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -176,7 +220,10 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         print(f"Reset profile '{args.agent}'.")
         return 0
 
+    _load_workspace_env()
+
     resolved_agent = args.agent or defaults.default_agent or DEFAULT_AGENT_NAME
+    resolved_model = resolve_model(args.model, defaults)
 
     try:
         ensure_profile_memory(paths, resolved_agent)
@@ -190,8 +237,8 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         defaults.default_agent = resolved_agent
         should_save_defaults = True
 
-    if args.model is not None and args.model != defaults.default_model:
-        defaults.default_model = args.model
+    if args.model is not None and resolved_model != defaults.default_model:
+        defaults.default_model = resolved_model
         should_save_defaults = True
 
     if should_save_defaults:

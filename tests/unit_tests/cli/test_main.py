@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -13,9 +14,16 @@ from adk_deepagents.cli.config import (
     CONFIG_FILENAME,
     PROFILE_MEMORY_FILENAME,
     PROFILES_DIRNAME,
+    CliDefaults,
     default_profile_template,
 )
-from adk_deepagents.cli.main import build_parser, cli_main
+from adk_deepagents.cli.main import (
+    MODEL_ENV_VAR,
+    _load_workspace_env,
+    build_parser,
+    cli_main,
+    resolve_model,
+)
 
 
 def test_build_parser_parses_non_interactive_surface_flags() -> None:
@@ -76,6 +84,7 @@ def test_cli_main_help_returns_exit_code_zero(capsys) -> None:
     assert "list" in captured.out
     assert "reset" in captured.out
     assert "--shell-allow-list" in captured.out
+    assert MODEL_ENV_VAR in captured.out
 
 
 def test_cli_main_version_flag_prints_version(capsys) -> None:
@@ -108,6 +117,62 @@ def test_cli_main_reset_requires_agent(capsys) -> None:
 
     assert exit_code == 2
     assert "reset requires --agent <name>" in captured.err
+
+
+def test_cli_main_rejects_empty_model_flag(capsys) -> None:
+    exit_code = cli_main(["--model", "   "])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "--model cannot be empty." in captured.err
+
+
+def test_resolve_model_prefers_cli_over_env_and_config(monkeypatch) -> None:
+    defaults = CliDefaults(default_agent="agent", default_model="config-model")
+    monkeypatch.setenv(MODEL_ENV_VAR, "env-model")
+
+    assert resolve_model("cli-model", defaults) == "cli-model"
+
+
+def test_resolve_model_falls_back_to_env_then_config(monkeypatch) -> None:
+    defaults = CliDefaults(default_agent="agent", default_model="config-model")
+
+    monkeypatch.setenv(MODEL_ENV_VAR, "env-model")
+    assert resolve_model(None, defaults) == "env-model"
+
+    monkeypatch.setenv(MODEL_ENV_VAR, "   ")
+    assert resolve_model(None, defaults) == "config-model"
+
+    monkeypatch.delenv(MODEL_ENV_VAR, raising=False)
+    assert resolve_model(None, defaults) == "config-model"
+
+
+def test_resolve_model_returns_none_when_all_sources_missing(monkeypatch) -> None:
+    defaults = CliDefaults(default_agent="agent", default_model=None)
+    monkeypatch.delenv(MODEL_ENV_VAR, raising=False)
+
+    assert resolve_model(None, defaults) is None
+
+
+def test_workspace_dotenv_does_not_override_exported_model(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(f"{MODEL_ENV_VAR}=dotenv-model\n", encoding="utf-8")
+    monkeypatch.setenv(MODEL_ENV_VAR, "shell-model")
+
+    _load_workspace_env()
+
+    assert os.environ[MODEL_ENV_VAR] == "shell-model"
+
+
+def test_workspace_dotenv_model_fallback_is_used_when_env_is_missing(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(f"{MODEL_ENV_VAR}=dotenv-model\n", encoding="utf-8")
+    monkeypatch.delenv(MODEL_ENV_VAR, raising=False)
+
+    _load_workspace_env()
+    defaults = CliDefaults(default_agent="agent", default_model="config-model")
+
+    assert resolve_model(None, defaults) == "dotenv-model"
 
 
 def test_cli_bootstrap_creates_config_and_profile_paths(tmp_path, monkeypatch) -> None:
