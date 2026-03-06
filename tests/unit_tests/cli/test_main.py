@@ -245,9 +245,7 @@ def test_cli_non_interactive_cli_model_overrides_env(
 
     monkeypatch.setattr(cli_main_module, "run_non_interactive", fake_run_non_interactive)
 
-    exit_code = cli_main(
-        ["--agent", "demo", "-n", "Say hello", "-q", "--model", "model-from-cli"]
-    )
+    exit_code = cli_main(["--agent", "demo", "-n", "Say hello", "-q", "--model", "model-from-cli"])
     _ = capsys.readouterr()
 
     assert exit_code == 0

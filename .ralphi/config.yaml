@@ -1,0 +1,29 @@
+# ralphi ralph configuration
+# Auto-generated — edit as needed
+
+project:
+  name: "adk-deepagents"
+  language: "Python"
+  framework: "Google ADK"
+
+commands:
+  test: 'uv run pytest -m "not llm"'
+  lint: 'uv run ruff format --check . && uv run ruff check .'
+  build: "uv build"
+  typecheck: "uv run ty check"
+
+rules:
+  - "use uv for dependency management and command execution"
+  - "run ruff format check before ruff lint checks"
+  - "keep line length at 100 characters"
+  - "place unit tests in tests/unit_tests and integration tests in tests/integration_tests"
+  - "use pytest markers consistently: integration, llm, browser"
+  - "follow existing module boundaries under adk_deepagents"
+
+boundaries:
+  never_touch:
+    - "*.lock"
+    - ".env*"
+
+engine: "pi"
+max_retries: 3

@@ -207,7 +207,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Vaibhav Ralph (loop state)
+# Legacy Ralph loop artifacts
 prd.json
 progress.txt
-.vaibhav/.last-branch
+
+# ralphi
+.ralphi/*
+!.ralphi/config.yaml
