@@ -6,6 +6,8 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+from dotenv import find_dotenv, load_dotenv
+
 from adk_deepagents import __version__
 from adk_deepagents.cli.config import ensure_config
 from adk_deepagents.cli.models import DEFAULT_AGENT_NAME
@@ -127,6 +129,13 @@ def build_parser() -> argparse.ArgumentParser:
     threads_delete_parser.add_argument("thread_id", help="Thread/session ID.")
 
     return parser
+
+
+def _load_project_env() -> None:
+    """Load .env from the current working directory (and parents) when present."""
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path=dotenv_path, override=False)
 
 
 def _resolve_or_create_thread(
@@ -305,6 +314,8 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint used by console scripts and module execution."""
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    _load_project_env()
 
     if args.version:
         print(f"adk-deepagents {__version__}")

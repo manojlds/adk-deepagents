@@ -34,6 +34,34 @@ def test_build_parser_parses_non_interactive_flags() -> None:
     assert args.no_stream is True
 
 
+def test_load_project_env_loads_dotenv_when_found(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_main_module, "find_dotenv", lambda usecwd: "/tmp/.env")
+
+    def _fake_load_dotenv(*, dotenv_path: str, override: bool) -> bool:
+        calls["dotenv_path"] = dotenv_path
+        calls["override"] = override
+        return True
+
+    monkeypatch.setattr(cli_main_module, "load_dotenv", _fake_load_dotenv)
+
+    cli_main_module._load_project_env()
+
+    assert calls == {"dotenv_path": "/tmp/.env", "override": False}
+
+
+def test_load_project_env_skips_load_when_not_found(monkeypatch) -> None:
+    monkeypatch.setattr(cli_main_module, "find_dotenv", lambda usecwd: "")
+    monkeypatch.setattr(
+        cli_main_module,
+        "load_dotenv",
+        lambda **_: (_ for _ in ()).throw(AssertionError("load_dotenv should not be called")),
+    )
+
+    cli_main_module._load_project_env()
+
+
 def test_cli_version_flag_prints_version(capsys) -> None:
     exit_code = cli_main(["--version"])
     captured = capsys.readouterr()
