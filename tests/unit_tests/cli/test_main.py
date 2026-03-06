@@ -14,6 +14,7 @@ from adk_deepagents.cli.config import (
     CONFIG_FILENAME,
     PROFILE_MEMORY_FILENAME,
     PROFILES_DIRNAME,
+    SESSIONS_DB_FILENAME,
     CliDefaults,
     default_profile_template,
 )
@@ -24,6 +25,7 @@ from adk_deepagents.cli.main import (
     cli_main,
     resolve_model,
 )
+from adk_deepagents.cli.session_store import get_latest_thread, list_threads
 
 
 def test_build_parser_parses_non_interactive_surface_flags() -> None:
@@ -72,6 +74,19 @@ def test_build_parser_parses_profile_commands() -> None:
     args = parser.parse_args(["reset", "--agent", "demo"])
 
     assert args.command == "reset"
+    assert args.command_arg is None
+    assert args.command_arg2 is None
+    assert args.agent == "demo"
+
+
+def test_build_parser_parses_threads_subcommands() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["threads", "delete", "thread-123", "--agent", "demo"])
+
+    assert args.command == "threads"
+    assert args.command_arg == "delete"
+    assert args.command_arg2 == "thread-123"
     assert args.agent == "demo"
 
 
@@ -83,6 +98,7 @@ def test_cli_main_help_returns_exit_code_zero(capsys) -> None:
     assert "adk-deepagents" in captured.out
     assert "list" in captured.out
     assert "reset" in captured.out
+    assert "threads" in captured.out
     assert "--shell-allow-list" in captured.out
     assert MODEL_ENV_VAR in captured.out
 
@@ -117,6 +133,30 @@ def test_cli_main_reset_requires_agent(capsys) -> None:
 
     assert exit_code == 2
     assert "reset requires --agent <name>" in captured.err
+
+
+def test_cli_main_threads_requires_subcommand(capsys) -> None:
+    exit_code = cli_main(["threads"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "threads requires a subcommand" in captured.err
+
+
+def test_cli_main_threads_delete_requires_thread_id(capsys) -> None:
+    exit_code = cli_main(["threads", "delete"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "threads delete requires <thread_id>" in captured.err
+
+
+def test_cli_main_rejects_resume_with_threads_command(capsys) -> None:
+    exit_code = cli_main(["threads", "list", "--resume"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "--resume cannot be combined with list/reset/threads commands" in captured.err
 
 
 def test_cli_main_rejects_empty_model_flag(capsys) -> None:
@@ -185,6 +225,7 @@ def test_cli_bootstrap_creates_config_and_profile_paths(tmp_path, monkeypatch) -
     assert home_dir.is_dir()
     assert (home_dir / CONFIG_FILENAME).is_file()
     assert (home_dir / PROFILES_DIRNAME / "agent" / PROFILE_MEMORY_FILENAME).is_file()
+    assert (home_dir / SESSIONS_DB_FILENAME).is_file()
 
 
 def test_cli_loads_and_saves_defaults_across_reruns(tmp_path, monkeypatch) -> None:
@@ -252,6 +293,108 @@ def test_reset_rejects_invalid_profile_name(tmp_path, monkeypatch, capsys) -> No
 
     assert exit_code == 1
     assert "failed to reset profile" in captured.err
+
+
+def test_threads_list_and_ls_are_profile_aware_and_sorted(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    assert cli_main(["--agent", "alpha"]) == 0
+    assert cli_main(["--agent", "beta"]) == 0
+    assert cli_main(["--agent", "alpha"]) == 0
+
+    expected = list_threads(
+        db_path=home_dir / SESSIONS_DB_FILENAME,
+        user_id="local",
+        agent_name="alpha",
+        limit=20,
+    )
+
+    capsys.readouterr()
+    assert cli_main(["threads", "list", "--agent", "alpha"]) == 0
+    list_out = capsys.readouterr().out
+
+    capsys.readouterr()
+    assert cli_main(["threads", "ls", "--agent", "alpha"]) == 0
+    ls_out = capsys.readouterr().out
+
+    list_ids = [line.split("\t", maxsplit=1)[0] for line in list_out.strip().splitlines()[2:]]
+    expected_ids = [thread.session_id for thread in expected]
+
+    assert list_ids == expected_ids
+    assert "beta" not in list_out
+    assert ls_out == list_out
+
+
+def test_threads_delete_removes_session(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    assert cli_main(["--agent", "demo"]) == 0
+    latest = get_latest_thread(
+        db_path=home_dir / SESSIONS_DB_FILENAME,
+        user_id="local",
+        agent_name="demo",
+    )
+    assert latest is not None
+
+    capsys.readouterr()
+    delete_exit = cli_main(["threads", "delete", latest.session_id, "--agent", "demo"])
+    delete_output = capsys.readouterr()
+
+    assert delete_exit == 0
+    assert "Deleted thread" in delete_output.out
+
+    capsys.readouterr()
+    missing_exit = cli_main(["threads", "delete", latest.session_id, "--agent", "demo"])
+    missing_output = capsys.readouterr()
+
+    assert missing_exit == 1
+    assert "was not found" in missing_output.err
+
+
+def test_resume_latest_requires_existing_thread(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    exit_code = cli_main(["--agent", "demo", "--resume"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "failed to resolve thread" in captured.err
+
+
+def test_resume_supports_latest_and_explicit_ids(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    assert cli_main(["--agent", "demo"]) == 0
+
+    threads_before = list_threads(
+        db_path=home_dir / SESSIONS_DB_FILENAME,
+        user_id="local",
+        agent_name="demo",
+        limit=20,
+    )
+    assert len(threads_before) == 1
+
+    thread_id = threads_before[0].session_id
+    assert cli_main(["--agent", "demo", "--resume"]) == 0
+    assert cli_main(["--agent", "demo", "--resume", thread_id]) == 0
+
+    threads_after = list_threads(
+        db_path=home_dir / SESSIONS_DB_FILENAME,
+        user_id="local",
+        agent_name="demo",
+        limit=20,
+    )
+    assert [thread.session_id for thread in threads_after] == [thread_id]
+
+    exit_code = cli_main(["--agent", "demo", "--resume", "missing-thread"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "failed to resolve thread" in captured.err
 
 
 def test_python_module_entrypoint_help_works() -> None:

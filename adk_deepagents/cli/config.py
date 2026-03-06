@@ -13,6 +13,7 @@ CLI_HOME_DIRNAME = ".adk-deepagents"
 CONFIG_FILENAME = "config.toml"
 PROFILES_DIRNAME = "profiles"
 PROFILE_MEMORY_FILENAME = "AGENTS.md"
+SESSIONS_DB_FILENAME = "sessions.db"
 
 DEFAULT_AGENT_NAME = "agent"
 
@@ -26,6 +27,7 @@ class CliPaths:
     root_dir: Path
     config_path: Path
     profiles_dir: Path
+    sessions_db_path: Path
 
 
 @dataclass
@@ -48,6 +50,7 @@ def resolve_cli_paths(home_dir: Path | None = None) -> CliPaths:
         root_dir=root_dir,
         config_path=root_dir / CONFIG_FILENAME,
         profiles_dir=root_dir / PROFILES_DIRNAME,
+        sessions_db_path=root_dir / SESSIONS_DB_FILENAME,
     )
 
 

@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,8 +24,16 @@ from adk_deepagents.cli.config import (
     resolve_cli_paths,
     save_cli_defaults,
 )
+from adk_deepagents.cli.session_store import (
+    create_thread,
+    delete_thread,
+    get_latest_thread,
+    get_thread,
+    list_threads,
+)
 
 MODEL_ENV_VAR = "ADK_DEEPAGENTS_MODEL"
+CLI_USER_ID = "local"
 
 
 def _normalize_model(raw: str | None) -> str | None:
@@ -89,8 +98,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("list", "reset"),
-        help="Profile command to run.",
+        choices=("list", "reset", "threads"),
+        help="Profile command to run (list, reset, threads).",
+    )
+    parser.add_argument(
+        "command_arg",
+        nargs="?",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "command_arg2",
+        nargs="?",
+        help=argparse.SUPPRESS,
     )
 
     parser.add_argument(
@@ -160,15 +179,34 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.shell_allow_list is not None and args.non_interactive_prompt is None:
         parser.error("--shell-allow-list requires -n/--non-interactive.")
 
-    if args.command in {"list", "reset"} and (
+    if args.command in {"list", "reset", "threads"} and (
         args.non_interactive_prompt is not None or args.message_prompt is not None
     ):
         parser.error(
-            "list/reset commands cannot be combined with -n/--non-interactive or -m/--message."
+            "list/reset/threads commands cannot be combined with "
+            "-n/--non-interactive or -m/--message."
         )
+
+    if args.command in {"list", "reset", "threads"} and args.resume is not None:
+        parser.error("--resume cannot be combined with list/reset/threads commands.")
+
+    if args.command != "threads" and (
+        args.command_arg is not None or args.command_arg2 is not None
+    ):
+        parser.error("Unexpected extra command arguments.")
 
     if args.command == "reset" and args.agent is None:
         parser.error("reset requires --agent <name>.")
+
+    if args.command == "threads":
+        if args.command_arg not in {"list", "ls", "delete"}:
+            parser.error("threads requires a subcommand: list, ls, or delete.")
+
+        if args.command_arg in {"list", "ls"} and args.command_arg2 is not None:
+            parser.error("threads list/ls does not accept a thread id.")
+
+        if args.command_arg == "delete" and args.command_arg2 is None:
+            parser.error("threads delete requires <thread_id>.")
 
 
 def _initialize_cli_state() -> tuple[CliPaths, CliDefaults] | tuple[None, None]:
@@ -183,6 +221,110 @@ def _initialize_cli_state() -> tuple[CliPaths, CliDefaults] | tuple[None, None]:
         return None, None
 
     return paths, defaults
+
+
+def _format_timestamp(timestamp: float | None) -> str:
+    if timestamp is None:
+        return "-"
+
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat(timespec="seconds")
+
+
+def _handle_threads_command(
+    *,
+    paths: CliPaths,
+    agent_name: str,
+    command: str,
+    thread_id: str | None,
+) -> int:
+    try:
+        if command in {"list", "ls"}:
+            threads = list_threads(
+                db_path=paths.sessions_db_path,
+                user_id=CLI_USER_ID,
+                agent_name=agent_name,
+                limit=200,
+            )
+
+            if not threads:
+                print(f"No threads found for profile '{agent_name}'.")
+                return 0
+
+            print(f"Threads for profile '{agent_name}':")
+            print("THREAD_ID\tUPDATED_AT\tCREATED_AT\tMODEL")
+            for thread in threads:
+                model = thread.model or "-"
+                print(
+                    f"{thread.session_id}\t{_format_timestamp(thread.updated_at)}\t"
+                    f"{_format_timestamp(thread.created_at)}\t{model}"
+                )
+            return 0
+
+        assert command == "delete"
+        assert thread_id is not None
+
+        deleted = delete_thread(
+            db_path=paths.sessions_db_path,
+            user_id=CLI_USER_ID,
+            session_id=thread_id,
+        )
+        if not deleted:
+            print(
+                f"error: thread '{thread_id}' was not found for profile '{agent_name}'.",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(f"Deleted thread '{thread_id}' for profile '{agent_name}'.")
+        return 0
+    except ValueError as exc:
+        print(f"error: failed to manage threads: {exc}", file=sys.stderr)
+        return 1
+
+
+def _resolve_resume_thread_id(paths: CliPaths, agent_name: str, resume_value: str) -> str:
+    normalized_resume = resume_value.strip()
+    if not normalized_resume:
+        raise ValueError("--resume cannot be empty.")
+
+    if normalized_resume == "latest":
+        latest_thread = get_latest_thread(
+            db_path=paths.sessions_db_path,
+            user_id=CLI_USER_ID,
+            agent_name=agent_name,
+        )
+        if latest_thread is None:
+            raise ValueError(f"No threads found for profile '{agent_name}'.")
+        return latest_thread.session_id
+
+    thread = get_thread(
+        db_path=paths.sessions_db_path,
+        user_id=CLI_USER_ID,
+        session_id=normalized_resume,
+    )
+    if thread is None or thread.agent_name != agent_name:
+        raise ValueError(f"Thread '{normalized_resume}' was not found for profile '{agent_name}'.")
+
+    return thread.session_id
+
+
+def _ensure_active_thread(
+    *,
+    paths: CliPaths,
+    agent_name: str,
+    model: str | None,
+    resume: str | None,
+) -> str:
+    if resume is not None:
+        return _resolve_resume_thread_id(paths, agent_name, resume)
+
+    thread = create_thread(
+        db_path=paths.sessions_db_path,
+        user_id=CLI_USER_ID,
+        agent_name=agent_name,
+        model=model,
+    )
+    return thread.session_id
 
 
 def cli_main(argv: Sequence[str] | None = None) -> int:
@@ -220,16 +362,25 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         print(f"Reset profile '{args.agent}'.")
         return 0
 
-    _load_workspace_env()
-
     resolved_agent = args.agent or defaults.default_agent or DEFAULT_AGENT_NAME
-    resolved_model = resolve_model(args.model, defaults)
 
     try:
         ensure_profile_memory(paths, resolved_agent)
     except (OSError, ValueError) as exc:
         print(f"error: failed to prepare profile '{resolved_agent}': {exc}", file=sys.stderr)
         return 1
+
+    if args.command == "threads":
+        assert args.command_arg is not None  # validated by _validate_args()
+        return _handle_threads_command(
+            paths=paths,
+            agent_name=resolved_agent,
+            command=args.command_arg,
+            thread_id=args.command_arg2,
+        )
+
+    _load_workspace_env()
+    resolved_model = resolve_model(args.model, defaults)
 
     should_save_defaults = False
 
@@ -247,5 +398,16 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"error: failed to save CLI defaults: {exc}", file=sys.stderr)
             return 1
+
+    try:
+        _ensure_active_thread(
+            paths=paths,
+            agent_name=resolved_agent,
+            model=resolved_model,
+            resume=args.resume,
+        )
+    except ValueError as exc:
+        print(f"error: failed to resolve thread: {exc}", file=sys.stderr)
+        return 1
 
     return 0
