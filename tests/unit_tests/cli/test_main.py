@@ -9,6 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+import adk_deepagents.cli.main as cli_main_module
 from adk_deepagents import __version__
 from adk_deepagents.cli.config import (
     CONFIG_FILENAME,
@@ -40,6 +41,8 @@ def test_build_parser_parses_non_interactive_surface_flags() -> None:
             "-n",
             "ship it",
             "--resume",
+            "-q",
+            "--no-stream",
             "--auto-approve",
             "--shell-allow-list",
             "git,ls",
@@ -52,6 +55,8 @@ def test_build_parser_parses_non_interactive_surface_flags() -> None:
     assert args.non_interactive_prompt == "ship it"
     assert args.message_prompt is None
     assert args.resume == "latest"
+    assert args.quiet is True
+    assert args.no_stream is True
     assert args.auto_approve is True
     assert args.shell_allow_list == ["git", "ls"]
 
@@ -100,6 +105,8 @@ def test_cli_main_help_returns_exit_code_zero(capsys) -> None:
     assert "reset" in captured.out
     assert "threads" in captured.out
     assert "--shell-allow-list" in captured.out
+    assert "--quiet" in captured.out
+    assert "--no-stream" in captured.out
     assert MODEL_ENV_VAR in captured.out
 
 
@@ -165,6 +172,14 @@ def test_cli_main_rejects_empty_model_flag(capsys) -> None:
 
     assert exit_code == 2
     assert "--model cannot be empty." in captured.err
+
+
+def test_cli_main_rejects_quiet_with_message_mode(capsys) -> None:
+    exit_code = cli_main(["-m", "hello", "-q"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "cannot be combined with -m/--message" in captured.err
 
 
 def test_resolve_model_prefers_cli_over_env_and_config(monkeypatch) -> None:
@@ -395,6 +410,109 @@ def test_resume_supports_latest_and_explicit_ids(tmp_path, monkeypatch, capsys) 
 
     assert exit_code == 1
     assert "failed to resolve thread" in captured.err
+
+
+def test_cli_main_non_interactive_merges_piped_stdin_and_flag_prompt(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: "piped context")
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_non_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", _fake_run_non_interactive)
+
+    exit_code = cli_main(["--agent", "demo", "-n", "implement fix", "-q"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["prompt"] == "piped context\n\nimplement fix"
+    assert captured_kwargs["agent_name"] == "demo"
+
+
+def test_cli_main_non_interactive_forwards_no_stream_flag(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_non_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", _fake_run_non_interactive)
+
+    exit_code = cli_main(["--agent", "demo", "-n", "hello", "--no-stream", "-q"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["no_stream"] is True
+
+
+def test_cli_main_non_interactive_quiet_suppresses_status_line(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", lambda **_: 0)
+
+    exit_code = cli_main(["--agent", "demo", "-n", "hello", "-q"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "running non-interactive task" not in captured.err
+
+
+def test_cli_main_non_interactive_prints_status_when_not_quiet(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", lambda **_: 0)
+
+    exit_code = cli_main(["--agent", "demo", "-n", "hello"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "running non-interactive task" in captured.err
+
+
+def test_cli_main_non_interactive_returns_runner_exit_code(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", lambda **_: 1)
+
+    exit_code = cli_main(["--agent", "demo", "-n", "hello", "-q"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 1
+
+
+def test_cli_main_quiet_requires_non_interactive_prompt_or_piped_stdin(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    exit_code = cli_main(["--quiet"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "require -n/--non-interactive or piped stdin" in captured.err
 
 
 def test_python_module_entrypoint_help_works() -> None:

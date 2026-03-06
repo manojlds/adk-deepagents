@@ -24,6 +24,11 @@ from adk_deepagents.cli.config import (
     resolve_cli_paths,
     save_cli_defaults,
 )
+from adk_deepagents.cli.non_interactive import (
+    combine_non_interactive_prompt,
+    read_piped_stdin,
+    run_non_interactive,
+)
 from adk_deepagents.cli.session_store import (
     create_thread,
     delete_thread,
@@ -146,6 +151,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Emit only assistant text for non-interactive runs.",
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="Buffer non-interactive assistant output and print after completion.",
+    )
+
+    parser.add_argument(
         "-r",
         "--resume",
         nargs="?",
@@ -186,6 +203,12 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             "list/reset/threads commands cannot be combined with "
             "-n/--non-interactive or -m/--message."
         )
+
+    if args.command in {"list", "reset", "threads"} and (args.quiet or args.no_stream):
+        parser.error("-q/--quiet and --no-stream are only valid for non-interactive runs.")
+
+    if args.message_prompt is not None and (args.quiet or args.no_stream):
+        parser.error("-q/--quiet and --no-stream cannot be combined with -m/--message.")
 
     if args.command in {"list", "reset", "threads"} and args.resume is not None:
         parser.error("--resume cannot be combined with list/reset/threads commands.")
@@ -382,6 +405,18 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     _load_workspace_env()
     resolved_model = resolve_model(args.model, defaults)
 
+    piped_stdin = read_piped_stdin()
+    non_interactive_prompt = combine_non_interactive_prompt(
+        args.non_interactive_prompt, piped_stdin
+    )
+
+    if non_interactive_prompt is None and (args.quiet or args.no_stream):
+        print(
+            "-q/--quiet and --no-stream require -n/--non-interactive or piped stdin.",
+            file=sys.stderr,
+        )
+        return 2
+
     should_save_defaults = False
 
     if args.agent is not None and resolved_agent != defaults.default_agent:
@@ -400,7 +435,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     try:
-        _ensure_active_thread(
+        active_thread_id = _ensure_active_thread(
             paths=paths,
             agent_name=resolved_agent,
             model=resolved_model,
@@ -409,5 +444,19 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         print(f"error: failed to resolve thread: {exc}", file=sys.stderr)
         return 1
+
+    if non_interactive_prompt is not None:
+        if not args.quiet:
+            print(f"[thread {active_thread_id}] running non-interactive task", file=sys.stderr)
+
+        return run_non_interactive(
+            prompt=non_interactive_prompt,
+            model=resolved_model,
+            agent_name=resolved_agent,
+            user_id=CLI_USER_ID,
+            session_id=active_thread_id,
+            db_path=paths.sessions_db_path,
+            no_stream=args.no_stream,
+        )
 
     return 0
