@@ -26,6 +26,17 @@ Or install directly:
 pip install adk-skills-agent
 ```
 
+## CLI Skills Discovery Precedence (`adk-deepagents`)
+
+The bundled CLI discovers skills from deterministic global/project paths in this order:
+
+1. `~/.adk-deepagents/profiles/<agent>/skills`
+2. `<cwd>/skills`
+
+Project skills are discovered after global skills so workspace-specific skills take precedence.
+If one of these directories exists and skills are requested, but `adk-skills-agent` is not
+installed, the CLI fails with an actionable install message.
+
 ## add_skills_tools
 
 The `add_skills_tools` function in `adk_deepagents.skills.integration` discovers skills and adds the corresponding tools:

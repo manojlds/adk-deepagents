@@ -165,6 +165,32 @@ def test_non_interactive_policy_allows_confirmation_tool_with_auto_approve() -> 
     assert result is None
 
 
+def test_build_cli_agent_missing_skills_dependency_is_actionable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def _raise(**kwargs: object):
+        del kwargs
+        raise ImportError(
+            "adk-skills-agent is required for skills support. "
+            "Install it with: pip install adk-skills-agent"
+        )
+
+    monkeypatch.setattr(ni, "create_deep_agent", _raise)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+
+    with pytest.raises(RuntimeError, match="Install optional support"):
+        ni._build_cli_agent(
+            agent_name="demo",
+            model=None,
+            cwd=tmp_path,
+            shell_allow_list=None,
+            auto_approve=False,
+            skills_dirs=[str(skills_dir)],
+        )
+
+
 def test_run_non_interactive_async_streams_chunks(monkeypatch, capsys, tmp_path: Path) -> None:
     monkeypatch.setattr(ni, "_build_cli_agent", lambda **_: object())
     monkeypatch.setattr(ni, "SqliteSessionService", lambda *_: object())

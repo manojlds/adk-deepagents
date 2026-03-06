@@ -30,6 +30,7 @@ from adk_deepagents.cli.non_interactive import (
     read_piped_stdin,
     run_non_interactive,
 )
+from adk_deepagents.cli.resources import discover_cli_agent_resources
 from adk_deepagents.cli.session_store import (
     create_thread,
     delete_thread,
@@ -448,6 +449,16 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         print(f"error: failed to resolve thread: {exc}", file=sys.stderr)
         return 1
 
+    try:
+        resources = discover_cli_agent_resources(
+            paths=paths,
+            agent_name=resolved_agent,
+            cwd=Path.cwd(),
+        )
+    except (OSError, ValueError) as exc:
+        print(f"error: failed to resolve memory/skills resources: {exc}", file=sys.stderr)
+        return 1
+
     if non_interactive_prompt is not None:
         if not args.quiet:
             print(f"[thread {active_thread_id}] running non-interactive task", file=sys.stderr)
@@ -462,6 +473,9 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             no_stream=args.no_stream,
             shell_allow_list=args.shell_allow_list,
             auto_approve=args.auto_approve,
+            memory_sources=resources.memory_sources,
+            memory_source_paths=resources.memory_source_paths,
+            skills_dirs=resources.skills_dirs,
         )
 
     return run_interactive(
@@ -472,4 +486,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         session_id=active_thread_id,
         db_path=paths.sessions_db_path,
         auto_approve=args.auto_approve,
+        memory_sources=resources.memory_sources,
+        memory_source_paths=resources.memory_source_paths,
+        skills_dirs=resources.skills_dirs,
     )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,8 +16,11 @@ from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.genai import types
 
 from adk_deepagents import create_deep_agent
-from adk_deepagents.backends.filesystem import FilesystemBackend
 from adk_deepagents.callbacks.before_tool import resume_approval
+from adk_deepagents.cli.resources import (
+    MemoryMappedFilesystemBackend,
+    build_missing_skills_dependency_error,
+)
 from adk_deepagents.cli.session_store import (
     CLI_SESSIONS_APP_NAME,
     ThreadRecord,
@@ -135,28 +138,58 @@ def _normalize_prompt(prompt: str | None) -> str | None:
     return normalized or None
 
 
-def _build_cli_agent(agent_name: str, model: str | None, cwd: Path):
-    backend = FilesystemBackend(root_dir=cwd, virtual_mode=True)
-
-    if model is None:
-        return create_deep_agent(
-            name=f"{agent_name}_cli",
-            backend=backend,
-            execution="local",
-            interrupt_on=INTERACTIVE_INTERRUPT_ON,
-        )
-
-    return create_deep_agent(
-        name=f"{agent_name}_cli",
-        model=model,
-        backend=backend,
-        execution="local",
-        interrupt_on=INTERACTIVE_INTERRUPT_ON,
+def _build_cli_agent(
+    agent_name: str,
+    model: str | None,
+    cwd: Path,
+    *,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
+):
+    backend = MemoryMappedFilesystemBackend(
+        root_dir=cwd,
+        memory_source_paths=memory_source_paths,
     )
 
+    agent_kwargs: dict[str, Any] = {
+        "name": f"{agent_name}_cli",
+        "backend": backend,
+        "execution": "local",
+        "interrupt_on": INTERACTIVE_INTERRUPT_ON,
+    }
+    if model is not None:
+        agent_kwargs["model"] = model
+    if memory_sources:
+        agent_kwargs["memory"] = list(memory_sources)
+    if skills_dirs:
+        agent_kwargs["skills"] = list(skills_dirs)
 
-def _build_runner(*, agent_name: str, model: str | None, db_path: Path) -> Runner:
-    agent = _build_cli_agent(agent_name=agent_name, model=model, cwd=Path.cwd())
+    try:
+        return create_deep_agent(**agent_kwargs)
+    except ImportError as exc:
+        if skills_dirs and "adk-skills-agent is required for skills support" in str(exc):
+            raise build_missing_skills_dependency_error(skills_dirs) from exc
+        raise
+
+
+def _build_runner(
+    *,
+    agent_name: str,
+    model: str | None,
+    db_path: Path,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
+) -> Runner:
+    agent = _build_cli_agent(
+        agent_name=agent_name,
+        model=model,
+        cwd=Path.cwd(),
+        memory_sources=memory_sources,
+        memory_source_paths=memory_source_paths,
+        skills_dirs=skills_dirs,
+    )
     session_service = SqliteSessionService(str(db_path))
     return Runner(
         app_name=CLI_SESSIONS_APP_NAME,
@@ -711,6 +744,9 @@ async def _run_interactive_async(
     session_id: str,
     db_path: Path,
     auto_approve: bool,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
     input_reader: InputReader = input,
     stdin: _SupportsIsatty | None = None,
     stdout: TextIO | None = None,
@@ -733,11 +769,25 @@ async def _run_interactive_async(
         active_session_id=session_id,
     )
 
-    runner = _build_runner(agent_name=agent_name, model=model, db_path=db_path)
+    runner = _build_runner(
+        agent_name=agent_name,
+        model=model,
+        db_path=db_path,
+        memory_sources=memory_sources,
+        memory_source_paths=memory_source_paths,
+        skills_dirs=skills_dirs,
+    )
 
     def _switch_model(new_model: str | None) -> None:
         nonlocal runner
-        runner = _build_runner(agent_name=agent_name, model=new_model, db_path=db_path)
+        runner = _build_runner(
+            agent_name=agent_name,
+            model=new_model,
+            db_path=db_path,
+            memory_sources=memory_sources,
+            memory_source_paths=memory_source_paths,
+            skills_dirs=skills_dirs,
+        )
 
     model_context = _ModelCommandContext(model=model, switch_model=_switch_model)
     approval_context = _InteractiveApprovalContext(auto_approve=auto_approve)
@@ -797,6 +847,9 @@ def run_interactive(
     session_id: str,
     db_path: Path,
     auto_approve: bool,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
 ) -> int:
     """Execute interactive REPL mode."""
     try:
@@ -809,6 +862,9 @@ def run_interactive(
                 session_id=session_id,
                 db_path=db_path,
                 auto_approve=auto_approve,
+                memory_sources=memory_sources,
+                memory_source_paths=memory_source_paths,
+                skills_dirs=skills_dirs,
             )
         )
     except Exception as exc:  # noqa: BLE001 - CLI should map runtime errors to exit code 1.

@@ -344,6 +344,34 @@ def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:
     assert captured["interrupt_on"] == repl.INTERACTIVE_INTERRUPT_ON
 
 
+def test_build_cli_agent_missing_skills_dependency_is_actionable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def _raise(**kwargs: object):
+        del kwargs
+        raise ImportError(
+            "adk-skills-agent is required for skills support. "
+            "Install it with: pip install adk-skills-agent"
+        )
+
+    monkeypatch.setattr(repl, "create_deep_agent", _raise)
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+
+    try:
+        repl._build_cli_agent(
+            agent_name="demo",
+            model=None,
+            cwd=tmp_path,
+            skills_dirs=[str(skills_dir)],
+        )
+    except RuntimeError as exc:
+        assert "Install optional support" in str(exc)
+    else:
+        raise AssertionError("Expected _build_cli_agent to raise an actionable skills error")
+
+
 def test_run_interactive_turn_streams_text_and_tool_events() -> None:
     out = io.StringIO()
     err = io.StringIO()
@@ -603,11 +631,11 @@ def test_run_interactive_async_model_command_switches_model_and_preserves_thread
         def __init__(self, model: str | None):
             self.model = model
 
-    monkeypatch.setattr(
-        repl,
-        "_build_cli_agent",
-        lambda *, agent_name, model, cwd: _FakeAgent(model),
-    )
+    def _fake_build_cli_agent(*, agent_name, model, cwd, **kwargs):
+        del agent_name, cwd, kwargs
+        return _FakeAgent(model)
+
+    monkeypatch.setattr(repl, "_build_cli_agent", _fake_build_cli_agent)
     monkeypatch.setattr(repl, "SqliteSessionService", lambda *_: object())
 
     turn_calls: list[tuple[str, str, str | None]] = []

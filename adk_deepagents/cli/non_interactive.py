@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import shlex
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -15,7 +15,10 @@ from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
 
 from adk_deepagents import create_deep_agent
-from adk_deepagents.backends.filesystem import FilesystemBackend
+from adk_deepagents.cli.resources import (
+    MemoryMappedFilesystemBackend,
+    build_missing_skills_dependency_error,
+)
 from adk_deepagents.cli.session_store import CLI_SESSIONS_APP_NAME
 
 SHELL_TOOL_NAMES = frozenset({"execute", "execute_bash"})
@@ -174,30 +177,40 @@ def _build_cli_agent(
     *,
     shell_allow_list: Sequence[str] | None,
     auto_approve: bool,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
 ):
     """Build a minimal CLI agent for non-interactive turns."""
-    backend = FilesystemBackend(root_dir=cwd, virtual_mode=True)
+    backend = MemoryMappedFilesystemBackend(
+        root_dir=cwd,
+        memory_source_paths=memory_source_paths,
+    )
     before_tool_callback = build_non_interactive_before_tool_callback(
         shell_allow_list=shell_allow_list,
         auto_approve=auto_approve,
     )
     extra_callbacks = {"before_tool": before_tool_callback}
 
-    if model is None:
-        return create_deep_agent(
-            name=f"{agent_name}_cli",
-            backend=backend,
-            execution="local",
-            extra_callbacks=extra_callbacks,
-        )
+    agent_kwargs: dict[str, Any] = {
+        "name": f"{agent_name}_cli",
+        "backend": backend,
+        "execution": "local",
+        "extra_callbacks": extra_callbacks,
+    }
+    if model is not None:
+        agent_kwargs["model"] = model
+    if memory_sources:
+        agent_kwargs["memory"] = list(memory_sources)
+    if skills_dirs:
+        agent_kwargs["skills"] = list(skills_dirs)
 
-    return create_deep_agent(
-        name=f"{agent_name}_cli",
-        model=model,
-        backend=backend,
-        execution="local",
-        extra_callbacks=extra_callbacks,
-    )
+    try:
+        return create_deep_agent(**agent_kwargs)
+    except ImportError as exc:
+        if skills_dirs and "adk-skills-agent is required for skills support" in str(exc):
+            raise build_missing_skills_dependency_error(skills_dirs) from exc
+        raise
 
 
 async def _run_non_interactive_async(
@@ -211,6 +224,9 @@ async def _run_non_interactive_async(
     no_stream: bool,
     shell_allow_list: Sequence[str] | None,
     auto_approve: bool,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
 ) -> str:
     agent = _build_cli_agent(
         agent_name=agent_name,
@@ -218,6 +234,9 @@ async def _run_non_interactive_async(
         cwd=Path.cwd(),
         shell_allow_list=shell_allow_list,
         auto_approve=auto_approve,
+        memory_sources=memory_sources,
+        memory_source_paths=memory_source_paths,
+        skills_dirs=skills_dirs,
     )
     session_service = SqliteSessionService(str(db_path))
     runner = Runner(
@@ -264,6 +283,9 @@ def run_non_interactive(
     no_stream: bool,
     shell_allow_list: Sequence[str] | None,
     auto_approve: bool,
+    memory_sources: Sequence[str] = (),
+    memory_source_paths: Mapping[str, Path] | None = None,
+    skills_dirs: Sequence[str] = (),
 ) -> int:
     """Execute one non-interactive turn and print model output."""
     try:
@@ -278,6 +300,9 @@ def run_non_interactive(
                 no_stream=no_stream,
                 shell_allow_list=shell_allow_list,
                 auto_approve=auto_approve,
+                memory_sources=memory_sources,
+                memory_source_paths=memory_source_paths,
+                skills_dirs=skills_dirs,
             )
         )
     except Exception as exc:  # noqa: BLE001 - CLI should map runtime errors to exit code 1.

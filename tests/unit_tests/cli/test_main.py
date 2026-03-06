@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import adk_deepagents.cli.main as cli_main_module
 from adk_deepagents import __version__
@@ -557,6 +558,50 @@ def test_cli_main_interactive_mode_invokes_repl_runner(tmp_path, monkeypatch, ca
     assert captured_kwargs["first_prompt"] is None
     assert captured_kwargs["agent_name"] == "demo"
     assert captured_kwargs["auto_approve"] is False
+
+
+def test_cli_main_forwards_discovered_memory_and_skills_precedence(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    (workspace / "AGENTS.md").write_text("project memory", encoding="utf-8")
+    global_skills = home_dir / PROFILES_DIRNAME / "demo" / "skills"
+    project_skills = workspace / "skills"
+    global_skills.mkdir(parents=True)
+    project_skills.mkdir(parents=True)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    exit_code = cli_main(["--agent", "demo"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["memory_sources"] == (
+        "global://profiles/demo/AGENTS.md",
+        "project://AGENTS.md",
+    )
+    assert captured_kwargs["skills_dirs"] == (
+        str(global_skills.resolve()),
+        str(project_skills.resolve()),
+    )
+
+    source_paths = cast(dict[str, Path], captured_kwargs["memory_source_paths"])
+    assert source_paths["project://AGENTS.md"] == (workspace / "AGENTS.md").resolve()
 
 
 def test_cli_main_message_mode_passes_first_prompt_to_repl(tmp_path, monkeypatch, capsys) -> None:
