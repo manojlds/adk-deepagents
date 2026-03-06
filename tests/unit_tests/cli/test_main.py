@@ -537,6 +537,48 @@ def test_cli_main_non_interactive_returns_runner_exit_code(tmp_path, monkeypatch
     assert exit_code == 1
 
 
+def test_cli_main_interactive_mode_invokes_repl_runner(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    exit_code = cli_main(["--agent", "demo"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["first_prompt"] is None
+    assert captured_kwargs["agent_name"] == "demo"
+
+
+def test_cli_main_message_mode_passes_first_prompt_to_repl(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    exit_code = cli_main(["--agent", "demo", "-m", "hello there"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["first_prompt"] == "hello there"
+    assert captured_kwargs["session_id"]
+
+
 def test_cli_main_quiet_requires_non_interactive_prompt_or_piped_stdin(
     tmp_path,
     monkeypatch,

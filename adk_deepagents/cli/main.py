@@ -24,6 +24,7 @@ from adk_deepagents.cli.config import (
     resolve_cli_paths,
     save_cli_defaults,
 )
+from adk_deepagents.cli.interactive import run_interactive
 from adk_deepagents.cli.non_interactive import (
     combine_non_interactive_prompt,
     read_piped_stdin,
@@ -406,8 +407,10 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     resolved_model = resolve_model(args.model, defaults)
 
     piped_stdin = read_piped_stdin()
+    piped_input_for_non_interactive = piped_stdin if args.message_prompt is None else None
     non_interactive_prompt = combine_non_interactive_prompt(
-        args.non_interactive_prompt, piped_stdin
+        args.non_interactive_prompt,
+        piped_input_for_non_interactive,
     )
 
     if non_interactive_prompt is None and (args.quiet or args.no_stream):
@@ -461,4 +464,12 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             auto_approve=args.auto_approve,
         )
 
-    return 0
+    return run_interactive(
+        first_prompt=args.message_prompt,
+        model=resolved_model,
+        agent_name=resolved_agent,
+        user_id=CLI_USER_ID,
+        session_id=active_thread_id,
+        db_path=paths.sessions_db_path,
+        auto_approve=args.auto_approve,
+    )
