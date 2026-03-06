@@ -6,6 +6,7 @@ import asyncio
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
@@ -15,14 +16,24 @@ from google.genai import types
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.backends.filesystem import FilesystemBackend
-from adk_deepagents.cli.session_store import CLI_SESSIONS_APP_NAME
+from adk_deepagents.cli.session_store import (
+    CLI_SESSIONS_APP_NAME,
+    ThreadRecord,
+    create_thread,
+    get_thread,
+    list_threads,
+)
 
 INPUT_PROMPT = "> "
+THREAD_LIST_LIMIT = 200
 INTERACTIVE_HELP_TEXT = (
     "Interactive commands:\n"
-    "  /help  Show this help message\n"
-    "  /quit  Exit interactive mode\n"
-    "  /q     Exit interactive mode\n"
+    "  /help                  Show this help message\n"
+    "  /threads               List recent threads and show the active thread\n"
+    "  /threads <selector>    Switch thread by index, thread id, or 'latest'\n"
+    "  /clear                 Start a new thread and make it active\n"
+    "  /quit                  Exit interactive mode\n"
+    "  /q                     Exit interactive mode\n"
 )
 
 SlashCommandResult = Literal["not_command", "handled", "exit"]
@@ -65,6 +76,17 @@ class _TurnRenderer:
             self.assistant_line_open = False
 
 
+@dataclass
+class _ThreadCommandContext:
+    """Mutable interactive thread state used by slash commands."""
+
+    db_path: Path
+    user_id: str
+    agent_name: str
+    model: str | None
+    active_session_id: str
+
+
 def _normalize_prompt(prompt: str | None) -> str | None:
     if prompt is None:
         return None
@@ -91,23 +113,175 @@ def _build_cli_agent(agent_name: str, model: str | None, cwd: Path):
     )
 
 
+def _format_timestamp(timestamp: float | None) -> str:
+    if timestamp is None:
+        return "-"
+
+    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat(timespec="seconds")
+
+
+def _render_threads_list(
+    *,
+    thread_context: _ThreadCommandContext,
+    threads: list[ThreadRecord],
+    stdout: TextIO,
+) -> None:
+    if not threads:
+        print(f"No threads found for profile '{thread_context.agent_name}'.", file=stdout)
+        print("Use /clear to start a new thread.", file=stdout)
+        return
+
+    print(f"Threads for profile '{thread_context.agent_name}':", file=stdout)
+    print("CUR\tINDEX\tTHREAD_ID\tUPDATED_AT\tCREATED_AT\tMODEL", file=stdout)
+    for index, thread in enumerate(threads, start=1):
+        marker = "*" if thread.session_id == thread_context.active_session_id else "-"
+        model_name = thread.model or "-"
+        print(
+            f"{marker}\t{index}\t{thread.session_id}\t"
+            f"{_format_timestamp(thread.updated_at)}\t"
+            f"{_format_timestamp(thread.created_at)}\t{model_name}",
+            file=stdout,
+        )
+
+    print("Use /threads <index|thread_id|latest> to switch active thread.", file=stdout)
+
+
+def _resolve_thread_selector(
+    selector: str,
+    *,
+    thread_context: _ThreadCommandContext,
+    threads: list[ThreadRecord],
+) -> ThreadRecord | None:
+    normalized_selector = selector.strip()
+    if not normalized_selector:
+        return None
+
+    selector_lower = normalized_selector.lower()
+    if selector_lower == "latest":
+        return threads[0] if threads else None
+
+    if normalized_selector.isdigit():
+        index = int(normalized_selector)
+        if index < 1:
+            return None
+        if index > len(threads):
+            return None
+        return threads[index - 1]
+
+    thread = get_thread(
+        db_path=thread_context.db_path,
+        user_id=thread_context.user_id,
+        session_id=normalized_selector,
+    )
+    if thread is None or thread.agent_name != thread_context.agent_name:
+        return None
+
+    return thread
+
+
+def _handle_threads_slash_command(
+    raw_command: str,
+    *,
+    thread_context: _ThreadCommandContext,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> SlashCommandResult:
+    command_parts = raw_command.split(maxsplit=1)
+    selector = command_parts[1].strip() if len(command_parts) == 2 else None
+
+    try:
+        threads = list_threads(
+            db_path=thread_context.db_path,
+            user_id=thread_context.user_id,
+            agent_name=thread_context.agent_name,
+            limit=THREAD_LIST_LIMIT,
+        )
+    except Exception as exc:  # noqa: BLE001 - slash command errors should not kill REPL.
+        print(f"[error] Failed to list threads: {exc}", file=stderr)
+        return "handled"
+
+    if selector is None:
+        _render_threads_list(
+            thread_context=thread_context,
+            threads=threads,
+            stdout=stdout,
+        )
+        return "handled"
+
+    target_thread = _resolve_thread_selector(
+        selector,
+        thread_context=thread_context,
+        threads=threads,
+    )
+    if target_thread is None:
+        print(
+            f"[error] Could not resolve thread selector '{selector}'. "
+            "Use /threads to list options.",
+            file=stderr,
+        )
+        return "handled"
+
+    if target_thread.session_id == thread_context.active_session_id:
+        print(f"[thread {target_thread.session_id}] already active.", file=stderr)
+        return "handled"
+
+    thread_context.active_session_id = target_thread.session_id
+    print(f"[thread {target_thread.session_id}] switched active thread.", file=stderr)
+    return "handled"
+
+
 def handle_slash_command(
     prompt: str,
     *,
     stdout: TextIO,
     stderr: TextIO,
+    thread_context: _ThreadCommandContext | None = None,
 ) -> SlashCommandResult:
     """Handle slash commands in interactive mode."""
     if not prompt.startswith("/"):
         return "not_command"
 
-    command = prompt.strip().lower()
-    if command == "/help":
+    command = prompt.strip()
+    command_lower = command.lower()
+
+    if command_lower == "/help":
         print(INTERACTIVE_HELP_TEXT, end="", file=stdout)
         return "handled"
 
-    if command in {"/quit", "/q"}:
+    if command_lower in {"/quit", "/q"}:
         return "exit"
+
+    if command_lower == "/clear":
+        if thread_context is None:
+            print("[error] Thread controls are unavailable in this context.", file=stderr)
+            return "handled"
+
+        try:
+            new_thread = create_thread(
+                db_path=thread_context.db_path,
+                user_id=thread_context.user_id,
+                agent_name=thread_context.agent_name,
+                model=thread_context.model,
+            )
+        except Exception as exc:  # noqa: BLE001 - slash command errors should not kill REPL.
+            print(f"[error] Failed to create a new thread: {exc}", file=stderr)
+            return "handled"
+
+        thread_context.active_session_id = new_thread.session_id
+        print(f"[thread {new_thread.session_id}] started a new thread.", file=stderr)
+        return "handled"
+
+    if command_lower == "/threads" or command_lower.startswith("/threads "):
+        if thread_context is None:
+            print("[error] Thread controls are unavailable in this context.", file=stderr)
+            return "handled"
+
+        return _handle_threads_slash_command(
+            command,
+            thread_context=thread_context,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     print(
         f"[error] Unknown slash command: {command}. Type /help for available commands.",
@@ -243,6 +417,14 @@ async def _run_interactive_async(
     if pending_prompt is None and not input_stream.isatty():
         return 0
 
+    thread_context = _ThreadCommandContext(
+        db_path=db_path,
+        user_id=user_id,
+        agent_name=agent_name,
+        model=model,
+        active_session_id=session_id,
+    )
+
     agent = _build_cli_agent(agent_name=agent_name, model=model, cwd=Path.cwd())
     session_service = SqliteSessionService(str(db_path))
     runner = Runner(
@@ -252,7 +434,7 @@ async def _run_interactive_async(
     )
 
     print(
-        f"[thread {session_id}] interactive mode. Type /help for commands.",
+        f"[thread {thread_context.active_session_id}] interactive mode. Type /help for commands.",
         file=err_stream,
     )
 
@@ -273,6 +455,7 @@ async def _run_interactive_async(
             normalized_prompt,
             stdout=out_stream,
             stderr=err_stream,
+            thread_context=thread_context,
         )
         if slash_result == "handled":
             continue
@@ -283,7 +466,7 @@ async def _run_interactive_async(
             runner=runner,
             prompt=normalized_prompt,
             user_id=user_id,
-            session_id=session_id,
+            session_id=thread_context.active_session_id,
             stdout=out_stream,
             stderr=err_stream,
         )

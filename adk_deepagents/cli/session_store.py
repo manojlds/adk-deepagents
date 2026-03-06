@@ -168,7 +168,11 @@ def _session_to_record(session: Any, default_agent: str | None = None) -> Thread
     model = _normalize_text(state.get(THREAD_META_MODEL_KEY))
 
     created_at = _normalize_timestamp(state.get(THREAD_META_CREATED_AT_KEY))
+
     updated_at = _normalize_timestamp(state.get(THREAD_META_UPDATED_AT_KEY))
+    session_updated_at = _normalize_timestamp(getattr(session, "last_update_time", None))
+    if session_updated_at is not None and (updated_at is None or session_updated_at > updated_at):
+        updated_at = session_updated_at
     if updated_at is None:
         updated_at = float(session.last_update_time)
 
