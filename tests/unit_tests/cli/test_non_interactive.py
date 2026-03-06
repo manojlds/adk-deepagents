@@ -5,6 +5,9 @@ from __future__ import annotations
 import io
 from pathlib import Path
 from typing import TextIO, cast
+from unittest.mock import MagicMock
+
+import pytest
 
 import adk_deepagents.cli.non_interactive as ni
 
@@ -53,6 +56,11 @@ class _FakeRunner:
         yield _FakeEvent("assistant", [_FakePart(" world")])
 
 
+class _FakeTool:
+    def __init__(self, name: str):
+        self.name = name
+
+
 def test_read_piped_stdin_returns_none_for_tty() -> None:
     stdin = _FakeStdin("hello", isatty_value=True)
 
@@ -80,6 +88,83 @@ def test_combine_non_interactive_prompt_uses_single_source() -> None:
     assert ni.combine_non_interactive_prompt(None, None) is None
 
 
+def test_normalize_shell_allow_list_expands_recommended() -> None:
+    allow_list = ni.normalize_shell_allow_list(["recommended", "git"])
+
+    assert "git" in allow_list
+    assert "ls" in allow_list
+
+
+def test_non_interactive_policy_blocks_shell_by_default() -> None:
+    callback = ni.build_non_interactive_before_tool_callback(
+        shell_allow_list=None,
+        auto_approve=False,
+    )
+
+    with pytest.raises(ni.NonInteractivePolicyError, match="Shell execution is blocked"):
+        callback(_FakeTool("execute"), {"command": "git status"}, MagicMock())
+
+
+def test_non_interactive_policy_allows_configured_shell_command() -> None:
+    callback = ni.build_non_interactive_before_tool_callback(
+        shell_allow_list=["git"],
+        auto_approve=False,
+    )
+
+    result = callback(_FakeTool("execute"), {"command": "git status"}, MagicMock())
+
+    assert result is None
+
+
+def test_non_interactive_policy_rejects_unlisted_shell_command() -> None:
+    callback = ni.build_non_interactive_before_tool_callback(
+        shell_allow_list=["git"],
+        auto_approve=False,
+    )
+
+    with pytest.raises(ni.NonInteractivePolicyError, match="not in --shell-allow-list"):
+        callback(_FakeTool("execute"), {"command": "python -m pytest"}, MagicMock())
+
+
+def test_non_interactive_policy_rejects_shell_control_operators() -> None:
+    callback = ni.build_non_interactive_before_tool_callback(
+        shell_allow_list=["git"],
+        auto_approve=False,
+    )
+
+    with pytest.raises(ni.NonInteractivePolicyError, match="control operators"):
+        callback(_FakeTool("execute"), {"command": "git status && rm -rf /"}, MagicMock())
+
+
+def test_non_interactive_policy_rejects_confirmation_required_tool() -> None:
+    callback = ni.build_non_interactive_before_tool_callback(
+        shell_allow_list=["git"],
+        auto_approve=False,
+    )
+
+    with pytest.raises(ni.NonInteractivePolicyError, match="requires confirmation"):
+        callback(
+            _FakeTool("write_file"),
+            {"path": "/tmp/demo.txt", "content": "data"},
+            MagicMock(),
+        )
+
+
+def test_non_interactive_policy_allows_confirmation_tool_with_auto_approve() -> None:
+    callback = ni.build_non_interactive_before_tool_callback(
+        shell_allow_list=["git"],
+        auto_approve=True,
+    )
+
+    result = callback(
+        _FakeTool("write_file"),
+        {"path": "/tmp/demo.txt", "content": "data"},
+        MagicMock(),
+    )
+
+    assert result is None
+
+
 def test_run_non_interactive_async_streams_chunks(monkeypatch, capsys, tmp_path: Path) -> None:
     monkeypatch.setattr(ni, "_build_cli_agent", lambda **_: object())
     monkeypatch.setattr(ni, "SqliteSessionService", lambda *_: object())
@@ -94,6 +179,8 @@ def test_run_non_interactive_async_streams_chunks(monkeypatch, capsys, tmp_path:
             session_id="s1",
             db_path=tmp_path / "sessions.db",
             no_stream=False,
+            shell_allow_list=None,
+            auto_approve=False,
         )
     )
     captured = capsys.readouterr()
@@ -120,6 +207,8 @@ def test_run_non_interactive_async_buffers_chunks_when_no_stream(
             session_id="s1",
             db_path=tmp_path / "sessions.db",
             no_stream=True,
+            shell_allow_list=None,
+            auto_approve=False,
         )
     )
     captured = capsys.readouterr()
@@ -143,6 +232,8 @@ def test_run_non_interactive_prints_buffered_output(monkeypatch, capsys) -> None
         session_id="s1",
         db_path=Path("/tmp/dummy.db"),
         no_stream=True,
+        shell_allow_list=None,
+        auto_approve=False,
     )
     captured = capsys.readouterr()
 
@@ -165,6 +256,8 @@ def test_run_non_interactive_returns_error_code_on_exception(monkeypatch, capsys
         session_id="s1",
         db_path=Path("/tmp/dummy.db"),
         no_stream=False,
+        shell_allow_list=None,
+        auto_approve=False,
     )
     captured = capsys.readouterr()
 

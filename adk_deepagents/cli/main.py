@@ -457,6 +457,8 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             session_id=active_thread_id,
             db_path=paths.sessions_db_path,
             no_stream=args.no_stream,
+            shell_allow_list=args.shell_allow_list,
+            auto_approve=args.auto_approve,
         )
 
     return 0

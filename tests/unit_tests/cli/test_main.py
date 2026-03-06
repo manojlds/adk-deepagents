@@ -455,6 +455,44 @@ def test_cli_main_non_interactive_forwards_no_stream_flag(tmp_path, monkeypatch,
 
     assert exit_code == 0
     assert captured_kwargs["no_stream"] is True
+    assert captured_kwargs["shell_allow_list"] is None
+    assert captured_kwargs["auto_approve"] is False
+
+
+def test_cli_main_non_interactive_forwards_shell_allow_list_and_auto_approve(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_non_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", _fake_run_non_interactive)
+
+    exit_code = cli_main(
+        [
+            "--agent",
+            "demo",
+            "-n",
+            "hello",
+            "--shell-allow-list",
+            "git,ls",
+            "--auto-approve",
+            "-q",
+        ]
+    )
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["shell_allow_list"] == ["git", "ls"]
+    assert captured_kwargs["auto_approve"] is True
 
 
 def test_cli_main_non_interactive_quiet_suppresses_status_line(
