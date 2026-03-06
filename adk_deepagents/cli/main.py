@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
@@ -31,6 +32,20 @@ from adk_deepagents.cli.session_store import (
     get_thread,
     list_threads,
 )
+
+CLI_MODEL_ENV = "ADK_DEEPAGENTS_MODEL"
+
+
+def _resolve_model(*, cli_model: str | None, config_model: str) -> str:
+    """Resolve model from CLI flag, environment, then config default."""
+    if isinstance(cli_model, str) and cli_model.strip():
+        return cli_model
+
+    from_env = os.environ.get(CLI_MODEL_ENV, "").strip()
+    if from_env:
+        return from_env
+
+    return config_model
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -323,7 +338,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
 
     _, config = ensure_config()
     user_id = get_cli_user_id()
-    model = args.model or config.models.default
+    model = _resolve_model(cli_model=args.model, config_model=config.models.default)
 
     if args.command == "list":
         return _cmd_list()

@@ -34,6 +34,39 @@ def test_build_parser_parses_non_interactive_flags() -> None:
     assert args.no_stream is True
 
 
+def test_resolve_model_uses_cli_value_first(monkeypatch) -> None:
+    monkeypatch.setenv(cli_main_module.CLI_MODEL_ENV, "model-from-env")
+
+    resolved = cli_main_module._resolve_model(
+        cli_model="model-from-cli",
+        config_model="model-from-config",
+    )
+
+    assert resolved == "model-from-cli"
+
+
+def test_resolve_model_uses_env_before_config(monkeypatch) -> None:
+    monkeypatch.setenv(cli_main_module.CLI_MODEL_ENV, "model-from-env")
+
+    resolved = cli_main_module._resolve_model(
+        cli_model=None,
+        config_model="model-from-config",
+    )
+
+    assert resolved == "model-from-env"
+
+
+def test_resolve_model_falls_back_to_config(monkeypatch) -> None:
+    monkeypatch.delenv(cli_main_module.CLI_MODEL_ENV, raising=False)
+
+    resolved = cli_main_module._resolve_model(
+        cli_model=None,
+        config_model="model-from-config",
+    )
+
+    assert resolved == "model-from-config"
+
+
 def test_load_project_env_loads_dotenv_when_found(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
@@ -169,6 +202,56 @@ def test_cli_non_interactive_dispatches_with_flag_prompt(
     assert captured_kwargs["prompt"] == "Say hello"
     assert captured_kwargs["agent_name"] == "demo"
     assert "session_id" in captured_kwargs
+
+
+def test_cli_non_interactive_uses_model_from_env_when_no_cli_override(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(CLI_HOME_ENV, str(tmp_path / "home"))
+    monkeypatch.setenv(cli_main_module.CLI_MODEL_ENV, "model-from-env")
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict = {}
+
+    def fake_run_non_interactive(**kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", fake_run_non_interactive)
+
+    exit_code = cli_main(["--agent", "demo", "-n", "Say hello", "-q"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["model"] == "model-from-env"
+
+
+def test_cli_non_interactive_cli_model_overrides_env(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setenv(CLI_HOME_ENV, str(tmp_path / "home"))
+    monkeypatch.setenv(cli_main_module.CLI_MODEL_ENV, "model-from-env")
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict = {}
+
+    def fake_run_non_interactive(**kwargs):
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_non_interactive", fake_run_non_interactive)
+
+    exit_code = cli_main(
+        ["--agent", "demo", "-n", "Say hello", "-q", "--model", "model-from-cli"]
+    )
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["model"] == "model-from-cli"
 
 
 def test_cli_non_interactive_merges_piped_and_flag_prompt(
