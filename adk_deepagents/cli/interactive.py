@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from google.genai import types
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.backends.filesystem import FilesystemBackend
+from adk_deepagents.callbacks.before_tool import resume_approval
 from adk_deepagents.cli.session_store import (
     CLI_SESSIONS_APP_NAME,
     ThreadRecord,
@@ -25,7 +27,17 @@ from adk_deepagents.cli.session_store import (
 )
 
 INPUT_PROMPT = "> "
+APPROVAL_PROMPT = "approval> "
 THREAD_LIST_LIMIT = 200
+REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
+INTERACTIVE_INTERRUPT_ON: dict[str, bool] = {
+    "write_file": True,
+    "edit_file": True,
+    "delete_file": True,
+    "execute": True,
+    "execute_bash": True,
+}
+MAX_APPROVAL_ARGS_PREVIEW = 400
 INTERACTIVE_HELP_TEXT = (
     "Interactive commands:\n"
     "  /help                      Show this help message\n"
@@ -39,6 +51,7 @@ INTERACTIVE_HELP_TEXT = (
 )
 
 SlashCommandResult = Literal["not_command", "handled", "exit"]
+ApprovalDecision = Literal["approve", "reject", "auto"]
 InputReader = Callable[[str], str]
 
 
@@ -97,6 +110,23 @@ class _ModelCommandContext:
     switch_model: Callable[[str | None], None]
 
 
+@dataclass
+class _InteractiveApprovalContext:
+    """Mutable approval state shared across interactive turns."""
+
+    auto_approve: bool
+
+
+@dataclass
+class _ToolConfirmationRequest:
+    """Parsed confirmation request payload from ADK function-call events."""
+
+    request_id: str
+    tool_name: str
+    tool_args: dict[str, Any]
+    hint: str | None
+
+
 def _normalize_prompt(prompt: str | None) -> str | None:
     if prompt is None:
         return None
@@ -113,6 +143,7 @@ def _build_cli_agent(agent_name: str, model: str | None, cwd: Path):
             name=f"{agent_name}_cli",
             backend=backend,
             execution="local",
+            interrupt_on=INTERACTIVE_INTERRUPT_ON,
         )
 
     return create_deep_agent(
@@ -120,6 +151,7 @@ def _build_cli_agent(agent_name: str, model: str | None, cwd: Path):
         model=model,
         backend=backend,
         execution="local",
+        interrupt_on=INTERACTIVE_INTERRUPT_ON,
     )
 
 
@@ -405,6 +437,162 @@ def _extract_tool_error(function_response: Any) -> str | None:
     return None
 
 
+def _extract_confirmation_requests(event: Any) -> list[_ToolConfirmationRequest]:
+    content = getattr(event, "content", None)
+    parts = getattr(content, "parts", None) if content is not None else None
+    if not parts:
+        return []
+
+    requests: list[_ToolConfirmationRequest] = []
+    for part in parts:
+        function_call = getattr(part, "function_call", None)
+        if function_call is None:
+            continue
+
+        tool_name = getattr(function_call, "name", None)
+        if tool_name != REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
+            continue
+
+        request_id = getattr(function_call, "id", None)
+        if not isinstance(request_id, str) or not request_id.strip():
+            continue
+
+        args = getattr(function_call, "args", None)
+        args_dict = args if isinstance(args, dict) else {}
+
+        original_call = args_dict.get("originalFunctionCall")
+        original_call_dict = original_call if isinstance(original_call, dict) else {}
+
+        requested_tool = original_call_dict.get("name")
+        requested_tool_name = requested_tool if isinstance(requested_tool, str) else "unknown_tool"
+
+        requested_args = original_call_dict.get("args")
+        requested_tool_args = requested_args if isinstance(requested_args, dict) else {}
+
+        tool_confirmation = args_dict.get("toolConfirmation")
+        confirmation_dict = tool_confirmation if isinstance(tool_confirmation, dict) else {}
+        hint_value = confirmation_dict.get("hint")
+        hint = hint_value.strip() if isinstance(hint_value, str) and hint_value.strip() else None
+
+        requests.append(
+            _ToolConfirmationRequest(
+                request_id=request_id,
+                tool_name=requested_tool_name,
+                tool_args=requested_tool_args,
+                hint=hint,
+            )
+        )
+
+    return requests
+
+
+def _format_approval_args_preview(tool_args: dict[str, Any]) -> str:
+    if not tool_args:
+        return "{}"
+
+    rendered = json.dumps(tool_args, ensure_ascii=False, sort_keys=True, default=str)
+    if len(rendered) <= MAX_APPROVAL_ARGS_PREVIEW:
+        return rendered
+
+    return rendered[: MAX_APPROVAL_ARGS_PREVIEW - 3] + "..."
+
+
+def _read_approval_input(*, input_reader: InputReader, stderr: TextIO) -> str | None:
+    try:
+        return input_reader(APPROVAL_PROMPT)
+    except (EOFError, OSError):
+        return None
+    except KeyboardInterrupt:
+        print("\n[approval] Interrupted; rejecting pending tool call.", file=stderr)
+        return "reject"
+
+
+def _resolve_confirmation_decision(response: str) -> ApprovalDecision | None:
+    normalized = response.strip().lower()
+    if normalized in {"a", "approve", "y", "yes"}:
+        return "approve"
+    if normalized in {"r", "reject", "n", "no"}:
+        return "reject"
+    if normalized in {"auto", "aa", "always"}:
+        return "auto"
+
+    return None
+
+
+def _prompt_for_tool_confirmation(
+    request: _ToolConfirmationRequest,
+    *,
+    approval_context: _InteractiveApprovalContext,
+    input_reader: InputReader,
+    stderr: TextIO,
+) -> bool:
+    if approval_context.auto_approve:
+        print(
+            f"[approval {request.request_id}] auto-approved tool '{request.tool_name}'.",
+            file=stderr,
+        )
+        return True
+
+    print(
+        f"[approval {request.request_id}] Tool '{request.tool_name}' requested confirmation.",
+        file=stderr,
+    )
+    if request.hint is not None:
+        print(f"Hint: {request.hint}", file=stderr)
+    print(f"Args: {_format_approval_args_preview(request.tool_args)}", file=stderr)
+    print("Choose: (a)pprove, (r)eject, or (auto)-approve remaining prompts.", file=stderr)
+
+    while True:
+        raw_response = _read_approval_input(input_reader=input_reader, stderr=stderr)
+        if raw_response is None:
+            print(
+                f"[approval {request.request_id}] input unavailable; rejecting tool "
+                f"'{request.tool_name}'.",
+                file=stderr,
+            )
+            return False
+
+        decision = _resolve_confirmation_decision(raw_response)
+        if decision is None:
+            print(
+                "[error] Invalid approval response. Enter 'a', 'r', or 'auto'.",
+                file=stderr,
+            )
+            continue
+
+        if decision == "auto":
+            approval_context.auto_approve = True
+            print("[approval] Auto-approve enabled for remaining tool prompts.", file=stderr)
+            print(
+                f"[approval {request.request_id}] approved tool '{request.tool_name}'.",
+                file=stderr,
+            )
+            return True
+
+        if decision == "approve":
+            print(
+                f"[approval {request.request_id}] approved tool '{request.tool_name}'.", file=stderr
+            )
+            return True
+
+        print(f"[approval {request.request_id}] rejected tool '{request.tool_name}'.", file=stderr)
+        return False
+
+
+def _build_confirmation_response_message(*, request_id: str, approved: bool) -> types.Content:
+    confirmation = resume_approval(approved=approved)
+    response_payload = confirmation.model_dump(by_alias=True, exclude_none=True)
+
+    part = types.Part.from_function_response(
+        name=REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
+        response=response_payload,
+    )
+    if part.function_response is not None:
+        part.function_response.id = request_id
+
+    return types.Content(role="user", parts=[part])
+
+
 def _render_event(event: Any, *, renderer: _TurnRenderer) -> None:
     event_error = _extract_event_error(event)
     if event_error is not None:
@@ -425,13 +613,18 @@ def _render_event(event: Any, *, renderer: _TurnRenderer) -> None:
             tool_name = getattr(function_call, "name", None)
             if not isinstance(tool_name, str) or not tool_name:
                 tool_name = "unknown_tool"
-            renderer.tool_call(tool_name)
+
+            if tool_name != REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
+                renderer.tool_call(tool_name)
 
         function_response = getattr(part, "function_response", None)
         if function_response is not None:
             tool_name = getattr(function_response, "name", None)
             if not isinstance(tool_name, str) or not tool_name:
                 tool_name = "unknown_tool"
+
+            if tool_name == REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
+                continue
 
             tool_error = _extract_tool_error(function_response)
             if tool_error is not None:
@@ -456,20 +649,53 @@ async def _run_interactive_turn(
     session_id: str,
     stdout: TextIO,
     stderr: TextIO,
+    input_reader: InputReader = input,
+    approval_context: _InteractiveApprovalContext | None = None,
 ) -> None:
     renderer = _TurnRenderer(stdout=stdout, stderr=stderr)
-    user_message = types.Content(role="user", parts=[types.Part(text=prompt)])
+    approval_context = approval_context or _InteractiveApprovalContext(auto_approve=False)
+    pending_messages: list[types.Content] = [
+        types.Content(role="user", parts=[types.Part(text=prompt)])
+    ]
 
     try:
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session_id,
-            new_message=user_message,
-        ):
-            if getattr(event, "author", None) == "user":
-                continue
+        while pending_messages:
+            next_message = pending_messages.pop(0)
+            pending_confirmations: list[_ToolConfirmationRequest] = []
+            seen_confirmation_ids: set[str] = set()
 
-            _render_event(event, renderer=renderer)
+            async for event in runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=next_message,
+            ):
+                if getattr(event, "author", None) == "user":
+                    continue
+
+                _render_event(event, renderer=renderer)
+
+                for request in _extract_confirmation_requests(event):
+                    if request.request_id in seen_confirmation_ids:
+                        continue
+
+                    seen_confirmation_ids.add(request.request_id)
+                    pending_confirmations.append(request)
+
+            for request in pending_confirmations:
+                renderer.finish_assistant_line()
+                approved = _prompt_for_tool_confirmation(
+                    request,
+                    approval_context=approval_context,
+                    input_reader=input_reader,
+                    stderr=stderr,
+                )
+                pending_messages.append(
+                    _build_confirmation_response_message(
+                        request_id=request.request_id,
+                        approved=approved,
+                    )
+                )
+
     except Exception as exc:  # noqa: BLE001 - keep REPL alive across turn errors.
         renderer.error(str(exc))
     finally:
@@ -491,8 +717,6 @@ async def _run_interactive_async(
     stderr: TextIO | None = None,
 ) -> int:
     """Run interactive REPL mode until the user exits."""
-    del auto_approve  # Reserved for future HITL auto-approve behavior.
-
     input_stream = stdin if stdin is not None else sys.stdin
     out_stream = stdout if stdout is not None else sys.stdout
     err_stream = stderr if stderr is not None else sys.stderr
@@ -516,11 +740,14 @@ async def _run_interactive_async(
         runner = _build_runner(agent_name=agent_name, model=new_model, db_path=db_path)
 
     model_context = _ModelCommandContext(model=model, switch_model=_switch_model)
+    approval_context = _InteractiveApprovalContext(auto_approve=auto_approve)
 
     print(
         f"[thread {thread_context.active_session_id}] interactive mode. Type /help for commands.",
         file=err_stream,
     )
+    if approval_context.auto_approve:
+        print("[approval] Auto-approve enabled for this interactive session.", file=err_stream)
 
     while True:
         prompt = pending_prompt
@@ -554,6 +781,8 @@ async def _run_interactive_async(
             session_id=thread_context.active_session_id,
             stdout=out_stream,
             stderr=err_stream,
+            input_reader=input_reader,
+            approval_context=approval_context,
         )
 
     return 0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 import adk_deepagents.cli.interactive as repl
 from adk_deepagents.cli.session_store import ThreadRecord
@@ -18,14 +19,29 @@ class _FakeStdin:
 
 
 class _FakeFunctionCall:
-    def __init__(self, name: str):
+    def __init__(
+        self,
+        name: str,
+        *,
+        call_id: str | None = None,
+        args: dict[str, object] | None = None,
+    ):
         self.name = name
+        self.id = call_id
+        self.args = args if args is not None else {}
 
 
 class _FakeFunctionResponse:
-    def __init__(self, name: str, response: dict[str, str]):
+    def __init__(
+        self,
+        name: str,
+        response: dict[str, object],
+        *,
+        call_id: str | None = None,
+    ):
         self.name = name
         self.response = response
+        self.id = call_id
 
 
 class _FakePart:
@@ -65,6 +81,71 @@ class _TurnFakeRunner:
                     function_response=_FakeFunctionResponse(
                         "ls",
                         {"error": "permission denied"},
+                    )
+                )
+            ],
+        )
+
+
+def _confirmation_request_args(
+    *,
+    tool_name: str = "write_file",
+    tool_args: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "originalFunctionCall": {
+            "id": "fc-tool-1",
+            "name": tool_name,
+            "args": tool_args if tool_args is not None else {"file_path": "README.md"},
+        },
+        "toolConfirmation": {
+            "hint": f"Tool '{tool_name}' requires approval.",
+            "confirmed": False,
+        },
+    }
+
+
+class _ApprovalFlowRunner:
+    def __init__(self):
+        self.messages: list[Any] = []
+
+    async def run_async(self, *, user_id, session_id, new_message):
+        del user_id, session_id
+        self.messages.append(new_message)
+
+        first_part = new_message.parts[0]
+        function_response = getattr(first_part, "function_response", None)
+
+        if function_response is None:
+            yield _FakeEvent(
+                "assistant",
+                [
+                    _FakePart(
+                        function_call=_FakeFunctionCall(
+                            repl.REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
+                            call_id="req-1",
+                            args=_confirmation_request_args(),
+                        )
+                    )
+                ],
+            )
+            return
+
+        decision = bool(function_response.response.get("confirmed"))
+        if decision:
+            yield _FakeEvent("assistant", [_FakePart("approved and resumed")])
+            return
+
+        yield _FakeEvent(
+            "assistant",
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "write_file",
+                        {
+                            "status": "rejected",
+                            "message": "Tool 'write_file' was rejected.",
+                        },
                     )
                 )
             ],
@@ -247,6 +328,22 @@ def test_handle_slash_command_model_queries_and_switches() -> None:
     assert thread_context.model is None
 
 
+def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_create_deep_agent(**kwargs: object):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(repl, "create_deep_agent", _fake_create_deep_agent)
+
+    repl._build_cli_agent(agent_name="demo", model=None, cwd=Path("/tmp/workspace"))
+
+    assert captured["name"] == "demo_cli"
+    assert captured["execution"] == "local"
+    assert captured["interrupt_on"] == repl.INTERACTIVE_INTERRUPT_ON
+
+
 def test_run_interactive_turn_streams_text_and_tool_events() -> None:
     out = io.StringIO()
     err = io.StringIO()
@@ -264,6 +361,110 @@ def test_run_interactive_turn_streams_text_and_tool_events() -> None:
 
     assert out.getvalue() == "assistant> hello world\n[tool] ls\n"
     assert "[error] ls: permission denied" in err.getvalue()
+
+
+def test_run_interactive_turn_hitl_approve_path() -> None:
+    runner = _ApprovalFlowRunner()
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    responses = iter(["approve"])
+
+    def _input_reader(_prompt: str) -> str:
+        return next(responses)
+
+    repl.asyncio.run(
+        repl._run_interactive_turn(
+            runner=runner,
+            prompt="please update README",
+            user_id="u1",
+            session_id="s1",
+            stdout=out,
+            stderr=err,
+            input_reader=_input_reader,
+            approval_context=repl._InteractiveApprovalContext(auto_approve=False),
+        )
+    )
+
+    assert len(runner.messages) == 2
+    first_message = runner.messages[0]
+    assert first_message.parts[0].text == "please update README"
+
+    confirmation_message = runner.messages[1]
+    function_response = confirmation_message.parts[0].function_response
+    assert function_response is not None
+    assert function_response.name == repl.REQUEST_CONFIRMATION_FUNCTION_CALL_NAME
+    assert function_response.id == "req-1"
+    assert function_response.response["confirmed"] is True
+
+    assert "approved and resumed" in out.getvalue()
+    assert "requested confirmation" in err.getvalue()
+    assert "approved tool 'write_file'" in err.getvalue()
+
+
+def test_run_interactive_turn_hitl_reject_path() -> None:
+    runner = _ApprovalFlowRunner()
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    responses = iter(["reject"])
+
+    def _input_reader(_prompt: str) -> str:
+        return next(responses)
+
+    repl.asyncio.run(
+        repl._run_interactive_turn(
+            runner=runner,
+            prompt="please update README",
+            user_id="u1",
+            session_id="s1",
+            stdout=out,
+            stderr=err,
+            input_reader=_input_reader,
+            approval_context=repl._InteractiveApprovalContext(auto_approve=False),
+        )
+    )
+
+    assert len(runner.messages) == 2
+    confirmation_message = runner.messages[1]
+    function_response = confirmation_message.parts[0].function_response
+    assert function_response is not None
+    assert function_response.response["confirmed"] is False
+
+    assert "rejected tool 'write_file'" in err.getvalue()
+
+
+def test_run_interactive_turn_hitl_auto_approve_path() -> None:
+    runner = _ApprovalFlowRunner()
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    def _input_reader(_prompt: str) -> str:
+        raise AssertionError("input reader should not be called when auto-approve is enabled")
+
+    repl.asyncio.run(
+        repl._run_interactive_turn(
+            runner=runner,
+            prompt="please update README",
+            user_id="u1",
+            session_id="s1",
+            stdout=out,
+            stderr=err,
+            input_reader=_input_reader,
+            approval_context=repl._InteractiveApprovalContext(auto_approve=True),
+        )
+    )
+
+    assert len(runner.messages) == 2
+    confirmation_message = runner.messages[1]
+    function_response = confirmation_message.parts[0].function_response
+    assert function_response is not None
+    assert function_response.response["confirmed"] is True
+
+    assert "auto-approved tool 'write_file'" in err.getvalue()
 
 
 def test_run_interactive_async_auto_submits_first_message(monkeypatch) -> None:

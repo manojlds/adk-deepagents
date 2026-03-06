@@ -556,6 +556,7 @@ def test_cli_main_interactive_mode_invokes_repl_runner(tmp_path, monkeypatch, ca
     assert exit_code == 0
     assert captured_kwargs["first_prompt"] is None
     assert captured_kwargs["agent_name"] == "demo"
+    assert captured_kwargs["auto_approve"] is False
 
 
 def test_cli_main_message_mode_passes_first_prompt_to_repl(tmp_path, monkeypatch, capsys) -> None:
@@ -577,6 +578,30 @@ def test_cli_main_message_mode_passes_first_prompt_to_repl(tmp_path, monkeypatch
     assert exit_code == 0
     assert captured_kwargs["first_prompt"] == "hello there"
     assert captured_kwargs["session_id"]
+
+
+def test_cli_main_interactive_forwards_auto_approve_flag(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    exit_code = cli_main(["--agent", "demo", "--auto-approve"])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_kwargs["auto_approve"] is True
 
 
 def test_cli_main_interactive_forwards_resolved_model_precedence(
