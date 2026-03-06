@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 
 from adk_deepagents import __version__
-
-DEFAULT_AGENT_NAME = "agent"
+from adk_deepagents.cli.config import (
+    DEFAULT_AGENT_NAME,
+    CliDefaults,
+    CliPaths,
+    bootstrap_cli_home,
+    ensure_profile_memory,
+    list_profiles,
+    load_cli_defaults,
+    reset_profile_memory,
+    resolve_cli_paths,
+    save_cli_defaults,
+)
 
 
 def _parse_shell_allow_list(raw: str) -> list[str]:
@@ -36,14 +47,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("list", "reset"),
+        help="Profile command to run.",
+    )
+
+    parser.add_argument(
         "-a",
         "--agent",
-        default=DEFAULT_AGENT_NAME,
-        help="Agent profile name.",
+        help=(
+            "Agent profile name. Defaults to the value from "
+            "~/.adk-deepagents/config.toml (or 'agent' on first run)."
+        ),
     )
     parser.add_argument(
         "--model",
-        help="Override the model for this run.",
+        help="Override the model for this run and persist as the new default.",
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -96,6 +116,30 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.shell_allow_list is not None and args.non_interactive_prompt is None:
         parser.error("--shell-allow-list requires -n/--non-interactive.")
 
+    if args.command in {"list", "reset"} and (
+        args.non_interactive_prompt is not None or args.message_prompt is not None
+    ):
+        parser.error(
+            "list/reset commands cannot be combined with -n/--non-interactive or -m/--message."
+        )
+
+    if args.command == "reset" and args.agent is None:
+        parser.error("reset requires --agent <name>.")
+
+
+def _initialize_cli_state() -> tuple[CliPaths, CliDefaults] | tuple[None, None]:
+    """Bootstrap CLI directories and load persisted defaults."""
+    paths = resolve_cli_paths()
+    try:
+        bootstrap_cli_home(paths)
+        defaults = load_cli_defaults(paths)
+        ensure_profile_memory(paths, defaults.default_agent)
+    except (OSError, ValueError) as exc:
+        print(f"error: failed to initialize CLI config: {exc}", file=sys.stderr)
+        return None, None
+
+    return paths, defaults
+
 
 def cli_main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint used by console scripts and module execution."""
@@ -111,5 +155,50 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     if args.version:
         print(f"adk-deepagents {__version__}")
         return 0
+
+    paths, defaults = _initialize_cli_state()
+    if paths is None or defaults is None:
+        return 1
+
+    if args.command == "list":
+        for profile in list_profiles(paths):
+            print(profile)
+        return 0
+
+    if args.command == "reset":
+        assert args.agent is not None  # validated by _validate_args()
+        try:
+            reset_profile_memory(paths, args.agent)
+        except (OSError, ValueError) as exc:
+            print(f"error: failed to reset profile: {exc}", file=sys.stderr)
+            return 1
+
+        print(f"Reset profile '{args.agent}'.")
+        return 0
+
+    resolved_agent = args.agent or defaults.default_agent or DEFAULT_AGENT_NAME
+
+    try:
+        ensure_profile_memory(paths, resolved_agent)
+    except (OSError, ValueError) as exc:
+        print(f"error: failed to prepare profile '{resolved_agent}': {exc}", file=sys.stderr)
+        return 1
+
+    should_save_defaults = False
+
+    if args.agent is not None and resolved_agent != defaults.default_agent:
+        defaults.default_agent = resolved_agent
+        should_save_defaults = True
+
+    if args.model is not None and args.model != defaults.default_model:
+        defaults.default_model = args.model
+        should_save_defaults = True
+
+    if should_save_defaults:
+        try:
+            save_cli_defaults(paths, defaults)
+        except (OSError, ValueError) as exc:
+            print(f"error: failed to save CLI defaults: {exc}", file=sys.stderr)
+            return 1
 
     return 0
