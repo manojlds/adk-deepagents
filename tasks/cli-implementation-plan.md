@@ -41,19 +41,22 @@ These components are already implemented and should be reused rather than rebuil
 
 1. Default interactive terminal mode with streaming assistant text.
 2. `-n` single-task mode (script-friendly).
-3. Session persistence using ADK `SqliteSessionService`.
-4. Thread commands: list, resume, delete.
-5. HITL approval prompts for configured tools.
-6. Agent profile selection (`--agent`) and model override (`--model`).
-7. Persistent config file for defaults.
-8. Global/project memory + skills directory resolution.
+3. `-m` initial prompt mode (interactive launch + auto-submit first message).
+4. Session persistence using ADK `SqliteSessionService`.
+5. Thread commands: list/resume/delete.
+6. HITL approval prompts for configured tools.
+7. Agent profile selection (`--agent`) and model override (`--model`).
+8. Model env fallback (`ADK_DEEPAGENTS_MODEL`) and `.env` loading.
+9. Persistent config file for defaults.
+10. Global/project memory + skills directory resolution.
+11. Non-interactive shell safety policy with allow-list support.
 
 ### In Scope (V1+)
 
-1. Rich slash commands (`/model`, `/threads`, `/help`, `/clear`, `/quit`, `/tokens`).
+1. Rich slash commands (`/model`, `/threads`, `/help`, `/clear`, `/quit`, `/tokens`, `/remember`).
 2. Tool call formatting and concise status rendering.
 3. Optional diff rendering for file writes/edits.
-4. Shell allow-list behavior for non-interactive mode.
+4. Input history + command recall polish.
 
 ### Out Of Scope (Initial Delivery)
 
@@ -95,7 +98,8 @@ Proposed modules:
 1. Runner: use `google.adk.runners.Runner` (not only `InMemoryRunner`) so we can inject `SqliteSessionService`.
 2. Session service: `google.adk.sessions.sqlite_session_service.SqliteSessionService`.
 3. Backend default for CLI: `FilesystemBackend(root_dir=<cwd>, virtual_mode=True)`.
-4. Model source: user CLI flags + persistent config fallback.
+4. Model source: `--model` > `ADK_DEEPAGENTS_MODEL` > config default.
+5. Environment loading: auto-load `.env` from CWD (without overriding pre-set process env).
 
 ## Configuration And Data Layout
 
@@ -103,9 +107,10 @@ Use `~/.adk-deepagents/` as CLI home:
 
 1. `config.toml`: global config.
 2. `sessions.db`: persistent ADK session store.
-3. `<agent_name>/AGENTS.md`: per-agent global memory.
-4. `<agent_name>/skills/`: per-agent user skills.
-5. Optional future files: `recent_models.json`, `warnings.toml`.
+3. `history.jsonl`: local input history for interactive UX.
+4. `<agent_name>/AGENTS.md`: per-agent global memory.
+5. `<agent_name>/skills/`: per-agent user skills.
+6. Optional future files: `recent_models.json`, `warnings.toml`.
 
 Suggested `config.toml` shape:
 
@@ -126,17 +131,21 @@ auto_approve = false
 Initial command/flag matrix:
 
 1. Default command: interactive mode.
-2. `-n <prompt>`: non-interactive single task.
-3. `-q`: quiet output (non-interactive only).
-4. `--no-stream`: buffer output before printing (non-interactive only).
-5. `-a, --agent <name>`: agent profile.
-6. `-M, --model <model>`: model override.
-7. `-r, --resume [thread_id]`: resume latest or specific thread.
-8. `--auto-approve`: disable HITL prompts.
-9. `threads list [--agent <name>] [--limit N]`.
-10. `threads delete <thread_id>`.
-11. `list`: list available agent profiles.
-12. `reset --agent <name>`: reset profile memory file to default template.
+2. `-m <prompt>`: interactive mode + auto-submit first message.
+3. `-n <prompt>`: non-interactive single task.
+4. `-q`: quiet output (non-interactive only).
+5. `--no-stream`: buffer output before printing (non-interactive only).
+6. `-a, --agent <name>`: agent profile.
+7. `-M, --model <model>`: model override.
+8. `-r, --resume [thread_id]`: resume latest or specific thread.
+9. `--auto-approve`: disable HITL prompts.
+10. `--shell-allow-list <csv|recommended>`: allow specific shell commands in non-interactive mode.
+11. `threads list [--agent <name>] [--limit N]`.
+12. `threads ls` alias for list.
+13. `threads delete <thread_id>`.
+14. `list`: list available agent profiles.
+15. `reset --agent <name>`: reset profile memory file to default template.
+16. `help`: command usage summary.
 
 ## Thread And Session Strategy
 
@@ -169,23 +178,25 @@ The CLI must bridge ADK confirmation requests and user decisions:
 Approval policy defaults:
 
 1. Interactive: prompt unless `--auto-approve`.
-2. Non-interactive: default reject for confirmation-requiring tools unless explicitly allowed by flags.
-3. Future: command allow-list for shell to support safer automation.
+2. Non-interactive: reject confirmation-required operations by default.
+3. Non-interactive shell: disabled unless `--shell-allow-list` is explicitly set.
+4. With allow-list enabled: reject shell commands not in the configured list with clear diagnostics.
 
 ## Interactive Flow
 
 Interactive loop behavior:
 
 1. Start/load session.
-2. Read user input line.
-3. Handle local slash commands if input starts with `/`.
-4. Otherwise send as ADK user content.
-5. Stream events and render:
+2. If `-m` is provided, enqueue that message as the first turn.
+3. Read user input line.
+4. Handle local slash commands if input starts with `/`.
+5. Otherwise send as ADK user content.
+6. Stream events and render:
    - assistant text chunks
    - tool call headers
    - tool outputs (compact)
    - confirmation prompts
-6. Return to prompt after turn completion.
+7. Return to prompt after turn completion.
 
 Initial slash command set:
 
@@ -202,10 +213,15 @@ Non-interactive mode requirements:
 1. Accept prompt via `-n`, stdin pipe, or both (pipe content prepended).
 2. Stream or buffer assistant output depending on `--no-stream`.
 3. Output only assistant text in quiet mode.
-4. Exit codes:
+4. Shell policy:
+   - disabled by default
+   - enabled only with `--shell-allow-list`
+   - reject commands not in the allow-list
+5. Exit codes:
    - `0` success
-   - non-zero on runtime/config/model/session failures
-5. Confirmation handling:
+   - `1` runtime/config/model/session failures
+   - `2` usage/validation failures
+6. Confirmation handling:
    - reject-by-default unless approved by flags/policy
    - return clear stderr diagnostics
 
@@ -213,13 +229,14 @@ Non-interactive mode requirements:
 
 `agent_factory.py` responsibilities:
 
-1. Resolve model from flag > profile config > global default.
+1. Resolve model from flag > env > config default.
 2. Resolve memory paths in precedence order.
 3. Resolve skills directories in precedence order.
 4. Build backend appropriate for CLI mode.
 5. Configure `interrupt_on` defaults for high-risk tools.
-6. Call `create_deep_agent(...)` or `create_deep_agent_async(...)` as required by selected execution/browser config.
-7. Return `(agent, cleanup)` where `cleanup` handles MCP teardown when needed.
+6. Configure shell enablement policy for non-interactive runs.
+7. Call `create_deep_agent(...)` or `create_deep_agent_async(...)` as required by selected execution/browser config.
+8. Return `(agent, cleanup)` where `cleanup` handles MCP teardown when needed.
 
 ## Memory And Skills Resolution
 
@@ -283,23 +300,39 @@ Deliverables:
 1. `-n` mode execution.
 2. stdin merge behavior.
 3. quiet/no-stream flags.
+4. Shell allow-list behavior and default shell disablement in non-interactive mode.
 
 Acceptance criteria:
 
 1. Non-interactive mode works in shell pipelines.
-2. Stable exit codes for success/failure.
+2. Stable exit codes for success/failure/usage errors.
+3. Shell execution is blocked unless allow-list is provided.
 
-## Phase 4: Interactive Streaming Mode
+## Phase 4A: Interactive Streaming Loop (Core)
 
 Deliverables:
 
 1. Streaming chat REPL.
-2. Basic event rendering for text/tools/errors.
-3. Slash command core set.
+2. Persistent thread start/resume behavior in interactive mode.
+3. Basic event rendering for text/tools/errors.
 
 Acceptance criteria:
 
 1. Multi-turn interactive sessions are usable and persistent.
+2. `--resume` works reliably across restarts.
+
+## Phase 4B: Interactive Commands + UX Baseline
+
+Deliverables:
+
+1. Slash command core set (`/help`, `/threads`, `/model`, `/clear`, `/quit`).
+2. `-m` initial prompt support (interactive launch + immediate first turn).
+3. Thread switching/new-thread commands wired to session store.
+
+Acceptance criteria:
+
+1. `-m` and slash commands work in real interactive sessions.
+2. Command handling does not break thread continuity.
 
 ## Phase 5: HITL Approval Loop
 
@@ -319,11 +352,13 @@ Deliverables:
 
 1. `--model` + `/model` switching.
 2. Persistent default model support.
-3. Cleaner tool call rendering.
+3. `/tokens` and `/remember` command support.
+4. Cleaner tool call rendering.
 
 Acceptance criteria:
 
 1. Model switching works without losing thread continuity.
+2. Model resolution precedence is documented and tested.
 
 ## Phase 7: Docs And Hardening
 
@@ -338,18 +373,30 @@ Acceptance criteria:
 1. Documented commands match implemented behavior.
 2. CI passes lint/type/test gates.
 
+## Current Status Snapshot
+
+Current implementation status in this repository:
+
+1. Phase 0 complete.
+2. Phase 1 complete.
+3. Phase 2 complete.
+4. Phase 3 complete (including non-interactive execution, stdin merge, quiet/no-stream, and stable exit codes).
+5. `.env` loading and model env fallback (`ADK_DEEPAGENTS_MODEL`) implemented.
+
 ## Testing Strategy
 
 ## Unit Tests
 
 Add under `tests/unit_tests/cli/`:
 
-1. Arg parsing and flag validation.
+1. Arg parsing and flag validation (`-n`, `-m`, `--resume`, `--no-stream`, etc.).
 2. Config file load/save with defaults and malformed TOML handling.
 3. Path resolution and project root detection.
 4. Session store utilities (list/filter/sort/metadata extraction).
-5. Event rendering formatting helpers.
-6. Approval payload parsing and response generation.
+5. Model resolution precedence (flag > env > config).
+6. Event rendering formatting helpers.
+7. Approval payload parsing and response generation.
+8. Shell allow-list parse/validation logic.
 
 ## Integration Tests
 
@@ -358,23 +405,27 @@ Add under `tests/integration_tests/cli/`:
 1. Non-interactive turn execution over real `Runner` + SQLite sessions.
 2. Resume thread and continue multi-turn conversation.
 3. HITL pause/resume flow with controlled confirmation input.
-4. CLI command invocations (`threads list/delete`, profile switching).
+4. CLI command invocations (`threads list/delete`, profile switching, `threads ls`).
+5. Non-interactive shell allow-list enforcement (allowed command runs, disallowed command rejected).
+6. Interactive `-m` startup behavior.
 
 ## Manual Smoke Matrix
 
 1. Linux/macOS interactive REPL.
-2. `-n` and pipe mode.
+2. `-n`, `-m`, and pipe mode.
 3. `--auto-approve` behavior.
-4. Profile-specific memory/skills loading.
-5. Async cleanup behavior for MCP-enabled configs.
+4. Non-interactive shell allow-list behavior.
+5. Profile-specific memory/skills loading.
+6. Async cleanup behavior for MCP-enabled configs.
 
 ## Security And Safety Considerations
 
 1. Keep destructive tool approval on by default in interactive mode.
 2. Reject confirmations by default in non-interactive mode unless policy allows.
-3. Avoid shell auto-approval unless explicit allow-list is configured.
-4. Use `FilesystemBackend(..., virtual_mode=True)` rooted at selected workspace to reduce accidental file traversal.
-5. Redact obvious sensitive values in rendered logs when possible.
+3. Keep shell disabled by default in non-interactive mode.
+4. Avoid shell auto-approval unless explicit allow-list is configured.
+5. Use `FilesystemBackend(..., virtual_mode=True)` rooted at selected workspace to reduce accidental file traversal.
+6. Redact obvious sensitive values in rendered logs when possible.
 
 ## Risks And Mitigations
 
@@ -390,10 +441,11 @@ Add under `tests/integration_tests/cli/`:
 ## Milestone-Based Delivery Plan
 
 1. Milestone A: CLI skeleton + config + session persistence.
-2. Milestone B: Non-interactive mode + stable command UX.
-3. Milestone C: Interactive streaming + slash commands.
-4. Milestone D: HITL end-to-end approvals + auto-approve policy.
-5. Milestone E: Model/profile polish + docs + release hardening.
+2. Milestone B: Non-interactive mode + shell allow-list safety + stable command UX.
+3. Milestone C1: Interactive streaming loop + persistence.
+4. Milestone C2: Slash commands + `-m` interactive startup.
+5. Milestone D: HITL end-to-end approvals + auto-approve policy.
+6. Milestone E: Model/profile polish + docs + release hardening.
 
 ## Definition Of Done
 
@@ -404,13 +456,13 @@ The CLI initiative is done when all of the following are true:
 3. Session persistence and thread management commands are stable.
 4. HITL approvals work end-to-end for configured tools.
 5. Profile + model defaults persist between runs.
-6. Test coverage exists for parser/config/session/HITL critical paths.
+6. Test coverage exists for parser/config/session/HITL/shell-policy critical paths.
 7. Core docs (`README`, `docs/cli.md`) reflect real behavior.
 
 ## Open Questions
 
 1. Should we adopt Textual early, or lock in the backend contract with a plain REPL first?
 2. Which exact tools should be interrupted by default in CLI mode?
-3. Should non-interactive mode ever auto-approve by default for a safe command subset?
+3. What should the `--shell-allow-list recommended` preset include in v1?
 4. Do we want per-project `.adk-deepagents.toml` overrides in v1?
 5. Should thread IDs be ADK UUIDs or user-facing shortened aliases?
