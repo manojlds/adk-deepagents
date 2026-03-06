@@ -579,6 +579,39 @@ def test_cli_main_message_mode_passes_first_prompt_to_repl(tmp_path, monkeypatch
     assert captured_kwargs["session_id"]
 
 
+def test_cli_main_interactive_forwards_resolved_model_precedence(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.delenv(MODEL_ENV_VAR, raising=False)
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    seen_models: list[str | None] = []
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        model = kwargs.get("model")
+        assert model is None or isinstance(model, str)
+        seen_models.append(model)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    assert cli_main(["--agent", "demo", "--model", "config-model"]) == 0
+    _ = capsys.readouterr()
+
+    monkeypatch.setenv(MODEL_ENV_VAR, "env-model")
+    assert cli_main(["--agent", "demo"]) == 0
+    _ = capsys.readouterr()
+
+    assert cli_main(["--agent", "demo", "--model", "cli-model"]) == 0
+    _ = capsys.readouterr()
+
+    assert seen_models == ["config-model", "env-model", "cli-model"]
+
+
 def test_cli_main_quiet_requires_non_interactive_prompt_or_piped_stdin(
     tmp_path,
     monkeypatch,

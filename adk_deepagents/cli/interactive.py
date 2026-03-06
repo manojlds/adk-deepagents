@@ -28,12 +28,14 @@ INPUT_PROMPT = "> "
 THREAD_LIST_LIMIT = 200
 INTERACTIVE_HELP_TEXT = (
     "Interactive commands:\n"
-    "  /help                  Show this help message\n"
-    "  /threads               List recent threads and show the active thread\n"
-    "  /threads <selector>    Switch thread by index, thread id, or 'latest'\n"
-    "  /clear                 Start a new thread and make it active\n"
-    "  /quit                  Exit interactive mode\n"
-    "  /q                     Exit interactive mode\n"
+    "  /help                      Show this help message\n"
+    "  /threads                   List recent threads and show the active thread\n"
+    "  /threads <selector>        Switch thread by index, thread id, or 'latest'\n"
+    "  /clear                     Start a new thread and make it active\n"
+    "  /model                     Show the active model for this REPL session\n"
+    "  /model <name|default>      Switch model for subsequent turns\n"
+    "  /quit                      Exit interactive mode\n"
+    "  /q                         Exit interactive mode\n"
 )
 
 SlashCommandResult = Literal["not_command", "handled", "exit"]
@@ -87,6 +89,14 @@ class _ThreadCommandContext:
     active_session_id: str
 
 
+@dataclass
+class _ModelCommandContext:
+    """Mutable interactive model state used by slash commands."""
+
+    model: str | None
+    switch_model: Callable[[str | None], None]
+
+
 def _normalize_prompt(prompt: str | None) -> str | None:
     if prompt is None:
         return None
@@ -113,6 +123,25 @@ def _build_cli_agent(agent_name: str, model: str | None, cwd: Path):
     )
 
 
+def _build_runner(*, agent_name: str, model: str | None, db_path: Path) -> Runner:
+    agent = _build_cli_agent(agent_name=agent_name, model=model, cwd=Path.cwd())
+    session_service = SqliteSessionService(str(db_path))
+    return Runner(
+        app_name=CLI_SESSIONS_APP_NAME,
+        agent=agent,
+        session_service=session_service,
+    )
+
+
+def _normalize_model_value(raw: str) -> str | None:
+    normalized = raw.strip()
+    return normalized or None
+
+
+def _format_model_name(model: str | None) -> str:
+    return model if model is not None else "default"
+
+
 def _format_timestamp(timestamp: float | None) -> str:
     if timestamp is None:
         return "-"
@@ -134,12 +163,14 @@ def _render_threads_list(
     print(f"Threads for profile '{thread_context.agent_name}':", file=stdout)
     print("CUR\tINDEX\tTHREAD_ID\tUPDATED_AT\tCREATED_AT\tMODEL", file=stdout)
     for index, thread in enumerate(threads, start=1):
-        marker = "*" if thread.session_id == thread_context.active_session_id else "-"
-        model_name = thread.model or "-"
+        is_active = thread.session_id == thread_context.active_session_id
+        marker = "*" if is_active else "-"
+        model_name = thread_context.model if is_active else thread.model
+        model_label = model_name or "-"
         print(
             f"{marker}\t{index}\t{thread.session_id}\t"
             f"{_format_timestamp(thread.updated_at)}\t"
-            f"{_format_timestamp(thread.created_at)}\t{model_name}",
+            f"{_format_timestamp(thread.created_at)}\t{model_label}",
             file=stdout,
         )
 
@@ -230,12 +261,52 @@ def _handle_threads_slash_command(
     return "handled"
 
 
+def _handle_model_slash_command(
+    raw_command: str,
+    *,
+    thread_context: _ThreadCommandContext,
+    model_context: _ModelCommandContext,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> SlashCommandResult:
+    command_parts = raw_command.split(maxsplit=1)
+    model_selector = command_parts[1] if len(command_parts) == 2 else None
+
+    if model_selector is None:
+        print(f"Active model: {_format_model_name(model_context.model)}", file=stdout)
+        print("Use /model <name|default> to switch models.", file=stdout)
+        return "handled"
+
+    requested_model = _normalize_model_value(model_selector)
+    if requested_model is None:
+        print("[error] /model requires a model name or 'default'.", file=stderr)
+        return "handled"
+
+    target_model = None if requested_model.lower() in {"default", "reset"} else requested_model
+
+    if target_model == model_context.model:
+        print(f"[model {_format_model_name(target_model)}] already active.", file=stderr)
+        return "handled"
+
+    try:
+        model_context.switch_model(target_model)
+    except Exception as exc:  # noqa: BLE001 - slash command errors should not kill REPL.
+        print(f"[error] Failed to switch model: {exc}", file=stderr)
+        return "handled"
+
+    model_context.model = target_model
+    thread_context.model = target_model
+    print(f"[model {_format_model_name(target_model)}] switched active model.", file=stderr)
+    return "handled"
+
+
 def handle_slash_command(
     prompt: str,
     *,
     stdout: TextIO,
     stderr: TextIO,
     thread_context: _ThreadCommandContext | None = None,
+    model_context: _ModelCommandContext | None = None,
 ) -> SlashCommandResult:
     """Handle slash commands in interactive mode."""
     if not prompt.startswith("/"):
@@ -279,6 +350,19 @@ def handle_slash_command(
         return _handle_threads_slash_command(
             command,
             thread_context=thread_context,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    if command_lower == "/model" or command_lower.startswith("/model "):
+        if thread_context is None or model_context is None:
+            print("[error] Model controls are unavailable in this context.", file=stderr)
+            return "handled"
+
+        return _handle_model_slash_command(
+            command,
+            thread_context=thread_context,
+            model_context=model_context,
             stdout=stdout,
             stderr=stderr,
         )
@@ -425,13 +509,13 @@ async def _run_interactive_async(
         active_session_id=session_id,
     )
 
-    agent = _build_cli_agent(agent_name=agent_name, model=model, cwd=Path.cwd())
-    session_service = SqliteSessionService(str(db_path))
-    runner = Runner(
-        app_name=CLI_SESSIONS_APP_NAME,
-        agent=agent,
-        session_service=session_service,
-    )
+    runner = _build_runner(agent_name=agent_name, model=model, db_path=db_path)
+
+    def _switch_model(new_model: str | None) -> None:
+        nonlocal runner
+        runner = _build_runner(agent_name=agent_name, model=new_model, db_path=db_path)
+
+    model_context = _ModelCommandContext(model=model, switch_model=_switch_model)
 
     print(
         f"[thread {thread_context.active_session_id}] interactive mode. Type /help for commands.",
@@ -456,6 +540,7 @@ async def _run_interactive_async(
             stdout=out_stream,
             stderr=err_stream,
             thread_context=thread_context,
+            model_context=model_context,
         )
         if slash_result == "handled":
             continue

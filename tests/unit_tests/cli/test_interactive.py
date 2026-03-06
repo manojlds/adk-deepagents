@@ -100,6 +100,7 @@ def test_handle_slash_command_help_prints_usage() -> None:
     assert "Interactive commands" in out.getvalue()
     assert "/threads" in out.getvalue()
     assert "/clear" in out.getvalue()
+    assert "/model" in out.getvalue()
     assert err.getvalue() == ""
 
 
@@ -187,6 +188,63 @@ def test_handle_slash_command_clear_creates_new_thread(monkeypatch) -> None:
     assert result == "handled"
     assert thread_context.active_session_id == "thread-new"
     assert "started a new thread" in err.getvalue()
+
+
+def test_handle_slash_command_model_queries_and_switches() -> None:
+    switched_models: list[str | None] = []
+
+    thread_context = repl._ThreadCommandContext(
+        db_path=Path("/tmp/sessions.db"),
+        user_id="u1",
+        agent_name="demo",
+        model="gemini-2.5-flash",
+        active_session_id="thread-a",
+    )
+    model_context = repl._ModelCommandContext(
+        model="gemini-2.5-flash",
+        switch_model=lambda model: switched_models.append(model),
+    )
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    query_result = repl.handle_slash_command(
+        "/model",
+        stdout=out,
+        stderr=err,
+        thread_context=thread_context,
+        model_context=model_context,
+    )
+
+    assert query_result == "handled"
+    assert "Active model: gemini-2.5-flash" in out.getvalue()
+
+    switch_result = repl.handle_slash_command(
+        "/model gemini-2.5-pro",
+        stdout=out,
+        stderr=err,
+        thread_context=thread_context,
+        model_context=model_context,
+    )
+
+    assert switch_result == "handled"
+    assert switched_models == ["gemini-2.5-pro"]
+    assert model_context.model == "gemini-2.5-pro"
+    assert thread_context.model == "gemini-2.5-pro"
+    assert "switched active model" in err.getvalue()
+
+    reset_result = repl.handle_slash_command(
+        "/model default",
+        stdout=out,
+        stderr=err,
+        thread_context=thread_context,
+        model_context=model_context,
+    )
+
+    assert reset_result == "handled"
+    assert switched_models == ["gemini-2.5-pro", None]
+    assert model_context.model is None
+    assert thread_context.model is None
 
 
 def test_run_interactive_turn_streams_text_and_tool_events() -> None:
@@ -335,6 +393,77 @@ def test_run_interactive_async_thread_commands_switch_session_context(monkeypatc
     assert turn_calls == [("thread-b", "turn one"), ("thread-a", "turn two")]
     assert "[thread thread-b] started a new thread." in err.getvalue()
     assert "[thread thread-a] switched active thread." in err.getvalue()
+
+
+def test_run_interactive_async_model_command_switches_model_and_preserves_thread(
+    monkeypatch,
+) -> None:
+    class _FakeAgent:
+        def __init__(self, model: str | None):
+            self.model = model
+
+    monkeypatch.setattr(
+        repl,
+        "_build_cli_agent",
+        lambda *, agent_name, model, cwd: _FakeAgent(model),
+    )
+    monkeypatch.setattr(repl, "SqliteSessionService", lambda *_: object())
+
+    turn_calls: list[tuple[str, str, str | None]] = []
+
+    class _EchoRunner:
+        def __init__(self, *, app_name, agent, session_service):
+            del app_name, session_service
+            self.model = agent.model
+
+        async def run_async(self, *, user_id, session_id, new_message):
+            del user_id
+            prompt = new_message.parts[0].text
+            turn_calls.append((session_id, prompt, self.model))
+            model_label = self.model or "default"
+            yield _FakeEvent("assistant", [_FakePart(f"echo:{model_label}:{prompt}")])
+
+    monkeypatch.setattr(repl, "Runner", _EchoRunner)
+
+    user_inputs = iter(
+        [
+            "/model gemini-2.5-pro",
+            "turn one",
+            "/model default",
+            "turn two",
+            "/q",
+        ]
+    )
+
+    def _input_reader(_prompt: str) -> str:
+        return next(user_inputs)
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    exit_code = repl.asyncio.run(
+        repl._run_interactive_async(
+            first_prompt=None,
+            model="gemini-2.5-flash",
+            agent_name="demo",
+            user_id="u1",
+            session_id="thread-a",
+            db_path=Path("/tmp/sessions.db"),
+            auto_approve=False,
+            input_reader=_input_reader,
+            stdin=_FakeStdin(isatty_value=True),
+            stdout=out,
+            stderr=err,
+        )
+    )
+
+    assert exit_code == 0
+    assert turn_calls == [
+        ("thread-a", "turn one", "gemini-2.5-pro"),
+        ("thread-a", "turn two", None),
+    ]
+    assert "[model gemini-2.5-pro] switched active model." in err.getvalue()
+    assert "[model default] switched active model." in err.getvalue()
 
 
 def test_run_interactive_async_returns_zero_when_no_tty_and_no_first_prompt(monkeypatch) -> None:
