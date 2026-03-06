@@ -19,6 +19,9 @@ browser = [
     "google-adk[mcp]>=1.0.0",
 ]
 
+[project.scripts]
+adk-deepagents = "adk_deepagents.cli.main:cli_main"
+
 [dependency-groups]
 dev = [
     "adk-skills-agent>=0.1.0",
