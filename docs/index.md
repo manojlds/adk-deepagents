@@ -91,6 +91,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | Page | Description |
 |------|-------------|
 | [Getting Started](getting-started.md) | Installation, first agent, running interactively, ADK CLI, models |
+| [CLI Guide](cli.md) | CLI commands/flags, interactive controls, non-interactive safety, release smoke checklist |
 | [Backends](backends.md) | StateBackend, FilesystemBackend, CompositeBackend, StoreBackend, custom backends |
 | [Tools](tools.md) | Filesystem tools, todo tools, execution tools — signatures, arguments, examples |
 | [Browser Automation](browser.md) | Playwright MCP integration, agent-browser CLI skill, BrowserConfig |
