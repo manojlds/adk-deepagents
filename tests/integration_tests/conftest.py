@@ -24,20 +24,28 @@ litellm.disable_aiohttp_transport = True
 def make_litellm_model():
     """Create a LiteLlm model using available environment variables.
 
-    Reads from OPENAI_API_BASE / LITELLM_MODEL / OPENAI_API_KEY if set,
+    Reads from OPENAI_API_BASE and model env vars from `.env` if set,
     falling back to OPENCODE_API_KEY with default endpoint.
     """
     from google.adk.models.lite_llm import LiteLlm
 
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENCODE_API_KEY", "")
     api_base = os.environ.get("OPENAI_API_BASE", "https://opencode.ai/zen/v1")
-    model = os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini")
+    model = resolve_test_model()
 
     return LiteLlm(
         model=model,
         api_key=api_key,
         api_base=api_base,
     )
+
+
+def resolve_test_model(default: str = "openai/gpt-4o-mini") -> str:
+    """Resolve the model for LLM integration tests.
+
+    Prefers ``ADK_DEEPAGENTS_MODEL`` from `.env`, then ``LITELLM_MODEL``.
+    """
+    return os.environ.get("ADK_DEEPAGENTS_MODEL") or os.environ.get("LITELLM_MODEL") or default
 
 
 def backend_factory(state: dict[str, Any]) -> StateBackend:
@@ -58,7 +66,6 @@ async def run_agent(agent, prompt: str, *, state: dict[str, Any] | None = None):
 
     initial_state: dict[str, Any] = {
         "files": {},
-        "_backend_factory": backend_factory,
     }
     if state:
         initial_state.update(state)
@@ -102,7 +109,6 @@ async def run_agent_with_events(
 
     initial_state: dict[str, Any] = {
         "files": {},
-        "_backend_factory": backend_factory,
     }
     if state:
         initial_state.update(state)

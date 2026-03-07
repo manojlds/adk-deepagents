@@ -5,8 +5,9 @@ search-provider routing, and report quality grading.
 
 ## Features
 
-- **Dynamic delegation** — Uses the dynamic `task` tool with specialist roles:
-  `planner`, `researcher`, `reporter`, `grader`
+- **Runtime specialist bootstrap** — Registers `planner`, `researcher`,
+  `reporter`, and `grader` at runtime via `register_subagent`
+- **Dynamic delegation** — Uses the dynamic `task` tool for specialist work
 - **ADK-native app** — Works with `uv run adk run`, `uv run adk web`, and `uv run adk api_server`
 - **Provider-routed web search** — `auto` mode prioritizes `serper` first
 - **Hard-fail search semantics** — If selected provider fails, search returns
@@ -18,7 +19,8 @@ search-provider routing, and report quality grading.
 ```
 ┌─────────────────────────────────────────────────┐
 │           Orchestrator (deep_research)           │
-│  - Plans via write_todos + planner task          │
+│  - Registers runtime specialist profiles          │
+│  - Plans via write_todos + planner task           │
 │  - Delegates research with dynamic task tool      │
 │  - Drafts report via reporter, grades via grader  │
 │  - Writes final report to /final_report.md        │
@@ -104,6 +106,10 @@ Hard-fail behavior:
 You: Research the current state of quantum computing in 2025
 
 Agent: I'll build a research plan and delegate focused tasks.
+[register_subagent name=planner ...]
+[register_subagent name=researcher ...]
+[register_subagent name=reporter ...]
+[register_subagent name=grader ...]
 [writes todos]
 [task subagent_type=researcher ...]
 [task subagent_type=reporter ...]
@@ -119,6 +125,6 @@ Agent: I've completed the research. The final report is saved to
 
 | File | Description |
 |------|-------------|
-| `agent.py` | Main agent, dynamic delegation configuration, CLI runner |
-| `prompts.py` | Orchestrator + planner/researcher/reporter/grader prompts |
+| `agent.py` | Main agent, runtime specialist profile bootstrap, dynamic delegation config |
+| `prompts.py` | Orchestrator + runtime registration + specialist prompt templates |
 | `tools.py` | Provider-routed web search (Serper-first auto) and think tool |

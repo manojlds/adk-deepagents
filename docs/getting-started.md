@@ -138,6 +138,28 @@ agent = create_deep_agent(
 )
 ```
 
+## Dynamic Runtime Delegation
+
+If you want coding-agent-style delegation without pre-defining `SubAgentSpec`
+objects, enable dynamic mode:
+
+```python
+from adk_deepagents import create_deep_agent
+
+agent = create_deep_agent(
+    model="openai/gpt-4o-mini",
+    delegation_mode="dynamic",
+)
+```
+
+In dynamic mode the parent gets:
+
+- `register_subagent(...)` to define specialist profiles at runtime
+- `task(...)` to delegate work by `subagent_type`
+
+If `task` is called with a new `subagent_type`, adk-deepagents auto-creates a
+runtime specialist profile and reuses it in later turns.
+
 ## Running Interactively
 
 Use ADK's `InMemoryRunner` to run the agent in a Python script:

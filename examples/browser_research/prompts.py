@@ -52,6 +52,25 @@ Write a well-structured report with:
 - Save to `/report.md` using `write_file`
 """
 
+BROWSER_RUNTIME_SUBAGENT_REGISTRATION_INSTRUCTIONS = """\
+# Runtime Specialist Bootstrap
+
+Before delegating with `task`, call `register_subagent` for a specialist named
+`browser_researcher`:
+
+- `name`: `browser_researcher`
+- `description`: Browser research specialist for JavaScript-heavy pages and
+  interactive workflows.
+- `system_prompt`: use the browser researcher profile provided below.
+
+Browser researcher profile:
+
+{browser_researcher_instructions}
+
+After registration, use `task(subagent_type="browser_researcher", ...)` for
+browser-heavy evidence gathering.
+"""
+
 BROWSER_RESEARCHER_INSTRUCTIONS = """\
 You are a browser research specialist. You navigate complex web pages that
 regular search APIs cannot handle — single-page apps, interactive dashboards,

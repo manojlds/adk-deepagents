@@ -16,8 +16,9 @@ async def test_deep_research_uses_dynamic_task_and_writes_report():
     agent = build_agent()
 
     prompt = (
-        "Run a minimal deep-research flow. Use dynamic task delegation at least once (planner is fine), "
-        "skip external web research, and write a tiny report to /final_report.md with one inline citation "
+        "Run a minimal deep-research flow. First register at least one runtime specialist using "
+        "register_subagent, then use dynamic task delegation at least once (planner is fine), skip "
+        "external web research, and write a tiny report to /final_report.md with one inline citation "
         "and a Sources section."
     )
     texts, function_calls, function_responses, runner, session = await run_agent_with_events(
@@ -25,6 +26,12 @@ async def test_deep_research_uses_dynamic_task_and_writes_report():
         prompt,
     )
 
+    assert "register_subagent" in function_calls, (
+        f"Expected runtime registration call, got: {function_calls}"
+    )
+    assert "register_subagent" in function_responses, (
+        f"Expected runtime registration response, got: {function_responses}"
+    )
     assert "task" in function_calls, f"Expected dynamic task delegation call, got: {function_calls}"
     assert "task" in function_responses, (
         f"Expected dynamic task delegation response, got: {function_responses}"

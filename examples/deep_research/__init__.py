@@ -1,1 +1,1 @@
-"""Deep research example — multi-model, parallel sub-agent research."""
+"""Deep research example — runtime-registered dynamic sub-agent orchestration."""

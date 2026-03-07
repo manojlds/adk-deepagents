@@ -133,7 +133,9 @@ python examples/content_builder/agent.py
 
 **Location:** `examples/deep_research/`
 
-A dynamic deep-research agent with task-based specialist delegation, provider-routed web search, strategic thinking, and conversation summarization.
+A dynamic deep-research agent with runtime specialist registration,
+task-based delegation, provider-routed web search, strategic thinking, and
+conversation summarization.
 
 ### Architecture
 
@@ -151,18 +153,19 @@ A dynamic deep-research agent with task-based specialist delegation, provider-ro
 │  └─ think (structured reflection)                           │
 │                                                              │
 │  Dynamic subagent types:                                     │
-│  ├─ planner                                                  │
-│  ├─ researcher                                               │
-│  ├─ reporter                                                 │
-│  └─ grader                                                   │
+│  ├─ planner (runtime-registered)                            │
+│  ├─ researcher (runtime-registered)                         │
+│  ├─ reporter (runtime-registered)                           │
+│  └─ grader (runtime-registered)                             │
 │                                                              │
 │  Workflow:                                                   │
-│  1. Plan → create todo list                                 │
-│  2. Save request → /research_request.md                     │
-│  3. Research → delegate via dynamic task tool               │
-│  4. Draft → reporter task writes report                     │
-│  5. Grade → grader task reviews quality                     │
-│  6. Revise + finalize → /final_report.md                    │
+│  1. Register runtime specialists                             │
+│  2. Plan → create todo list                                 │
+│  3. Save request → /research_request.md                     │
+│  4. Research → delegate via dynamic task tool               │
+│  5. Draft → reporter task writes report                     │
+│  6. Grade → grader task reviews quality                     │
+│  7. Revise + finalize → /final_report.md                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -171,7 +174,7 @@ A dynamic deep-research agent with task-based specialist delegation, provider-ro
 | Feature | Choice | Why |
 |---|---|---|
 | Model | Configurable via `--model` | Supports Gemini, OpenAI, Anthropic via litellm |
-| Delegation | Dynamic `task` tool (`planner/researcher/reporter/grader`) | Deepagents-style orchestration |
+| Delegation | Dynamic `task` + runtime `register_subagent` | Specialist roles defined at runtime |
 | Summarization | `trigger=0.75`, `keep=8` | Long research sessions need context management |
 | Custom tools | `web_search`, `think` | Serper-first provider routing + reflection loop |
 
@@ -201,27 +204,19 @@ python examples/deep_research/agent.py --model anthropic/claude-sonnet-4-2025051
 ### Key Code
 
 ```python
-from adk_deepagents import DynamicTaskConfig, SubAgentSpec, SummarizationConfig, create_deep_agent
+from adk_deepagents import DynamicTaskConfig, SummarizationConfig, create_deep_agent
 
 from .tools import think, web_search
-
-researcher_subagent = SubAgentSpec(
-    name="researcher",
-    description="Research specialist...",
-    system_prompt=_build_researcher_prompt(),
-    tools=[web_search, think],
-)
 
 agent = create_deep_agent(
     name="deep_research",
     model=model,
     instruction=_build_orchestrator_prompt(),
     tools=[web_search, think],
-    subagents=[planner_subagent, researcher_subagent, reporter_subagent, grader_subagent],
     delegation_mode="dynamic",
     dynamic_task_config=DynamicTaskConfig(max_parallel=4, max_depth=2),
     summarization=SummarizationConfig(
-            model=model,
+        model=model,
         trigger=("fraction", 0.75),
         keep=("messages", 8),
     ),
@@ -434,7 +429,7 @@ A hybrid research agent combining web search APIs with browser automation. Uses 
 │  Summarization: trigger=0.75, keep=8             │
 │                                                  │
 │  Dynamic subagent types:                         │
-│  └─ browser_researcher                           │
+│  └─ browser_researcher (runtime-registered)      │
 │     └─ Navigates complex/JS-heavy pages          │
 │                                                  │
 │  Workflow:                                       │
@@ -452,7 +447,7 @@ A hybrid research agent combining web search APIs with browser automation. Uses 
 |---|---|---|
 | Search | Reuses deep_research web_search tool | Provider-routed (Serper/Tavily/Brave/DDG) |
 | Browser | Playwright MCP via `BrowserConfig` | For JS-heavy pages search APIs can't access |
-| Delegation | Dynamic `task` tool with browser_researcher | Isolates browser context from main agent |
+| Delegation | Runtime `register_subagent` + dynamic `task` | Browser specialist is defined at runtime |
 
 ### Key Code
 
@@ -462,7 +457,6 @@ from adk_deepagents import BrowserConfig, DynamicTaskConfig, create_deep_agent_a
 agent, cleanup = await create_deep_agent_async(
     name="browser_research",
     tools=[web_search, think],
-    subagents=[browser_researcher_subagent],
     browser=BrowserConfig(headless=True),
     delegation_mode="dynamic",
     dynamic_task_config=DynamicTaskConfig(max_parallel=2, max_depth=2),

@@ -1,7 +1,8 @@
 """Deep research agent — dynamic task delegation with web search.
 
 Demonstrates:
-- Dynamic task delegation with specialist sub-agents (planner/researcher/reporter/grader)
+- Dynamic task delegation with runtime-defined specialist sub-agents
+- Runtime sub-agent registration via ``register_subagent``
 - Search provider routing (Serper-first auto mode)
 - Strategic thinking/reflection tool
 - Todo-based planning and tracking
@@ -25,19 +26,19 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import UTC, datetime
+from typing import TypedDict
 
 from dotenv import load_dotenv
 from google.genai import types
 
 from adk_deepagents import (
     DynamicTaskConfig,
-    SubAgentSpec,
     SummarizationConfig,
     create_deep_agent,
 )
-from adk_deepagents.tools.filesystem import read_file, write_file
 
 from .prompts import (
     GRADER_INSTRUCTIONS,
@@ -45,6 +46,7 @@ from .prompts import (
     REPORTER_INSTRUCTIONS,
     RESEARCH_WORKFLOW_INSTRUCTIONS,
     RESEARCHER_INSTRUCTIONS,
+    RUNTIME_SUBAGENT_REGISTRATION_INSTRUCTIONS,
     SUBAGENT_DELEGATION_INSTRUCTIONS,
 )
 from .tools import think, web_search
@@ -60,6 +62,54 @@ MAX_RESEARCHER_ITERATIONS = 3
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
+class RuntimeSubagentProfile(TypedDict):
+    """Runtime profile consumed by ``register_subagent``."""
+
+    name: str
+    description: str
+    system_prompt: str
+    tool_names: list[str]
+
+
+def build_runtime_subagent_profiles() -> list[RuntimeSubagentProfile]:
+    """Return runtime specialist profiles for deep research delegation."""
+    return [
+        RuntimeSubagentProfile(
+            name="planner",
+            description=(
+                "Planning specialist that breaks large research requests into concise, "
+                "high-impact tasks."
+            ),
+            system_prompt=PLANNER_INSTRUCTIONS,
+            tool_names=["think"],
+        ),
+        RuntimeSubagentProfile(
+            name="researcher",
+            description=(
+                "Research specialist that gathers evidence from web search and returns "
+                "structured findings with citations."
+            ),
+            system_prompt=_build_researcher_prompt(),
+            tool_names=["web_search", "think"],
+        ),
+        RuntimeSubagentProfile(
+            name="reporter",
+            description=(
+                "Reporting specialist that synthesizes findings into a polished report "
+                "with citations."
+            ),
+            system_prompt=REPORTER_INSTRUCTIONS,
+            tool_names=["write_file", "think"],
+        ),
+        RuntimeSubagentProfile(
+            name="grader",
+            description="Quality specialist that grades report completeness and citation quality.",
+            system_prompt=GRADER_INSTRUCTIONS,
+            tool_names=["read_file", "think"],
+        ),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Build prompts with configuration
 # ---------------------------------------------------------------------------
@@ -67,57 +117,21 @@ DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 def _build_orchestrator_prompt() -> str:
     """Build the orchestrator system prompt from templates."""
+    registration_payload = json.dumps(build_runtime_subagent_profiles(), indent=2)
+    registration = RUNTIME_SUBAGENT_REGISTRATION_INSTRUCTIONS.format(
+        registration_payload=registration_payload,
+    )
     delegation = SUBAGENT_DELEGATION_INSTRUCTIONS.format(
         max_concurrent_research_units=MAX_CONCURRENT_RESEARCH_UNITS,
         max_researcher_iterations=MAX_RESEARCHER_ITERATIONS,
     )
-    return RESEARCH_WORKFLOW_INSTRUCTIONS + "\n\n" + delegation
+    return RESEARCH_WORKFLOW_INSTRUCTIONS + "\n\n" + registration + "\n\n" + delegation
 
 
 def _build_researcher_prompt() -> str:
     """Build the researcher sub-agent prompt from template."""
     current_date = datetime.now(UTC).strftime("%Y-%m-%d")
     return RESEARCHER_INSTRUCTIONS.format(date=current_date)
-
-
-# ---------------------------------------------------------------------------
-# Sub-agent definitions
-# ---------------------------------------------------------------------------
-
-planner_subagent = SubAgentSpec(
-    name="planner",
-    description=(
-        "Planning specialist that breaks large research requests into concise, high-impact tasks."
-    ),
-    system_prompt=PLANNER_INSTRUCTIONS,
-    tools=[think],
-)
-
-researcher_subagent = SubAgentSpec(
-    name="researcher",
-    description=(
-        "Research specialist that gathers evidence from web search and returns "
-        "structured findings with citations."
-    ),
-    system_prompt=_build_researcher_prompt(),
-    tools=[web_search, think],
-)
-
-reporter_subagent = SubAgentSpec(
-    name="reporter",
-    description=(
-        "Reporting specialist that synthesizes findings into a polished report with citations."
-    ),
-    system_prompt=REPORTER_INSTRUCTIONS,
-    tools=[write_file, think],
-)
-
-grader_subagent = SubAgentSpec(
-    name="grader",
-    description="Quality specialist that grades report completeness and citation quality.",
-    system_prompt=GRADER_INSTRUCTIONS,
-    tools=[read_file, think],
-)
 
 
 # ---------------------------------------------------------------------------
@@ -138,13 +152,14 @@ def build_agent(model: str = DEFAULT_MODEL):
         - ``"anthropic/claude-sonnet-4-20250514"`` (requires ANTHROPIC_API_KEY + litellm)
         - ``"groq/llama3-70b-8192"`` (requires GROQ_API_KEY + litellm)
     """
-    resolved_model = os.environ.get("LITELLM_MODEL", model)
+    resolved_model = (
+        os.environ.get("LITELLM_MODEL") or os.environ.get("ADK_DEEPAGENTS_MODEL") or model
+    )
     return create_deep_agent(
         name="deep_research",
         model=resolved_model,
         instruction=_build_orchestrator_prompt(),
         tools=[web_search, think],
-        subagents=[planner_subagent, researcher_subagent, reporter_subagent, grader_subagent],
         delegation_mode="dynamic",
         dynamic_task_config=DynamicTaskConfig(
             max_parallel=MAX_CONCURRENT_RESEARCH_UNITS,
@@ -181,7 +196,10 @@ async def main():
         user_id="user",
     )
 
-    print(f"Deep Research Agent ready (model: {os.environ.get('LITELLM_MODEL', DEFAULT_MODEL)}).")
+    active_model = (
+        os.environ.get("LITELLM_MODEL") or os.environ.get("ADK_DEEPAGENTS_MODEL") or DEFAULT_MODEL
+    )
+    print(f"Deep Research Agent ready (model: {active_model}).")
     print("Type 'quit' to exit.\n")
 
     while True:

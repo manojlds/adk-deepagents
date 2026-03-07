@@ -2,11 +2,17 @@
 
 ## Overview
 
-In deepagents, a single `task` tool routes work to sub-agents by name. In adk-deepagents, each sub-agent becomes its own [`AgentTool`](https://google.github.io/adk-python/) instance, so the parent agent calls them like any other tool. The `build_subagent_tools` function in `adk_deepagents.tools.task` converts a list of `SubAgentSpec` dicts (or pre-built `LlmAgent` objects) into `AgentTool` instances that are added to the parent agent's tool list.
+adk-deepagents supports two delegation styles:
 
-For the dynamic `task` implementation (`delegation_mode="dynamic"`) and runtime
-details (`task_id`, state keys, registries, timeout/error behavior), see
-[`Task System Internals`](task-system.md).
+- **Static delegation** (`delegation_mode="static"`) — each `SubAgentSpec` is
+  converted into an [`AgentTool`](https://google.github.io/adk-python/) and
+  exposed as a dedicated tool.
+- **Dynamic delegation** (`delegation_mode="dynamic"`) — the parent gets
+  `task` and `register_subagent` tools for runtime routing and registration.
+- **Both** (`delegation_mode="both"`) — static `AgentTool`s plus dynamic tools.
+
+For dynamic runtime details (`task_id`, state keys, registries, timeout/error
+behavior), see [`Task System Internals`](task-system.md).
 
 ## SubAgentSpec
 
@@ -32,6 +38,34 @@ spec = SubAgentSpec(
     model="gemini-2.5-pro",
 )
 ```
+
+## Runtime-Defined Sub-Agents (Dynamic Mode)
+
+When you use `delegation_mode="dynamic"` (or `"both"`), two runtime tools are
+available to the parent:
+
+- `register_subagent(name, description, system_prompt?, model?, tool_names?)`
+- `task(description, prompt, subagent_type, task_id?, model?)`
+
+You can register specialists at runtime without defining `SubAgentSpec` in
+Python code:
+
+```python
+from adk_deepagents import create_deep_agent
+
+agent = create_deep_agent(
+    model="openai/gpt-4o-mini",
+    delegation_mode="dynamic",
+)
+```
+
+Then the model can do:
+
+1. `register_subagent(name="summarizer", description="Summarizes code areas")`
+2. `task(subagent_type="summarizer", prompt="Summarize src/api/*.py")`
+
+If `task` is called with an unknown `subagent_type`, adk-deepagents
+auto-creates and persists a runtime specialist profile for future turns.
 
 ## General-Purpose Sub-Agent
 
@@ -145,10 +179,13 @@ This creates a dedicated `before_tool_callback` for that sub-agent via `make_bef
 
 ## System Prompt Injection
 
-When sub-agents are configured, the `before_model_callback` injects `TASK_SYSTEM_PROMPT` into the parent agent's system instruction. This includes:
+When sub-agents are configured (statically or dynamically), the
+`before_model_callback` injects `TASK_SYSTEM_PROMPT` into the parent agent's
+system instruction. This includes:
 
 - The sub-agent lifecycle documentation
-- A list of all available sub-agents with their names and descriptions
+- A list of available sub-agents with their names and descriptions (including
+  runtime-registered profiles)
 
 ```
 ## Sub-agent Delegation

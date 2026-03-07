@@ -8,14 +8,13 @@ Run with: uv run pytest -m llm
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.types import SubAgentSpec
 from tests.integration_tests.conftest import (
     make_litellm_model,
+    resolve_test_model,
     run_agent_with_events,
     send_followup_with_events,
 )
@@ -146,7 +145,7 @@ async def test_multi_subagent_pipeline_delegates_twice():
 async def test_subagent_with_custom_model():
     """Sub-agent can use a different model than the parent."""
     model = make_litellm_model()
-    subagent_model = os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini")
+    subagent_model = resolve_test_model()
 
     # Sub-agent uses the same model in tests, but verifies the config path works
     analyst = SubAgentSpec(

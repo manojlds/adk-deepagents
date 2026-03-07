@@ -2,8 +2,8 @@
 
 Demonstrates:
 - Hybrid research: web search APIs + browser automation
-- Browser sub-agent for JavaScript-heavy pages and interactive content
-- Dynamic task delegation to specialist sub-agents
+- Runtime browser specialist registration via `register_subagent`
+- Dynamic task delegation to specialist runtimes
 - Playwright MCP for browser tools
 
 Usage:
@@ -27,7 +27,6 @@ from google.genai import types
 from adk_deepagents import (
     BrowserConfig,
     DynamicTaskConfig,
-    SubAgentSpec,
     SummarizationConfig,
     create_deep_agent_async,
 )
@@ -36,6 +35,7 @@ from ..deep_research.tools import think, web_search
 from .prompts import (
     BROWSER_RESEARCH_INSTRUCTIONS,
     BROWSER_RESEARCHER_INSTRUCTIONS,
+    BROWSER_RUNTIME_SUBAGENT_REGISTRATION_INSTRUCTIONS,
 )
 
 load_dotenv()
@@ -46,21 +46,12 @@ load_dotenv()
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 
-# ---------------------------------------------------------------------------
-# Sub-agent definitions
-# ---------------------------------------------------------------------------
 
-browser_researcher_subagent = SubAgentSpec(
-    name="browser_researcher",
-    description=(
-        "Browser research specialist that navigates complex web pages, "
-        "interacts with JavaScript-heavy sites, extracts data from "
-        "interactive elements, and handles pages that regular search "
-        "APIs cannot access."
-    ),
-    system_prompt=BROWSER_RESEARCHER_INSTRUCTIONS,
-    tools=[think],
-)
+def _build_instruction() -> str:
+    registration = BROWSER_RUNTIME_SUBAGENT_REGISTRATION_INSTRUCTIONS.format(
+        browser_researcher_instructions=BROWSER_RESEARCHER_INSTRUCTIONS,
+    )
+    return BROWSER_RESEARCH_INSTRUCTIONS + "\n\n" + registration
 
 
 # ---------------------------------------------------------------------------
@@ -85,13 +76,14 @@ async def build_agent_async(
     headless:
         Run browser in headless mode (default True).
     """
-    resolved_model = os.environ.get("LITELLM_MODEL", model)
+    resolved_model = (
+        os.environ.get("LITELLM_MODEL") or os.environ.get("ADK_DEEPAGENTS_MODEL") or model
+    )
     return await create_deep_agent_async(
         name="browser_research",
         model=resolved_model,
-        instruction=BROWSER_RESEARCH_INSTRUCTIONS,
+        instruction=_build_instruction(),
         tools=[web_search, think],
-        subagents=[browser_researcher_subagent],
         browser=BrowserConfig(headless=headless),
         delegation_mode="dynamic",
         dynamic_task_config=DynamicTaskConfig(
@@ -116,7 +108,9 @@ async def main():
     """Run the browser research agent interactively."""
     from google.adk.runners import InMemoryRunner
 
-    model = os.environ.get("LITELLM_MODEL", DEFAULT_MODEL)
+    model = (
+        os.environ.get("LITELLM_MODEL") or os.environ.get("ADK_DEEPAGENTS_MODEL") or DEFAULT_MODEL
+    )
     agent, cleanup = await build_agent_async(model=model)
 
     try:

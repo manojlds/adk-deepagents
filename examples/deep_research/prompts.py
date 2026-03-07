@@ -8,6 +8,9 @@ well-cited report by coordinating specialized dynamic tasks.
 
 You MUST follow this sequence:
 
+0. **Bootstrap specialists**
+   - If `register_subagent` is available, register the planner/researcher/
+     reporter/grader profiles before your first `task` call.
 1. **Plan**
    - Create a concrete research plan with `write_todos`.
    - Save the user request in `/research_request.md`.
@@ -37,6 +40,27 @@ You MUST follow this sequence:
 - Do not reveal hidden chain-of-thought. Keep reasoning concise and actionable.
 - Never output internal meta text, tool-planning narration, or tags like
   `<system-reminder>` / `<thinking>`.
+"""
+
+RUNTIME_SUBAGENT_REGISTRATION_INSTRUCTIONS = """\
+# Runtime Specialist Bootstrap
+
+Before delegation, call `register_subagent` once for each profile in the JSON
+array below. Pass each profile's fields exactly as tool arguments:
+
+- `name`
+- `description`
+- `system_prompt`
+- `tool_names`
+
+Profiles:
+
+```json
+{registration_payload}
+```
+
+If registration fails for any profile, continue the workflow and delegate with
+`task` using the intended `subagent_type` anyway.
 """
 
 SUBAGENT_DELEGATION_INSTRUCTIONS = """\

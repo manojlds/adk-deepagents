@@ -9,8 +9,8 @@ delegation.
 Delegation is configured in `create_deep_agent()` (`adk_deepagents/graph.py`):
 
 - `delegation_mode="static"` (default): build one `AgentTool` per sub-agent
-- `delegation_mode="dynamic"`: add one dynamic `task` tool
-- `delegation_mode="both"`: include both static sub-agent tools and dynamic `task`
+- `delegation_mode="dynamic"`: add dynamic `register_subagent` + `task` tools
+- `delegation_mode="both"`: include static sub-agent tools plus dynamic tools
 
 Relevant config types:
 
@@ -109,6 +109,7 @@ Dynamic task metadata stored in parent session state:
 - `_dynamic_parent_session_id`
 - `_dynamic_delegation_depth`
 - `_dynamic_running_tasks`
+- `_dynamic_subagent_specs`
 
 These are JSON-serializable values only.
 

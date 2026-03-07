@@ -583,7 +583,17 @@ Tool call: browser_type(element="Email input", ref="e1", text="user@example.com"
 
 ## Sub-Agent Tools
 
-When you pass `subagents=[...]` to `create_deep_agent()`, each sub-agent specification becomes an `AgentTool` — an ADK tool that spawns a child `LlmAgent` to handle a task.
+Sub-agent tooling depends on delegation mode:
+
+- `delegation_mode="static"` — each spec in `subagents=[...]` becomes an
+  `AgentTool`.
+- `delegation_mode="dynamic"` — the parent gets runtime delegation tools:
+  `register_subagent` and `task`.
+- `delegation_mode="both"` — includes both static `AgentTool`s and dynamic
+  runtime tools.
+
+When you pass `subagents=[...]`, each sub-agent specification becomes an
+`AgentTool` — an ADK tool that spawns a child `LlmAgent` to handle a task.
 
 A **general-purpose** sub-agent is always included by default (unless you define one with the name `general_purpose`).
 
@@ -638,3 +648,15 @@ agent = create_deep_agent(
     subagents=[custom_agent],
 )
 ```
+
+### Dynamic Runtime Delegation Tools
+
+With `delegation_mode="dynamic"` (or `"both"`), the parent can define and use
+specialists at runtime:
+
+- `register_subagent(...)` registers/updates a specialist profile in session
+  state.
+- `task(...)` delegates to the requested `subagent_type`.
+
+If `task` receives an unknown `subagent_type`, adk-deepagents auto-creates a
+runtime specialist profile and persists it for future turns.

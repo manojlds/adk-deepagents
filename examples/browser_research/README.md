@@ -8,8 +8,8 @@ interactive content, and pages requiring form interaction.
 ## Features
 
 - **Hybrid approach** — Web search for discovery + browser for complex pages
-- **Browser sub-agent** — Dedicated browser specialist for interactive sites
-- **Dynamic delegation** — Orchestrator routes tasks to the right tool
+- **Runtime specialist bootstrap** — Registers a browser specialist via `register_subagent`
+- **Dynamic delegation** — Orchestrator routes specialist work with `task`
 - **Accessibility-tree based** — Uses ARIA snapshots for reliable extraction
 - **Summarization** — Manages context window for long research sessions
 
@@ -20,13 +20,13 @@ interactive content, and pages requiring form interaction.
 │         Orchestrator (browser_research)          │
 │  - Plans via write_todos                         │
 │  - Uses web_search for discovery                 │
-│  - Delegates browser tasks to sub-agent          │
+│  - Registers + delegates browser specialist      │
 │  - Synthesizes findings into report              │
 └────────┬──────────────────┬──────────────────────┘
          │                  │
  ┌───────▼──────┐   ┌──────▼──────────────┐
  │  web_search  │   │ browser_researcher  │
- │ (Serper/     │   │   (sub-agent)       │
+│ (Serper/     │   │ (runtime specialist)│
  │  Tavily/     │   │  - browser_navigate │
  │  Brave/DDG)  │   │  - browser_snapshot │
  └──────────────┘   │  - browser_click    │
@@ -83,6 +83,7 @@ You: Research the pricing of the top 3 cloud providers and compare their
      free tier offerings. Check the actual pricing pages.
 
 Agent: I'll plan the research and use both search and browser tools.
+[register_subagent name=browser_researcher ...]
 [writes research plan to todos]
 [web_search: "cloud provider pricing comparison 2025"]
 [browser_navigate: https://aws.amazon.com/free/]
@@ -123,5 +124,5 @@ Agent: [writes /report.md with comparison table and citations]
 
 | File | Description |
 |------|-------------|
-| `agent.py` | Agent factory, sub-agent config, CLI runner |
+| `agent.py` | Agent factory, runtime specialist bootstrap, CLI runner |
 | `prompts.py` | Research workflow and browser specialist prompts |
