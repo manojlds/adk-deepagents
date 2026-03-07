@@ -87,6 +87,15 @@ Each sub-agent runs independently with its own tools and context.
 - Give sub-agents clear, self-contained instructions
 - Sub-agents do NOT see your conversation history"""
 
+TASK_RUNTIME_SUBAGENT_PROMPT = """\
+If the `register_subagent` tool is available, you can define specialist
+sub-agents at runtime before delegating with the `task` tool.
+
+- Use `register_subagent` when you need a new specialist role
+- Then call `task` with `subagent_type` set to that registered name
+- If you call `task` with a new `subagent_type`, a runtime specialist is
+  created automatically using default tools"""
+
 # ---------------------------------------------------------------------------
 # Memory prompt
 # ---------------------------------------------------------------------------

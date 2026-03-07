@@ -77,6 +77,26 @@ def test_subagent_docs_injected():
     assert "researcher" in si
 
 
+def test_runtime_subagent_docs_injected_from_state():
+    cb = make_before_model_callback()
+    ctx = MagicMock()
+    ctx.state = {
+        "_dynamic_subagent_specs": {
+            "summarizer": {
+                "name": "summarizer",
+                "description": "Summarizes groups of files by topic.",
+            }
+        }
+    }
+    request = _make_llm_request()
+
+    cb(ctx, request)
+
+    si = str(request.config.system_instruction)
+    assert "summarizer" in si
+    assert "register_subagent" in si
+
+
 def test_dangling_tool_calls_patched():
     """Dangling tool calls in state are injected as synthetic responses."""
     cb = make_before_model_callback()

@@ -149,6 +149,14 @@ class TestDelegationModes:
             delegation_mode="dynamic",
         )
         names = _tool_names(agent)
+        assert "register_subagent" in names
+        assert "task" in names
+        assert len(_agent_tools(agent)) == 0
+
+    def test_dynamic_mode_without_subagents_adds_runtime_delegation_tools(self):
+        agent = create_deep_agent(delegation_mode="dynamic")
+        names = _tool_names(agent)
+        assert "register_subagent" in names
         assert "task" in names
         assert len(_agent_tools(agent)) == 0
 
@@ -158,6 +166,7 @@ class TestDelegationModes:
             delegation_mode="both",
         )
         names = _tool_names(agent)
+        assert "register_subagent" in names
         assert "task" in names
         assert "researcher" in _agent_tool_names(agent)
 

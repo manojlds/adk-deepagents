@@ -341,6 +341,7 @@ def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:
 
     assert captured["name"] == "demo_cli"
     assert captured["execution"] == "local"
+    assert captured["delegation_mode"] == "dynamic"
     assert captured["interrupt_on"] == repl.INTERACTIVE_INTERRUPT_ON
 
 

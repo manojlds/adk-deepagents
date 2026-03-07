@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from google.adk.agents import LlmAgent
 
@@ -22,9 +22,13 @@ from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import (
+    GENERAL_PURPOSE_SUBAGENT,
     build_subagent_tools,
 )
-from adk_deepagents.tools.task_dynamic import create_dynamic_task_tool
+from adk_deepagents.tools.task_dynamic import (
+    create_dynamic_task_tool,
+    create_register_subagent_tool,
+)
 from adk_deepagents.tools.todos import read_todos, write_todos
 from adk_deepagents.types import (
     BrowserConfig,
@@ -163,11 +167,15 @@ def create_deep_agent(
     if backend is None:
         backend_factory = _default_backend_factory
     elif callable(backend) and not isinstance(backend, Backend):
-        backend_factory = backend
+        backend_factory = cast(BackendFactory, backend)
     else:
         # Wrap a concrete backend instance in a factory
-        def backend_factory(_state: dict, _b: Backend = backend) -> Backend:
-            return _b
+        concrete_backend = backend
+
+        def _instance_backend_factory(_state: dict[str, Any]) -> Backend:
+            return concrete_backend
+
+        backend_factory = _instance_backend_factory
 
     # 2. Build core tool list
     core_tools: list[Callable] = [
@@ -252,6 +260,13 @@ def create_deep_agent(
 
     if delegation_mode in {"dynamic", "both"}:
         core_tools.append(
+            create_register_subagent_tool(
+                default_model=model,
+                default_tools=list(core_tools),
+                config=dynamic_task_config,
+            )
+        )
+        core_tools.append(
             create_dynamic_task_tool(
                 default_model=model,
                 default_tools=list(core_tools),
@@ -261,6 +276,12 @@ def create_deep_agent(
             )
         )
 
+    gp_name = GENERAL_PURPOSE_SUBAGENT.get("name", "general_purpose")
+    gp_description = GENERAL_PURPOSE_SUBAGENT.get(
+        "description",
+        "General-purpose sub-agent for research and multi-step tasks.",
+    )
+
     if subagents is not None:
         subagent_descriptions = []
         for s in subagents:
@@ -269,25 +290,37 @@ def create_deep_agent(
                     {"name": s.name, "description": s.description or s.name}
                 )
             else:
-                subagent_descriptions.append({"name": s["name"], "description": s["description"]})
+                spec_name: str | None = s.get("name")
+                spec_description: str | None = s.get("description")
+                if isinstance(spec_name, str) and isinstance(spec_description, str):
+                    subagent_descriptions.append(
+                        {"name": spec_name, "description": spec_description}
+                    )
         # Include general-purpose in descriptions if added
         all_names = set()
         for s in subagents:
             if isinstance(s, LlmAgent):
                 all_names.add(s.name)
             else:
-                all_names.add(s["name"])
+                spec_name: str | None = s.get("name")
+                if isinstance(spec_name, str):
+                    all_names.add(spec_name)
         has_gp = any(n in ("general-purpose", "general_purpose") for n in all_names)
         if not has_gp:
-            from adk_deepagents.tools.task import GENERAL_PURPOSE_SUBAGENT
-
             subagent_descriptions.insert(
                 0,
                 {
-                    "name": GENERAL_PURPOSE_SUBAGENT["name"],
-                    "description": GENERAL_PURPOSE_SUBAGENT["description"],
+                    "name": gp_name,
+                    "description": gp_description,
                 },
             )
+    elif delegation_mode in {"dynamic", "both"}:
+        subagent_descriptions = [
+            {
+                "name": gp_name,
+                "description": gp_description,
+            }
+        ]
 
     # 6. Compose callbacks
     before_agent_cb = make_before_agent_callback(
