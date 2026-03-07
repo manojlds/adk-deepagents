@@ -8,6 +8,7 @@ requires-python = ">=3.11"
 dependencies = [
     "google-adk>=1.0.0",
     "python-dotenv>=1.0",
+    "textual>=1.0.0",
     "wcmatch>=8.5",
 ]
 

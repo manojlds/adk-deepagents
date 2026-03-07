@@ -184,6 +184,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated shell commands allowed in non-interactive mode.",
     )
     parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Launch the full-screen terminal UI instead of the plain REPL.",
+    )
+    parser.add_argument(
         "-v",
         "--version",
         action="store_true",
@@ -208,6 +213,9 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
     if args.command in {"list", "reset", "threads"} and (args.quiet or args.no_stream):
         parser.error("-q/--quiet and --no-stream are only valid for non-interactive runs.")
+
+    if getattr(args, "tui", False) and args.non_interactive_prompt is not None:
+        parser.error("--tui cannot be combined with -n/--non-interactive.")
 
     if args.message_prompt is not None and (args.quiet or args.no_stream):
         parser.error("-q/--quiet and --no-stream cannot be combined with -m/--message.")
@@ -472,6 +480,22 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             db_path=paths.sessions_db_path,
             no_stream=args.no_stream,
             shell_allow_list=args.shell_allow_list,
+            auto_approve=args.auto_approve,
+            memory_sources=resources.memory_sources,
+            memory_source_paths=resources.memory_source_paths,
+            skills_dirs=resources.skills_dirs,
+        )
+
+    if args.tui:
+        from adk_deepagents.cli.tui import run_tui
+
+        return run_tui(
+            first_prompt=args.message_prompt,
+            model=resolved_model,
+            agent_name=resolved_agent,
+            user_id=CLI_USER_ID,
+            session_id=active_thread_id,
+            db_path=paths.sessions_db_path,
             auto_approve=args.auto_approve,
             memory_sources=resources.memory_sources,
             memory_source_paths=resources.memory_source_paths,
