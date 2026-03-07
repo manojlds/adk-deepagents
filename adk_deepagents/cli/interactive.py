@@ -156,6 +156,7 @@ def _build_cli_agent(
         "name": f"{agent_name}_cli",
         "backend": backend,
         "execution": "local",
+        "delegation_mode": "dynamic",
         "interrupt_on": INTERACTIVE_INTERRUPT_ON,
     }
     if model is not None:

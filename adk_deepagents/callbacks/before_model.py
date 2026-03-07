@@ -9,6 +9,7 @@ conversation summarization.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -19,6 +20,7 @@ from adk_deepagents.prompts import (
     EXECUTION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
     MEMORY_SYSTEM_PROMPT,
+    TASK_RUNTIME_SUBAGENT_PROMPT,
     TASK_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
 )
@@ -71,6 +73,32 @@ def _format_subagent_docs(subagent_descriptions: list[dict[str, str]]) -> str:
     for desc in subagent_descriptions:
         lines.append(f"- **{desc['name']}**: {desc['description']}")
     return "\n".join(lines)
+
+
+def _runtime_subagent_descriptions(state: Any) -> list[dict[str, str]]:
+    """Read runtime-defined sub-agent descriptions from session state."""
+    raw_specs = state.get("_dynamic_subagent_specs", {})
+    if not isinstance(raw_specs, dict):
+        return []
+
+    descriptions: list[dict[str, str]] = []
+    for raw_key, raw_spec in raw_specs.items():
+        if not isinstance(raw_spec, dict):
+            continue
+
+        raw_name = raw_spec.get("name", raw_key)
+        raw_description = raw_spec.get("description")
+        if not isinstance(raw_name, str) or not isinstance(raw_description, str):
+            continue
+
+        name = raw_name.strip()
+        description = raw_description.strip()
+        if not name or not description:
+            continue
+
+        descriptions.append({"name": name, "description": description})
+
+    return descriptions
 
 
 def _inject_dangling_tool_responses(
@@ -203,9 +231,18 @@ def make_before_model_callback(
             memory_contents = state.get("memory_contents", {})
             additions.append(_format_memory(memory_contents, memory_sources))
 
-        # Sub-agent documentation
-        if subagent_descriptions:
-            additions.append(_format_subagent_docs(subagent_descriptions))
+        # Sub-agent documentation (configured + runtime-defined)
+        merged_subagent_descriptions: list[dict[str, str]] = list(subagent_descriptions or [])
+        known_names = {desc["name"] for desc in merged_subagent_descriptions}
+        for runtime_desc in _runtime_subagent_descriptions(state):
+            if runtime_desc["name"] in known_names:
+                continue
+            merged_subagent_descriptions.append(runtime_desc)
+            known_names.add(runtime_desc["name"])
+
+        if merged_subagent_descriptions:
+            additions.append(_format_subagent_docs(merged_subagent_descriptions))
+            additions.append(TASK_RUNTIME_SUBAGENT_PROMPT)
 
         # Inject all additions into system instruction
         combined = "\n\n".join(additions)

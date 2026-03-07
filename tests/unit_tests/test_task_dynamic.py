@@ -6,13 +6,26 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from adk_deepagents.tools import task_dynamic
-from adk_deepagents.tools.task_dynamic import create_dynamic_task_tool
+from adk_deepagents.tools.task_dynamic import (
+    create_dynamic_task_tool,
+    create_register_subagent_tool,
+)
 from adk_deepagents.types import DynamicTaskConfig
 
 
 @dataclass
 class _DummyToolContext:
     state: dict
+
+
+def _cleanup_runtime_registry(context: _DummyToolContext) -> None:
+    logical_parent = context.state.get("_dynamic_parent_session_id")
+    if not isinstance(logical_parent, str):
+        return
+
+    for key in list(task_dynamic._RUNTIME_REGISTRY):
+        if key.startswith(f"{logical_parent}:"):
+            task_dynamic._RUNTIME_REGISTRY.pop(key, None)
 
 
 class TestDynamicTaskToolGuards:
@@ -101,7 +114,7 @@ class TestDynamicTaskToolGuards:
         )
 
         key = "parent_1:task_1"
-        task_dynamic._RUNTIME_REGISTRY[key] = task_dynamic._TaskRuntime(  # type: ignore[reportPrivateUsage]
+        task_dynamic._RUNTIME_REGISTRY[key] = task_dynamic._TaskRuntime(
             runner=None,  # type: ignore[arg-type]
             session_id="s1",
             user_id="u1",
@@ -123,8 +136,119 @@ class TestDynamicTaskToolGuards:
                 tool_context=cast(Any, context),
             )
         finally:
-            task_dynamic._RUNTIME_REGISTRY.pop(key, None)  # type: ignore[reportPrivateUsage]
+            task_dynamic._RUNTIME_REGISTRY.pop(key, None)
 
         assert result["status"] == "error"
         assert "timed out" in result["error"].lower()
         assert result["result"] == "partial output"
+
+
+class TestDynamicRuntimeSubagents:
+    async def test_register_subagent_persists_runtime_spec(self):
+        register_tool = create_register_subagent_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            config=DynamicTaskConfig(),
+        )
+
+        context = _DummyToolContext(state={})
+        result = await register_tool(
+            name="code_researcher",
+            description="Searches and summarizes repository files.",
+            system_prompt="Focus on repository exploration and concise summaries.",
+            tool_context=cast(Any, context),
+        )
+
+        assert result["status"] == "registered"
+        assert result["subagent_type"] == "code_researcher"
+
+        store = context.state.get("_dynamic_subagent_specs", {})
+        assert isinstance(store, dict)
+        assert "code_researcher" in store
+
+    async def test_unknown_subagent_type_auto_creates_runtime_specialist(self, monkeypatch):
+        async def fake_run_dynamic_task(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(),
+        )
+
+        context = _DummyToolContext(state={})
+        try:
+            result = await task_tool(
+                description="Summarize Python modules by responsibility.",
+                prompt="Summarize Python modules by responsibility.",
+                subagent_type="summarizer",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            _cleanup_runtime_registry(context)
+
+        assert result["status"] == "completed"
+        assert result["subagent_type"] == "summarizer"
+        assert result["created_subagent"] is True
+
+        store = context.state.get("_dynamic_subagent_specs", {})
+        assert isinstance(store, dict)
+        assert "summarizer" in store
+
+    async def test_registered_runtime_subagent_is_reused(self, monkeypatch):
+        async def fake_run_dynamic_task(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
+        register_tool = create_register_subagent_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            config=DynamicTaskConfig(),
+        )
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(),
+        )
+
+        context = _DummyToolContext(state={})
+        try:
+            registration = await register_tool(
+                name="summarizer",
+                description="Summarizes groups of files by area.",
+                tool_context=cast(Any, context),
+            )
+            result = await task_tool(
+                description="Summarize repository files.",
+                prompt="Summarize repository files.",
+                subagent_type="summarizer",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            _cleanup_runtime_registry(context)
+
+        assert registration["status"] == "registered"
+        assert result["status"] == "completed"
+        assert result["subagent_type"] == "summarizer"
+        assert result["created_subagent"] is False

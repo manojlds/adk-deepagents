@@ -191,6 +191,28 @@ def test_build_cli_agent_missing_skills_dependency_is_actionable(
         )
 
 
+def test_build_cli_agent_enables_dynamic_delegation(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_create_deep_agent(**kwargs: object):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(ni, "create_deep_agent", _fake_create_deep_agent)
+
+    ni._build_cli_agent(
+        agent_name="demo",
+        model=None,
+        cwd=tmp_path,
+        shell_allow_list=None,
+        auto_approve=False,
+    )
+
+    assert captured["name"] == "demo_cli"
+    assert captured["execution"] == "local"
+    assert captured["delegation_mode"] == "dynamic"
+
+
 def test_run_non_interactive_async_streams_chunks(monkeypatch, capsys, tmp_path: Path) -> None:
     monkeypatch.setattr(ni, "_build_cli_agent", lambda **_: object())
     monkeypatch.setattr(ni, "SqliteSessionService", lambda *_: object())

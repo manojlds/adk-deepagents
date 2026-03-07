@@ -42,6 +42,14 @@ runtime contract:
 - inputs: `description`, `prompt`, `subagent_type`, optional `task_id`, optional `model`
 - output: dict with `status` plus `task_id`, `subagent_type`, `result`, `function_calls`
 
+`create_register_subagent_tool(...)` returns an async tool named
+`register_subagent` for runtime specialization:
+
+- inputs: `name`, `description`, optional `system_prompt`, optional `model`,
+  optional `tool_names`
+- output: dict with `status` (`registered`/`error`) plus normalized
+  `subagent_type` metadata
+
 `status` is:
 
 - `"completed"` when child execution finishes normally
@@ -74,6 +82,10 @@ For each tool call:
 6. Collect child text and function-call names from events.
 7. Pull child `files`/`todos` from child session state and copy into parent state.
 8. Return structured tool result (`completed`/`error`).
+
+If `task` is called with an unknown `subagent_type`, a runtime sub-agent is
+created automatically using default tools and persisted in session state for
+future turns.
 
 ## Guardrails and policies
 

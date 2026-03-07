@@ -35,6 +35,7 @@ _TASK_COUNTER_KEY = "_dynamic_task_counter"
 _TASK_PARENT_ID_KEY = "_dynamic_parent_session_id"
 _TASK_DEPTH_KEY = "_dynamic_delegation_depth"
 _RUNNING_TASKS_KEY = "_dynamic_running_tasks"
+_RUNTIME_SUBAGENT_STORE_KEY = "_dynamic_subagent_specs"
 _RUNTIME_REGISTRY: dict[str, _TaskRuntime] = {}
 
 
@@ -46,11 +47,155 @@ class _TaskRuntime:
     subagent_type: str
 
 
+def _tool_name(tool: Any) -> str | None:
+    raw_name = getattr(tool, "__name__", getattr(tool, "name", None))
+    if isinstance(raw_name, str):
+        normalized = raw_name.strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _build_tool_index(default_tools: list[Any]) -> dict[str, Any]:
+    index: dict[str, Any] = {}
+    for tool in default_tools:
+        name = _tool_name(tool)
+        if name is not None and name not in index:
+            index[name] = tool
+    return index
+
+
 def _normalize_subagent_type(subagent_type: str) -> str:
-    normalized = _sanitize_agent_name(subagent_type)
+    normalized_input = subagent_type.strip()
+    if not normalized_input:
+        return "general_purpose"
+
+    normalized = _sanitize_agent_name(normalized_input)
     if normalized in {"general", "generalpurpose"}:
         return "general_purpose"
     return normalized
+
+
+def _get_runtime_subagent_store(state: Any) -> dict[str, Any]:
+    raw_store = state.setdefault(_RUNTIME_SUBAGENT_STORE_KEY, {})
+    if isinstance(raw_store, dict):
+        return raw_store
+
+    store: dict[str, Any] = {}
+    state[_RUNTIME_SUBAGENT_STORE_KEY] = store
+    return store
+
+
+def _persist_runtime_subagent_spec(
+    *,
+    state: Any,
+    name: str,
+    description: str,
+    system_prompt: str | None,
+    model: str | None,
+    tool_names: list[str] | None,
+) -> None:
+    store = _get_runtime_subagent_store(state)
+    payload: dict[str, Any] = {
+        "name": name,
+        "description": description,
+    }
+    if system_prompt:
+        payload["system_prompt"] = system_prompt
+    if model:
+        payload["model"] = model
+    if tool_names is not None:
+        payload["tool_names"] = tool_names
+
+    store[name] = payload
+
+
+def _resolve_runtime_tool_names(
+    *,
+    tool_names: list[str] | None,
+    tool_index: dict[str, Any],
+) -> tuple[list[str] | None, str | None]:
+    if tool_names is None:
+        return None, None
+
+    normalized_tool_names: list[str] = []
+    seen: set[str] = set()
+    for raw_name in tool_names:
+        if not isinstance(raw_name, str):
+            continue
+
+        name = raw_name.strip()
+        if not name:
+            continue
+
+        if name.lower() == "all":
+            return None, None
+
+        if name in seen:
+            continue
+        seen.add(name)
+        normalized_tool_names.append(name)
+
+    unknown = [name for name in normalized_tool_names if name not in tool_index]
+    if unknown:
+        available = ", ".join(sorted(tool_index))
+        return None, (
+            f"Unknown tool_names: {', '.join(sorted(unknown))}. Available tools: {available}"
+        )
+
+    return normalized_tool_names, None
+
+
+def _load_runtime_subagent_specs(
+    *,
+    state: Any,
+    tool_index: dict[str, Any],
+) -> dict[str, SubAgentSpec]:
+    raw_store = state.get(_RUNTIME_SUBAGENT_STORE_KEY, {})
+    if not isinstance(raw_store, dict):
+        return {}
+
+    runtime_registry: dict[str, SubAgentSpec] = {}
+    for raw_key, raw_spec in raw_store.items():
+        if not isinstance(raw_spec, dict):
+            continue
+
+        raw_name = raw_spec.get("name", raw_key)
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            continue
+        normalized_name = _normalize_subagent_type(raw_name)
+
+        raw_description = raw_spec.get("description")
+        if not isinstance(raw_description, str):
+            continue
+        description = raw_description.strip()
+        if not description:
+            continue
+
+        spec: SubAgentSpec = SubAgentSpec(
+            name=normalized_name,
+            description=description,
+        )
+
+        raw_system_prompt = raw_spec.get("system_prompt")
+        if isinstance(raw_system_prompt, str) and raw_system_prompt.strip():
+            spec["system_prompt"] = raw_system_prompt.strip()
+
+        raw_model = raw_spec.get("model")
+        if isinstance(raw_model, str) and raw_model.strip():
+            spec["model"] = raw_model.strip()
+
+        raw_tool_names = raw_spec.get("tool_names")
+        if isinstance(raw_tool_names, list):
+            spec["tools"] = [
+                tool_index[name]
+                for name in raw_tool_names
+                if isinstance(name, str) and name in tool_index
+            ]
+
+        runtime_registry[normalized_name] = spec
+
+    return runtime_registry
 
 
 def _coerce_backend_factory(value: Any) -> BackendFactory | None:
@@ -77,6 +222,91 @@ def _build_dynamic_registry(
             if isinstance(name, str) and name:
                 registry[_sanitize_agent_name(name)] = item
     return registry
+
+
+def create_register_subagent_tool(
+    *,
+    default_model: str | Any,
+    default_tools: list,
+    config: DynamicTaskConfig | None = None,
+):
+    """Create a ``register_subagent`` tool for runtime specialization."""
+    task_config = config or DynamicTaskConfig()
+    tool_index = _build_tool_index(default_tools)
+
+    async def register_subagent(
+        name: str,
+        description: str,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        tool_names: list[str] | None = None,
+        tool_context: ToolContext | None = None,
+    ) -> dict[str, Any]:
+        """Register or update a runtime sub-agent profile."""
+        if tool_context is None:
+            return {"status": "error", "error": "tool_context is required"}
+
+        raw_name = name.strip()
+        if not raw_name:
+            return {"status": "error", "error": "Sub-agent name cannot be empty"}
+        normalized_name = _normalize_subagent_type(raw_name)
+
+        normalized_description = description.strip()
+        if not normalized_description:
+            return {"status": "error", "error": "Sub-agent description cannot be empty"}
+
+        normalized_system_prompt: str | None = None
+        if isinstance(system_prompt, str):
+            stripped_prompt = system_prompt.strip()
+            if stripped_prompt:
+                normalized_system_prompt = stripped_prompt
+
+        normalized_model: str | None = None
+        if isinstance(model, str):
+            stripped_model = model.strip()
+            if stripped_model:
+                normalized_model = stripped_model
+
+        if normalized_model and not task_config.allow_model_override:
+            return {
+                "status": "error",
+                "error": "Model override is disabled for dynamic task delegation",
+            }
+
+        resolved_tool_names, tool_error = _resolve_runtime_tool_names(
+            tool_names=tool_names,
+            tool_index=tool_index,
+        )
+        if tool_error:
+            return {"status": "error", "error": tool_error}
+
+        _persist_runtime_subagent_spec(
+            state=tool_context.state,
+            name=normalized_name,
+            description=normalized_description,
+            system_prompt=normalized_system_prompt,
+            model=normalized_model,
+            tool_names=resolved_tool_names,
+        )
+
+        effective_model: str | None = normalized_model
+        if effective_model is None and isinstance(default_model, str):
+            effective_model = default_model
+
+        selected_tools = (
+            resolved_tool_names if resolved_tool_names is not None else sorted(tool_index)
+        )
+
+        return {
+            "status": "registered",
+            "subagent_type": normalized_name,
+            "description": normalized_description,
+            "model": effective_model,
+            "tool_names": selected_tools,
+        }
+
+    register_subagent.__name__ = "register_subagent"
+    return register_subagent
 
 
 def _build_spec_agent(
@@ -186,6 +416,7 @@ def create_dynamic_task_tool(
     """Create a ``task`` tool that dynamically spawns/resumes sub-agent sessions."""
     task_config = config or DynamicTaskConfig()
     registry = _build_dynamic_registry(subagents)
+    tool_index = _build_tool_index(default_tools)
 
     async def task(
         description: str,
@@ -212,6 +443,7 @@ def create_dynamic_task_tool(
             return {"status": "error", "error": "Invalid dynamic task store in session state"}
 
         runtime: _TaskRuntime | None = None
+        created_subagent = False
         normalized_type = _normalize_subagent_type(subagent_type)
         logical_parent_id = tool_context.state.get(_TASK_PARENT_ID_KEY)
         if not isinstance(logical_parent_id, str) or not logical_parent_id:
@@ -264,7 +496,34 @@ def create_dynamic_task_tool(
             tool_context.state[_TASK_COUNTER_KEY] = counter
             task_id = f"task_{counter}"
 
-            selected = registry.get(normalized_type) or registry["general_purpose"]
+            runtime_registry = _load_runtime_subagent_specs(
+                state=tool_context.state,
+                tool_index=tool_index,
+            )
+            selected_registry: dict[str, SubAgentSpec | LlmAgent] = dict(registry)
+            selected_registry.update(runtime_registry)
+
+            selected = selected_registry.get(normalized_type)
+            if selected is None:
+                created_subagent = True
+                auto_description = (
+                    description.strip()
+                    or f"Runtime-defined specialist for '{normalized_type}' tasks."
+                )
+                selected = SubAgentSpec(
+                    name=normalized_type,
+                    description=auto_description,
+                    system_prompt=DEFAULT_SUBAGENT_PROMPT,
+                )
+                _persist_runtime_subagent_spec(
+                    state=tool_context.state,
+                    name=normalized_type,
+                    description=auto_description,
+                    system_prompt=DEFAULT_SUBAGENT_PROMPT,
+                    model=None,
+                    tool_names=None,
+                )
+
             normalized_type = (
                 _sanitize_agent_name(selected.name)
                 if isinstance(selected, LlmAgent)
@@ -290,7 +549,12 @@ def create_dynamic_task_tool(
                         config=task_config,
                     )
                 except ValueError as exc:
-                    return {"status": "error", "error": str(exc), "task_id": task_id}
+                    return {
+                        "status": "error",
+                        "error": str(exc),
+                        "task_id": task_id,
+                        "created_subagent": created_subagent,
+                    }
 
             runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
             session = await runner.session_service.create_session(
@@ -354,6 +618,7 @@ def create_dynamic_task_tool(
                 "error": (f"Dynamic task timed out after {task_config.timeout_seconds} seconds"),
                 "result": result["result"],
                 "function_calls": result["function_calls"],
+                "created_subagent": created_subagent,
             }
 
         error = result.get("error")
@@ -365,6 +630,7 @@ def create_dynamic_task_tool(
                 "error": f"Dynamic task failed: {error}",
                 "result": result["result"],
                 "function_calls": result["function_calls"],
+                "created_subagent": created_subagent,
             }
 
         return {
@@ -373,6 +639,7 @@ def create_dynamic_task_tool(
             "subagent_type": normalized_type,
             "result": result["result"],
             "function_calls": result["function_calls"],
+            "created_subagent": created_subagent,
         }
 
     task.__name__ = "task"

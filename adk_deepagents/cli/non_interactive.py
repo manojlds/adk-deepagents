@@ -196,6 +196,7 @@ def _build_cli_agent(
         "name": f"{agent_name}_cli",
         "backend": backend,
         "execution": "local",
+        "delegation_mode": "dynamic",
         "extra_callbacks": extra_callbacks,
     }
     if model is not None:

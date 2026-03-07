@@ -76,6 +76,7 @@ class TestCreateDeepAgent:
             subagents=[{"name": "researcher", "description": "Research agent"}],
         )
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "register_subagent" in tool_names
         assert "task" in tool_names
 
         from google.adk.tools import AgentTool
@@ -83,12 +84,19 @@ class TestCreateDeepAgent:
         agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
         assert len(agent_tools) == 0
 
+    def test_delegation_mode_dynamic_without_subagents_adds_runtime_tools(self):
+        agent = create_deep_agent(delegation_mode="dynamic")
+        tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "register_subagent" in tool_names
+        assert "task" in tool_names
+
     def test_delegation_mode_both_includes_static_and_dynamic(self):
         agent = create_deep_agent(
             delegation_mode="both",
             subagents=[{"name": "researcher", "description": "Research agent"}],
         )
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "register_subagent" in tool_names
         assert "task" in tool_names
 
         from google.adk.tools import AgentTool
