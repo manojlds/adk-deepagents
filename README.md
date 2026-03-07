@@ -45,7 +45,27 @@ npm i -g @heimdall-ai/heimdall
 uv pip install "adk-deepagents[browser]"
 ```
 
-## Quickstart
+## CLI Quickstart (`adk-deepagents`)
+
+The package installs an `adk-deepagents` CLI for interactive and non-interactive workflows.
+
+```bash
+# Interactive REPL (default mode)
+adk-deepagents
+
+# Interactive REPL with an auto-submitted first prompt
+adk-deepagents -m "Summarize this repository"
+
+# One-shot non-interactive run
+adk-deepagents -n "Run tests and summarize failures"
+
+# Piped stdin non-interactive run (automation-friendly output)
+printf 'Summarize README.md\n' | adk-deepagents -q
+```
+
+For the full command/flag reference, see [docs/cli.md](docs/cli.md).
+
+## Python Quickstart
 
 ```python
 from adk_deepagents import create_deep_agent
