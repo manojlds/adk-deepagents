@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -426,6 +427,10 @@ def _build_spec_agent(
     skills_config: SkillsConfig | None,
     model_override: str | None,
     config: DynamicTaskConfig,
+    before_agent_callback: Callable | None,
+    before_model_callback: Callable | None,
+    after_tool_callback: Callable | None,
+    default_interrupt_on: dict[str, bool] | None,
 ) -> LlmAgent:
     spec_name = spec.get("name")
     spec_description = spec.get("description")
@@ -440,7 +445,9 @@ def _build_spec_agent(
     if sub_skills:
         sub_tools.extend(_resolve_skills_tools(sub_skills, skills_config))
 
-    before_tool_cb = make_before_tool_callback(interrupt_on=spec.get("interrupt_on"))
+    before_tool_cb = make_before_tool_callback(
+        interrupt_on=spec.get("interrupt_on", default_interrupt_on)
+    )
 
     if model_override and not config.allow_model_override:
         raise ValueError("Model override is disabled for dynamic task delegation")
@@ -452,6 +459,9 @@ def _build_spec_agent(
         instruction=spec.get("system_prompt", DEFAULT_SUBAGENT_PROMPT),
         description=spec_description,
         tools=sub_tools,
+        before_agent_callback=before_agent_callback,
+        before_model_callback=before_model_callback,
+        after_tool_callback=after_tool_callback,
         before_tool_callback=before_tool_cb,
     )
 
@@ -521,6 +531,10 @@ def create_dynamic_task_tool(
     subagents: list[SubAgentSpec | LlmAgent] | None,
     skills_config: SkillsConfig | None = None,
     config: DynamicTaskConfig | None = None,
+    before_agent_callback: Callable | None = None,
+    before_model_callback: Callable | None = None,
+    after_tool_callback: Callable | None = None,
+    default_interrupt_on: dict[str, bool] | None = None,
 ):
     """Create a ``task`` tool that dynamically spawns/resumes sub-agent sessions."""
     task_config = config or DynamicTaskConfig()
@@ -656,6 +670,10 @@ def create_dynamic_task_tool(
                         skills_config=skills_config,
                         model_override=model,
                         config=task_config,
+                        before_agent_callback=before_agent_callback,
+                        before_model_callback=before_model_callback,
+                        after_tool_callback=after_tool_callback,
+                        default_interrupt_on=default_interrupt_on,
                     )
                 except ValueError as exc:
                     return {

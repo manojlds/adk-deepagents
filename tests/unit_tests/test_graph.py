@@ -70,6 +70,16 @@ class TestCreateDeepAgent:
         # Should have general_purpose + researcher
         assert len(agent_tools) >= 2
 
+    def test_default_static_mode_includes_general_purpose_subagent(self):
+        agent = create_deep_agent()
+
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        assert len(agent_tools) == 1
+        assert agent_tools[0].agent.name == "general_purpose"
+        assert isinstance(agent_tools[0].agent, LlmAgent)
+
     def test_delegation_mode_dynamic_adds_task_tool(self):
         agent = create_deep_agent(
             delegation_mode="dynamic",
@@ -424,6 +434,49 @@ class TestSubAgentSpecFields:
         assert len(normal) == 1
         assert isinstance(normal[0].agent, LlmAgent)
         assert normal[0].agent.before_tool_callback is None
+
+    def test_subagent_inherits_parent_interrupt_on_when_unspecified(self):
+        """Parent interrupt_on is used as fallback for sub-agents."""
+        agent = create_deep_agent(
+            interrupt_on={"write_file": True},
+            subagents=[
+                {
+                    "name": "normal_agent",
+                    "description": "Normal agent",
+                }
+            ],
+        )
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        normal = [t for t in agent_tools if t.agent.name == "normal_agent"]
+        assert len(normal) == 1
+        assert isinstance(normal[0].agent, LlmAgent)
+        assert normal[0].agent.before_tool_callback is not None
+
+    def test_subagent_receives_core_callback_stack(self):
+        """Built sub-agents receive before/after callbacks like the parent."""
+        agent = create_deep_agent(
+            memory=["/AGENTS.md"],
+            subagents=[
+                {
+                    "name": "researcher",
+                    "description": "Researches topics",
+                }
+            ],
+            summarization=SummarizationConfig(),
+        )
+
+        from google.adk.tools import AgentTool
+
+        agent_tools = [t for t in agent.tools if isinstance(t, AgentTool)]
+        researcher = [t for t in agent_tools if t.agent.name == "researcher"]
+        assert len(researcher) == 1
+        sub_agent = researcher[0].agent
+        assert isinstance(sub_agent, LlmAgent)
+        assert sub_agent.before_agent_callback is not None
+        assert sub_agent.before_model_callback is not None
+        assert sub_agent.after_tool_callback is not None
 
     def test_prebuilt_llmagent_in_subagents(self):
         """Pre-built LlmAgent instances are accepted in the subagents list."""

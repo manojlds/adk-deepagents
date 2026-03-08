@@ -364,3 +364,71 @@ class TestDynamicRuntimeSubagents:
         assert result["status"] == "completed"
         assert result["subagent_type"] == "summarizer"
         assert result["created_subagent"] is False
+
+    async def test_dynamic_spec_agent_receives_parent_callback_stack(self, monkeypatch):
+        observed: dict[str, bool] = {}
+
+        async def fake_run_dynamic_task(runtime, *, prompt, timeout_seconds):
+            del prompt, timeout_seconds
+            child_agent = runtime.runner.agent
+            observed["before_agent"] = child_agent.before_agent_callback is not None
+            observed["before_model"] = child_agent.before_model_callback is not None
+            observed["after_tool"] = child_agent.after_tool_callback is not None
+            observed["before_tool"] = child_agent.before_tool_callback is not None
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
+        def before_agent_cb(callback_context):
+            del callback_context
+            return None
+
+        def before_model_cb(callback_context, llm_request):
+            del callback_context, llm_request
+            return None
+
+        def after_tool_cb(tool, args, tool_context, **kwargs):
+            del tool, args, tool_context, kwargs
+            return None
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=[
+                {
+                    "name": "researcher",
+                    "description": "Research specialist",
+                }
+            ],
+            config=DynamicTaskConfig(),
+            before_agent_callback=before_agent_cb,
+            before_model_callback=before_model_cb,
+            after_tool_callback=after_tool_cb,
+            default_interrupt_on={"write_file": True},
+        )
+
+        context = _DummyToolContext(state={})
+        try:
+            result = await task_tool(
+                description="Research this repository",
+                prompt="Research this repository",
+                subagent_type="researcher",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            _cleanup_runtime_registry(context)
+
+        assert result["status"] == "completed"
+        assert observed == {
+            "before_agent": True,
+            "before_model": True,
+            "after_tool": True,
+            "before_tool": True,
+        }

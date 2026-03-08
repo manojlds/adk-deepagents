@@ -23,6 +23,7 @@ from adk_deepagents.prompts import BASE_AGENT_PROMPT
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import (
     GENERAL_PURPOSE_SUBAGENT,
+    _sanitize_agent_name,
     build_subagent_tools,
 )
 from adk_deepagents.tools.task_dynamic import (
@@ -249,13 +250,36 @@ def create_deep_agent(
             "Expected one of: 'static', 'dynamic', 'both'."
         )
 
-    if subagents is not None and delegation_mode in {"static", "both"}:
+    # Sub-agents use the same core callback stack as the parent agent, but
+    # without nested sub-agent prompt docs to avoid recursion noise.
+    subagent_before_agent_cb = make_before_agent_callback(
+        memory_sources=memory,
+        backend_factory=backend_factory,
+    )
+    subagent_before_model_cb = make_before_model_callback(
+        memory_sources=memory,
+        has_execution=has_execution,
+        subagent_descriptions=None,
+        dynamic_task_config=None,
+        summarization_config=summarization,
+        backend_factory=backend_factory if summarization else None,
+    )
+    subagent_after_tool_cb = make_after_tool_callback(
+        backend_factory=backend_factory,
+    )
+
+    if delegation_mode in {"static", "both"}:
+        static_subagents = subagents or []
         subagent_tools = build_subagent_tools(
-            subagents,
+            static_subagents,
             default_model=model,
             default_tools=list(core_tools),
             include_general_purpose=True,
             skills_config=skills_config,
+            before_agent_callback=subagent_before_agent_cb,
+            before_model_callback=subagent_before_model_cb,
+            after_tool_callback=subagent_after_tool_cb,
+            default_interrupt_on=interrupt_on,
         )
 
     resolved_dynamic_task_config: DynamicTaskConfig | None = None
@@ -275,10 +299,14 @@ def create_deep_agent(
                 subagents=subagents,
                 skills_config=skills_config,
                 config=resolved_dynamic_task_config,
+                before_agent_callback=subagent_before_agent_cb,
+                before_model_callback=subagent_before_model_cb,
+                after_tool_callback=subagent_after_tool_cb,
+                default_interrupt_on=interrupt_on,
             )
         )
 
-    gp_name = GENERAL_PURPOSE_SUBAGENT.get("name", "general_purpose")
+    gp_name = _sanitize_agent_name(GENERAL_PURPOSE_SUBAGENT.get("name", "general_purpose"))
     gp_description = GENERAL_PURPOSE_SUBAGENT.get(
         "description",
         "General-purpose sub-agent for research and multi-step tasks.",
@@ -288,27 +316,23 @@ def create_deep_agent(
         subagent_descriptions = []
         for s in subagents:
             if isinstance(s, LlmAgent):
+                sanitized_name = _sanitize_agent_name(s.name)
                 subagent_descriptions.append(
-                    {"name": s.name, "description": s.description or s.name}
+                    {"name": sanitized_name, "description": s.description or s.name}
                 )
             else:
                 spec_name: str | None = s.get("name")
                 spec_description: str | None = s.get("description")
                 if isinstance(spec_name, str) and isinstance(spec_description, str):
+                    sanitized_name = _sanitize_agent_name(spec_name)
                     subagent_descriptions.append(
-                        {"name": spec_name, "description": spec_description}
+                        {"name": sanitized_name, "description": spec_description}
                     )
-        # Include general-purpose in descriptions if added
-        all_names = set()
-        for s in subagents:
-            if isinstance(s, LlmAgent):
-                all_names.add(s.name)
-            else:
-                spec_name: str | None = s.get("name")
-                if isinstance(spec_name, str):
-                    all_names.add(spec_name)
-        has_gp = any(n in ("general-purpose", "general_purpose") for n in all_names)
-        if not has_gp:
+
+    # Include general-purpose in docs whenever delegation is enabled.
+    if delegation_mode in {"static", "dynamic", "both"}:
+        names = {d["name"] for d in subagent_descriptions}
+        if gp_name not in names:
             subagent_descriptions.insert(
                 0,
                 {
@@ -316,13 +340,6 @@ def create_deep_agent(
                     "description": gp_description,
                 },
             )
-    elif delegation_mode in {"dynamic", "both"}:
-        subagent_descriptions = [
-            {
-                "name": gp_name,
-                "description": gp_description,
-            }
-        ]
 
     # 6. Compose callbacks
     before_agent_cb = make_before_agent_callback(
