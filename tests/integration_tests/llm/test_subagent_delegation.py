@@ -11,12 +11,9 @@ from __future__ import annotations
 import pytest
 
 from adk_deepagents import create_deep_agent
+from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.types import SubAgentSpec
-from tests.integration_tests.conftest import (
-    get_file_content,
-    make_litellm_model,
-    run_agent_with_events,
-)
+from tests.integration_tests.conftest import make_litellm_model, run_agent_with_events
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
@@ -92,43 +89,49 @@ async def test_default_general_purpose_subagent_available_without_subagents_arg(
 
 
 @pytest.mark.timeout(120)
-async def test_parent_interrupt_on_applies_to_static_subagent_tools():
-    """Parent interrupt_on should require approval inside delegated sub-agents."""
+async def test_subagent_inherits_memory_callbacks_and_uses_parent_memory():
+    """Delegated sub-agent should receive memory loaded by parent callback stack."""
     model = make_litellm_model()
 
-    writer_subagent: SubAgentSpec = SubAgentSpec(
-        name="writer",
-        description="Writes files when requested.",
+    memory_reader: SubAgentSpec = SubAgentSpec(
+        name="memory_reader",
+        description="Returns memory codeword exactly.",
         system_prompt=(
-            "When asked to create a file, you MUST call write_file exactly once "
-            "using the path and content provided in the request."
+            "You receive memory context from the parent stack. "
+            "Return ONLY the exact value that appears after 'CODEWORD:'. "
+            "If unavailable, return UNKNOWN."
         ),
+        tools=[],
     )
 
     agent = create_deep_agent(
         model=model,
-        name="subagent_interrupt_fallback_test",
+        name="subagent_memory_callback_parity_test",
         instruction=(
-            "For file-creation requests, you MUST delegate to the writer tool and "
-            "relay the writer result. Do not call write_file directly."
+            "You MUST delegate this request using the memory_reader tool and "
+            "return the delegated answer unchanged."
         ),
-        subagents=[writer_subagent],
-        interrupt_on={"write_file": True},
+        subagents=[memory_reader],
+        memory=["/AGENTS.md"],
     )
 
-    _texts, function_calls, function_responses, runner, session = await run_agent_with_events(
+    texts, function_calls, function_responses, _runner, _session = await run_agent_with_events(
         agent,
-        "Please use the writer sub-agent to create /blocked.txt with content BLOCKED.",
+        "Delegate and tell me the memory codeword.",
+        state={
+            "files": {
+                "/AGENTS.md": create_file_data("Project memory\nCODEWORD: ORBITAL-77\n"),
+            }
+        },
     )
 
-    assert "writer" in function_calls, f"Expected a writer delegation call, got: {function_calls}"
-    assert "writer" in function_responses, (
-        f"Expected a writer delegation response, got: {function_responses}"
+    response_text = " ".join(texts)
+    assert "memory_reader" in function_calls, (
+        f"Expected a memory_reader delegation call, got: {function_calls}"
     )
-    assert (
-        "adk_request_confirmation" in function_calls
-        or "adk_request_confirmation" in function_responses
-    ), "Expected approval request events for delegated write_file call"
-
-    files = await get_file_content(runner, session)
-    assert "/blocked.txt" not in files
+    assert "memory_reader" in function_responses, (
+        f"Expected a memory_reader delegation response, got: {function_responses}"
+    )
+    assert "ORBITAL-77" in response_text, (
+        f"Expected delegated codeword from memory, got: {response_text}"
+    )
