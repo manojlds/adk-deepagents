@@ -36,7 +36,8 @@ async def test_summarization_trigger():
     # Use a tiny context window so summarization triggers quickly.
     # With 500 tokens (~2000 chars), even 2-3 exchanges will trigger.
     summarization = SummarizationConfig(
-        model=os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini"),
+        model=os.environ.get("ADK_DEEPAGENTS_MODEL")
+        or os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini"),
         context_window=500,
         trigger=("fraction", 0.5),
         keep=("messages", 2),
