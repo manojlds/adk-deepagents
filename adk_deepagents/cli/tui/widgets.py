@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.message import Message
@@ -39,6 +40,18 @@ class MessageDisplay(VerticalScroll):
         color: $success;
         text-opacity: 80%;
         margin-bottom: 0;
+    }
+
+    MessageDisplay .tool-detail-msg {
+        color: $text-muted;
+        margin-bottom: 0;
+        text-opacity: 75%;
+    }
+
+    MessageDisplay .tool-result-msg {
+        color: $accent;
+        margin-bottom: 1;
+        text-opacity: 85%;
     }
 
     MessageDisplay .system-msg {
@@ -132,11 +145,20 @@ class MessageDisplay(VerticalScroll):
         self._end_thought()
         self._end_assistant()
 
-    def add_tool_call(self, tool_name: str) -> None:
-        """Show a tool call indicator."""
+    def add_tool_call(self, tool_name: str, *, detail: str | None = None) -> None:
+        """Show a tool call indicator with optional details."""
         self._end_assistant()
         widget = Static(f"$ {tool_name}", classes="tool-msg")
         self.mount(widget)
+        if detail:
+            self.mount(Static(f"  {detail}", classes="tool-detail-msg"))
+        self.scroll_end(animate=False)
+
+    def add_tool_result(self, tool_name: str, *, detail: str | None = None) -> None:
+        """Show a concise tool result summary."""
+        self._end_assistant()
+        rendered = f"  -> {detail}" if detail else f"  -> {tool_name} completed"
+        self.mount(Static(rendered, classes="tool-result-msg"))
         self.scroll_end(animate=False)
 
     def add_system_message(self, text: str, *, error: bool = False) -> None:
@@ -315,7 +337,7 @@ class PromptInput(Static):
                 inp.value += " "
             inp.focus()
 
-    def _on_key(self, event: any) -> None:  # type: ignore[override]
+    def on_key(self, event: events.Key) -> None:
         """Forward arrow keys from input to the picker when visible."""
         picker = self.query_one("#command-picker", OptionList)
         if not picker.has_class("visible"):

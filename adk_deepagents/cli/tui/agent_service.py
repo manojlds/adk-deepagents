@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +26,176 @@ from adk_deepagents.cli.interactive import (
 
 REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 
+_DETAIL_VALUE_PREVIEW_LIMIT = 80
+_DETAIL_TEXT_PREVIEW_LIMIT = 180
+
+
+def _truncate_preview(text: str, *, limit: int = _DETAIL_VALUE_PREVIEW_LIMIT) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 3] + "..."
+
+
+def _as_preview(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        return _truncate_preview(stripped)
+
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+
+    return None
+
+
+def _coerce_payload_dict(raw_payload: Any) -> dict[str, Any]:
+    if isinstance(raw_payload, dict):
+        return raw_payload
+
+    if isinstance(raw_payload, str):
+        try:
+            parsed = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return {}
+
+        if isinstance(parsed, dict):
+            return parsed
+
+    return {}
+
+
+def _format_key_values(
+    payload: dict[str, Any],
+    *,
+    keys: tuple[str, ...],
+    key_aliases: dict[str, str] | None = None,
+) -> str | None:
+    pairs: list[str] = []
+    aliases = key_aliases or {}
+    for key in keys:
+        preview = _as_preview(payload.get(key))
+        if preview is None:
+            continue
+        label = aliases.get(key, key)
+        pairs.append(f"{label}={preview}")
+
+    if not pairs:
+        return None
+
+    return ", ".join(pairs)
+
+
+def _format_tool_call_detail(tool_name: str, tool_args: dict[str, Any]) -> str | None:
+    if not tool_args:
+        return None
+
+    if tool_name == "glob":
+        return _format_key_values(tool_args, keys=("pattern", "path"))
+
+    if tool_name == "grep":
+        return _format_key_values(tool_args, keys=("pattern", "path", "glob", "output_mode"))
+
+    if tool_name == "task":
+        detail = _format_key_values(
+            tool_args,
+            keys=("subagent_type", "task_id", "description", "prompt"),
+            key_aliases={"subagent_type": "subagent"},
+        )
+        if detail is not None:
+            return detail
+
+    if tool_name == "register_subagent":
+        detail = _format_key_values(tool_args, keys=("name", "model", "description"))
+        tool_names = tool_args.get("tool_names")
+        if isinstance(tool_names, list):
+            if detail is None:
+                detail = ""
+            detail = (detail + ", " if detail else "") + f"tool_names={len(tool_names)}"
+        return detail or None
+
+    if tool_name == "execute":
+        return _format_key_values(tool_args, keys=("command",))
+
+    if tool_name in {"ls", "read_file", "write_file", "edit_file"}:
+        return _format_key_values(
+            tool_args,
+            keys=("path", "file_path", "offset", "limit"),
+            key_aliases={"file_path": "path"},
+        )
+
+    if tool_name in {"write_todos", "read_todos"}:
+        todos = tool_args.get("todos")
+        if isinstance(todos, list):
+            return f"todos={len(todos)}"
+
+    return _format_key_values(tool_args, keys=("path", "name", "description", "command"))
+
+
+def _format_tool_response_detail(tool_name: str, response: dict[str, Any]) -> str | None:
+    status = _as_preview(response.get("status"))
+
+    if tool_name in {"glob", "ls"}:
+        entries = response.get("entries")
+        if isinstance(entries, list):
+            prefix = f"status={status}, " if status else ""
+            return f"{prefix}entries={len(entries)}"
+
+    if tool_name == "grep":
+        result = response.get("result")
+        if isinstance(result, str):
+            lines = len(result.splitlines()) if result else 0
+            prefix = f"status={status}, " if status else ""
+            return f"{prefix}result_lines={lines}"
+
+    if tool_name == "task":
+        detail = _format_key_values(
+            response,
+            keys=("status", "subagent_type", "task_id", "created_subagent"),
+            key_aliases={"subagent_type": "subagent"},
+        )
+        error_value = _as_preview(response.get("error"))
+        if error_value:
+            if detail is None:
+                return f"error={error_value}"
+            return f"{detail}, error={error_value}"
+        return detail
+
+    if tool_name == "register_subagent":
+        return _format_key_values(
+            response,
+            keys=("status", "subagent_type", "model"),
+            key_aliases={"subagent_type": "subagent"},
+        )
+
+    if tool_name == "execute":
+        detail = _format_key_values(response, keys=("exit_code", "truncated", "status"))
+        output = response.get("output")
+        if isinstance(output, str) and output.strip():
+            output_preview = _truncate_preview(output.strip(), limit=_DETAIL_TEXT_PREVIEW_LIMIT)
+            if detail is None:
+                return f"output={output_preview}"
+            return f"{detail}, output={output_preview}"
+        return detail
+
+    if tool_name in {"read_file", "write_file", "edit_file"}:
+        return _format_key_values(
+            response,
+            keys=("status", "path", "occurrences"),
+        )
+
+    error_value = _as_preview(response.get("error"))
+    if error_value is not None:
+        if status is None:
+            return f"error={error_value}"
+        return f"status={status}, error={error_value}"
+
+    if status is not None:
+        return f"status={status}"
+
+    return None
+
 
 @dataclass
 class UiUpdate:
@@ -35,6 +206,7 @@ class UiUpdate:
         "assistant_delta",
         "thought_delta",
         "tool_call",
+        "tool_result",
         "system",
         "error",
         "approval_request",
@@ -45,6 +217,7 @@ class UiUpdate:
     ]
     text: str | None = None
     tool_name: str | None = None
+    tool_detail: str | None = None
     request_id: str | None = None
     approval_tool_name: str | None = None
     approval_hint: str | None = None
@@ -250,7 +423,11 @@ class AgentService:
             if function_call is not None:
                 tool_name = getattr(function_call, "name", None) or "unknown_tool"
                 if tool_name != REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
-                    self.updates.put_nowait(UiUpdate(kind="tool_call", tool_name=tool_name))
+                    args_dict = _coerce_payload_dict(getattr(function_call, "args", None))
+                    detail = _format_tool_call_detail(tool_name, args_dict)
+                    self.updates.put_nowait(
+                        UiUpdate(kind="tool_call", tool_name=tool_name, tool_detail=detail)
+                    )
 
             function_response = getattr(part, "function_response", None)
             if function_response is not None:
@@ -260,6 +437,12 @@ class AgentService:
 
                 response = getattr(function_response, "response", None)
                 if isinstance(response, dict):
+                    detail = _format_tool_response_detail(tool_name, response)
+                    if detail is not None:
+                        self.updates.put_nowait(
+                            UiUpdate(kind="tool_result", tool_name=tool_name, tool_detail=detail)
+                        )
+
                     for key in ("error", "stderr"):
                         value = response.get(key)
                         if isinstance(value, str) and value.strip():
