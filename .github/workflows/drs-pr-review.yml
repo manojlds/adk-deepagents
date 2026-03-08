@@ -56,7 +56,7 @@ jobs:
       - name: Install OpenCode CLI
         run: npm install -g opencode-ai
       - name: Install DRS
-        run: npm install -g @diff-review-system/drs@3.0.0
+        run: npm install -g @diff-review-system/drs@^3.0.0
       - name: Review Pull Request (Trusted Contributor)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -95,7 +95,7 @@ jobs:
       - name: Install OpenCode CLI
         run: npm install -g opencode-ai
       - name: Install DRS
-        run: npm install -g @diff-review-system/drs@3.0.0
+        run: npm install -g @diff-review-system/drs@^3.0.0
       - name: Review Pull Request (External Contributor)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
