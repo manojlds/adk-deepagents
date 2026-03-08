@@ -24,6 +24,7 @@ from adk_deepagents.cli.config import (
     resolve_cli_paths,
     save_cli_defaults,
 )
+from adk_deepagents.cli.delegation_config import build_cli_dynamic_task_config
 from adk_deepagents.cli.interactive import run_interactive
 from adk_deepagents.cli.non_interactive import (
     combine_non_interactive_prompt,
@@ -414,6 +415,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
 
     _load_workspace_env()
     resolved_model = resolve_model(args.model, defaults)
+    dynamic_task_config = build_cli_dynamic_task_config(defaults)
 
     piped_stdin = read_piped_stdin()
     piped_input_for_non_interactive = piped_stdin if args.message_prompt is None else None
@@ -478,6 +480,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             user_id=CLI_USER_ID,
             session_id=active_thread_id,
             db_path=paths.sessions_db_path,
+            dynamic_task_config=dynamic_task_config,
             no_stream=args.no_stream,
             shell_allow_list=args.shell_allow_list,
             auto_approve=args.auto_approve,
@@ -497,6 +500,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             session_id=active_thread_id,
             db_path=paths.sessions_db_path,
             auto_approve=args.auto_approve,
+            dynamic_task_config=dynamic_task_config,
             memory_sources=resources.memory_sources,
             memory_source_paths=resources.memory_source_paths,
             skills_dirs=resources.skills_dirs,
@@ -510,6 +514,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         session_id=active_thread_id,
         db_path=paths.sessions_db_path,
         auto_approve=args.auto_approve,
+        dynamic_task_config=dynamic_task_config,
         memory_sources=resources.memory_sources,
         memory_source_paths=resources.memory_source_paths,
         skills_dirs=resources.skills_dirs,

@@ -17,6 +17,7 @@ from google.genai import types
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.callbacks.before_tool import resume_approval
+from adk_deepagents.cli.delegation_config import build_cli_dynamic_task_config
 from adk_deepagents.cli.resources import (
     MemoryMappedFilesystemBackend,
     build_missing_skills_dependency_error,
@@ -28,6 +29,7 @@ from adk_deepagents.cli.session_store import (
     get_thread,
     list_threads,
 )
+from adk_deepagents.types import DynamicTaskConfig
 
 INPUT_PROMPT = "> "
 APPROVAL_PROMPT = "approval> "
@@ -83,6 +85,10 @@ class _TurnRenderer:
     def tool_call(self, tool_name: str) -> None:
         self.finish_assistant_line()
         print(f"[tool] {tool_name}", file=self.stdout)
+
+    def tool_result(self, tool_name: str, detail: str) -> None:
+        self.finish_assistant_line()
+        print(f"[tool] {tool_name} -> {detail}", file=self.stdout)
 
     def error(self, message: str) -> None:
         self.finish_assistant_line()
@@ -143,6 +149,7 @@ def _build_cli_agent(
     model: str | None,
     cwd: Path,
     *,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -157,6 +164,7 @@ def _build_cli_agent(
         "backend": backend,
         "execution": "local",
         "delegation_mode": "dynamic",
+        "dynamic_task_config": dynamic_task_config or build_cli_dynamic_task_config(),
         "interrupt_on": INTERACTIVE_INTERRUPT_ON,
     }
     if model is not None:
@@ -179,6 +187,7 @@ def _build_runner(
     agent_name: str,
     model: str | None,
     db_path: Path,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -187,6 +196,7 @@ def _build_runner(
         agent_name=agent_name,
         model=model,
         cwd=Path.cwd(),
+        dynamic_task_config=dynamic_task_config,
         memory_sources=memory_sources,
         memory_source_paths=memory_source_paths,
         skills_dirs=skills_dirs,
@@ -471,6 +481,24 @@ def _extract_tool_error(function_response: Any) -> str | None:
     return None
 
 
+def _extract_task_queue_notice(function_response: Any) -> str | None:
+    if getattr(function_response, "name", None) != "task":
+        return None
+
+    response = getattr(function_response, "response", None)
+    if not isinstance(response, dict):
+        return None
+
+    if not bool(response.get("queued")):
+        return None
+
+    queue_wait = response.get("queue_wait_seconds")
+    if isinstance(queue_wait, (int, float)):
+        return f"queued ({queue_wait:.3f}s)"
+
+    return "queued"
+
+
 def _extract_confirmation_requests(event: Any) -> list[_ToolConfirmationRequest]:
     content = getattr(event, "content", None)
     parts = getattr(content, "parts", None) if content is not None else None
@@ -664,6 +692,10 @@ def _render_event(event: Any, *, renderer: _TurnRenderer) -> None:
             if tool_error is not None:
                 renderer.error(f"{tool_name}: {tool_error}")
 
+            queue_notice = _extract_task_queue_notice(function_response)
+            if queue_notice is not None:
+                renderer.tool_result(tool_name, queue_notice)
+
 
 def _read_prompt(*, input_reader: InputReader, stderr: TextIO) -> str | None:
     try:
@@ -745,6 +777,7 @@ async def _run_interactive_async(
     session_id: str,
     db_path: Path,
     auto_approve: bool,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -774,6 +807,7 @@ async def _run_interactive_async(
         agent_name=agent_name,
         model=model,
         db_path=db_path,
+        dynamic_task_config=dynamic_task_config,
         memory_sources=memory_sources,
         memory_source_paths=memory_source_paths,
         skills_dirs=skills_dirs,
@@ -785,6 +819,7 @@ async def _run_interactive_async(
             agent_name=agent_name,
             model=new_model,
             db_path=db_path,
+            dynamic_task_config=dynamic_task_config,
             memory_sources=memory_sources,
             memory_source_paths=memory_source_paths,
             skills_dirs=skills_dirs,
@@ -848,6 +883,7 @@ def run_interactive(
     session_id: str,
     db_path: Path,
     auto_approve: bool,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -863,6 +899,7 @@ def run_interactive(
                 session_id=session_id,
                 db_path=db_path,
                 auto_approve=auto_approve,
+                dynamic_task_config=dynamic_task_config,
                 memory_sources=memory_sources,
                 memory_source_paths=memory_source_paths,
                 skills_dirs=skills_dirs,

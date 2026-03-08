@@ -15,11 +15,13 @@ from google.adk.tools import BaseTool, ToolContext
 from google.genai import types
 
 from adk_deepagents import create_deep_agent
+from adk_deepagents.cli.delegation_config import build_cli_dynamic_task_config
 from adk_deepagents.cli.resources import (
     MemoryMappedFilesystemBackend,
     build_missing_skills_dependency_error,
 )
 from adk_deepagents.cli.session_store import CLI_SESSIONS_APP_NAME
+from adk_deepagents.types import DynamicTaskConfig
 
 SHELL_TOOL_NAMES = frozenset({"execute", "execute_bash"})
 CONFIRMATION_REQUIRED_TOOLS = frozenset({"write_file", "edit_file", "delete_file"})
@@ -175,6 +177,7 @@ def _build_cli_agent(
     model: str | None,
     cwd: Path,
     *,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     shell_allow_list: Sequence[str] | None,
     auto_approve: bool,
     memory_sources: Sequence[str] = (),
@@ -197,6 +200,7 @@ def _build_cli_agent(
         "backend": backend,
         "execution": "local",
         "delegation_mode": "dynamic",
+        "dynamic_task_config": dynamic_task_config or build_cli_dynamic_task_config(),
         "extra_callbacks": extra_callbacks,
     }
     if model is not None:
@@ -225,6 +229,7 @@ async def _run_non_interactive_async(
     no_stream: bool,
     shell_allow_list: Sequence[str] | None,
     auto_approve: bool,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -233,6 +238,7 @@ async def _run_non_interactive_async(
         agent_name=agent_name,
         model=model,
         cwd=Path.cwd(),
+        dynamic_task_config=dynamic_task_config,
         shell_allow_list=shell_allow_list,
         auto_approve=auto_approve,
         memory_sources=memory_sources,
@@ -284,6 +290,7 @@ def run_non_interactive(
     no_stream: bool,
     shell_allow_list: Sequence[str] | None,
     auto_approve: bool,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -298,6 +305,7 @@ def run_non_interactive(
                 user_id=user_id,
                 session_id=session_id,
                 db_path=db_path,
+                dynamic_task_config=dynamic_task_config,
                 no_stream=no_stream,
                 shell_allow_list=shell_allow_list,
                 auto_approve=auto_approve,

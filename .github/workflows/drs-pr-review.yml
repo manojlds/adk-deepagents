@@ -56,28 +56,11 @@ jobs:
       - name: Install OpenCode CLI
         run: npm install -g opencode-ai
       - name: Install DRS
-        run: npm install -g @diff-review-system/drs@3.0.0-rc.1
-      - name: Setup OpenCode Zen Authentication
-        if: env.OPENCODE_ZEN_API_KEY != ''
-        env:
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-        run: |
-          mkdir -p ~/.local/share/opencode
-          cat > ~/.local/share/opencode/auth.json <<EOF
-          {
-            "opencode": {
-              "type": "api",
-              "key": "${OPENCODE_ZEN_API_KEY}"
-            }
-          }
-          EOF
+        run: npm install -g @diff-review-system/drs@^3.0.0
       - name: Review Pull Request (Trusted Contributor)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           drs review-pr \
             --owner ${{ github.event.repository.owner.login }} \
@@ -112,28 +95,11 @@ jobs:
       - name: Install OpenCode CLI
         run: npm install -g opencode-ai
       - name: Install DRS
-        run: npm install -g @diff-review-system/drs@3.0.0-rc.1
-      - name: Setup OpenCode Zen Authentication
-        if: env.OPENCODE_ZEN_API_KEY != ''
-        env:
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-        run: |
-          mkdir -p ~/.local/share/opencode
-          cat > ~/.local/share/opencode/auth.json <<EOF
-          {
-            "opencode": {
-              "type": "api",
-              "key": "${OPENCODE_ZEN_API_KEY}"
-            }
-          }
-          EOF
+        run: npm install -g @diff-review-system/drs@^3.0.0
       - name: Review Pull Request (External Contributor)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
-          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           drs review-pr \
             --owner ${{ github.event.repository.owner.login }} \

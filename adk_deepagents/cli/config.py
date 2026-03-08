@@ -7,6 +7,7 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 CLI_HOME_ENV_VAR = "ADK_DEEPAGENTS_HOME"
 CLI_HOME_DIRNAME = ".adk-deepagents"
@@ -36,6 +37,9 @@ class CliDefaults:
 
     default_agent: str = DEFAULT_AGENT_NAME
     default_model: str | None = None
+    dynamic_task_max_parallel: int | None = None
+    dynamic_task_concurrency_policy: Literal["error", "wait"] | None = None
+    dynamic_task_queue_timeout_seconds: float | None = None
 
 
 def resolve_cli_paths(home_dir: Path | None = None) -> CliPaths:
@@ -88,7 +92,57 @@ def load_cli_defaults(paths: CliPaths) -> CliDefaults:
     else:
         raise ValueError("config.toml default_model must be a string when set.")
 
-    return CliDefaults(default_agent=default_agent, default_model=default_model)
+    dynamic_task_max_parallel: int | None = None
+    dynamic_task_concurrency_policy: Literal["error", "wait"] | None = None
+    dynamic_task_queue_timeout_seconds: float | None = None
+
+    dynamic_task_raw = config_data.get("dynamic_task")
+    if dynamic_task_raw is not None:
+        if not isinstance(dynamic_task_raw, dict):
+            raise ValueError("config.toml dynamic_task must be a table.")
+
+        max_parallel_raw = dynamic_task_raw.get("max_parallel")
+        if max_parallel_raw is not None:
+            if isinstance(max_parallel_raw, bool) or not isinstance(max_parallel_raw, int):
+                raise ValueError("config.toml dynamic_task.max_parallel must be an integer.")
+            if max_parallel_raw < 1:
+                raise ValueError("config.toml dynamic_task.max_parallel must be >= 1.")
+            dynamic_task_max_parallel = max_parallel_raw
+
+        concurrency_policy_raw = dynamic_task_raw.get("concurrency_policy")
+        if concurrency_policy_raw is not None:
+            if not isinstance(concurrency_policy_raw, str):
+                raise ValueError(
+                    "config.toml dynamic_task.concurrency_policy must be 'error' or 'wait'."
+                )
+            normalized_policy = concurrency_policy_raw.strip().lower()
+            if normalized_policy == "error":
+                dynamic_task_concurrency_policy = "error"
+            elif normalized_policy == "wait":
+                dynamic_task_concurrency_policy = "wait"
+            else:
+                raise ValueError(
+                    "config.toml dynamic_task.concurrency_policy must be 'error' or 'wait'."
+                )
+
+        queue_timeout_raw = dynamic_task_raw.get("queue_timeout_seconds")
+        if queue_timeout_raw is not None:
+            if isinstance(queue_timeout_raw, bool) or not isinstance(
+                queue_timeout_raw, (int, float)
+            ):
+                raise ValueError("config.toml dynamic_task.queue_timeout_seconds must be a number.")
+            queue_timeout = float(queue_timeout_raw)
+            if queue_timeout < 0:
+                raise ValueError("config.toml dynamic_task.queue_timeout_seconds must be >= 0.")
+            dynamic_task_queue_timeout_seconds = queue_timeout
+
+    return CliDefaults(
+        default_agent=default_agent,
+        default_model=default_model,
+        dynamic_task_max_parallel=dynamic_task_max_parallel,
+        dynamic_task_concurrency_policy=dynamic_task_concurrency_policy,
+        dynamic_task_queue_timeout_seconds=dynamic_task_queue_timeout_seconds,
+    )
 
 
 def save_cli_defaults(paths: CliPaths, defaults: CliDefaults) -> None:
@@ -98,6 +152,26 @@ def save_cli_defaults(paths: CliPaths, defaults: CliDefaults) -> None:
     lines = [f'default_agent = "{_toml_escape(default_agent)}"']
     if defaults.default_model:
         lines.append(f'default_model = "{_toml_escape(defaults.default_model)}"')
+
+    has_dynamic_task_settings = any(
+        value is not None
+        for value in (
+            defaults.dynamic_task_max_parallel,
+            defaults.dynamic_task_concurrency_policy,
+            defaults.dynamic_task_queue_timeout_seconds,
+        )
+    )
+    if has_dynamic_task_settings:
+        lines.append("")
+        lines.append("[dynamic_task]")
+        if defaults.dynamic_task_max_parallel is not None:
+            lines.append(f"max_parallel = {defaults.dynamic_task_max_parallel}")
+        if defaults.dynamic_task_concurrency_policy is not None:
+            lines.append(
+                f'concurrency_policy = "{_toml_escape(defaults.dynamic_task_concurrency_policy)}"'
+            )
+        if defaults.dynamic_task_queue_timeout_seconds is not None:
+            lines.append(f"queue_timeout_seconds = {defaults.dynamic_task_queue_timeout_seconds}")
 
     _atomic_write_text(paths.config_path, "\n".join(lines) + "\n")
 

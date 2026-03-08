@@ -131,6 +131,34 @@ Exit codes:
   1. `~/.adk-deepagents/profiles/<agent>/skills`
   2. `<cwd>/skills`
 
+## Dynamic Task Concurrency (CLI/TUI)
+
+CLI and TUI runs default to dynamic delegation with queue-based backpressure:
+
+- `concurrency_policy=wait`
+- `queue_timeout_seconds=30`
+
+You can persist defaults in `~/.adk-deepagents/config.toml`:
+
+```toml
+[dynamic_task]
+max_parallel = 4
+concurrency_policy = "wait"
+queue_timeout_seconds = 30.0
+```
+
+And optionally override at runtime with environment variables:
+
+- `ADK_DYNAMIC_TASK_MAX_PARALLEL` (integer, min `1`)
+- `ADK_DYNAMIC_TASK_CONCURRENCY_POLICY` (`wait` or `error`)
+- `ADK_DYNAMIC_TASK_QUEUE_TIMEOUT_SECONDS` (float, min `0`)
+
+Precedence for these settings is: environment variable > `config.toml` > built-in defaults.
+
+The core Python library remains parameter-driven. Outside CLI/TUI harnesses,
+set these values directly via `DynamicTaskConfig(...)` when calling
+`create_deep_agent(...)`.
+
 ## Manual Smoke Checklist (Release)
 
 Run this checklist on **Linux** and **macOS** before release.

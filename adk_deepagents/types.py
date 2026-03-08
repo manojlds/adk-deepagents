@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 
 class SubAgentSpec(TypedDict, total=False):
@@ -31,6 +31,16 @@ class DynamicTaskConfig:
 
     max_parallel: int = 4
     """Maximum number of concurrent dynamic tasks per parent session."""
+
+    concurrency_policy: Literal["error", "wait"] = "error"
+    """Behavior when `max_parallel` is reached.
+
+    - ``"error"``: immediately return a tool-level error
+    - ``"wait"``: queue/wait until a slot is free or queue timeout is reached
+    """
+
+    queue_timeout_seconds: float = 30.0
+    """Maximum seconds to wait for a concurrency slot when policy is ``"wait"``."""
 
     max_depth: int = 2
     """Maximum delegation depth for dynamically spawned sub-agents."""

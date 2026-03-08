@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import adk_deepagents.cli.non_interactive as ni
+from adk_deepagents.types import DynamicTaskConfig
 
 
 class _FakeStdin(io.StringIO):
@@ -192,6 +193,10 @@ def test_build_cli_agent_missing_skills_dependency_is_actionable(
 
 
 def test_build_cli_agent_enables_dynamic_delegation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_CONCURRENCY_POLICY", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_QUEUE_TIMEOUT_SECONDS", raising=False)
+
     captured: dict[str, object] = {}
 
     def _fake_create_deep_agent(**kwargs: object):
@@ -211,6 +216,8 @@ def test_build_cli_agent_enables_dynamic_delegation(monkeypatch, tmp_path: Path)
     assert captured["name"] == "demo_cli"
     assert captured["execution"] == "local"
     assert captured["delegation_mode"] == "dynamic"
+    dynamic_config = cast(DynamicTaskConfig, captured["dynamic_task_config"])
+    assert dynamic_config.concurrency_policy == "wait"
 
 
 def test_run_non_interactive_async_streams_chunks(monkeypatch, capsys, tmp_path: Path) -> None:

@@ -92,11 +92,17 @@ future turns.
 `DynamicTaskConfig` controls runtime behavior:
 
 - `max_parallel`: max in-flight dynamic tasks per parent state
+- `concurrency_policy`: behavior when parallel capacity is full (`error` or `wait`)
+- `queue_timeout_seconds`: max wait time for a free slot when policy is `wait`
 - `max_depth`: delegation depth cap (`_dynamic_delegation_depth`)
 - `timeout_seconds`: per dynamic task run timeout
 - `allow_model_override`: controls whether `model=` input is honored
 
 Enforcement is inside `task(...)` before/around child execution.
+
+When `concurrency_policy="wait"`, overflow task calls are queued in-process and
+wait for a free concurrency slot instead of immediately returning a
+"concurrency limit exceeded" error.
 
 ## State model (persisted vs process-local)
 

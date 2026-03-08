@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -72,7 +74,7 @@ class TestDynamicTaskToolGuards:
             default_model="gemini-2.5-flash",
             default_tools=[],
             subagents=None,
-            config=DynamicTaskConfig(max_parallel=1),
+            config=DynamicTaskConfig(max_parallel=1, concurrency_policy="error"),
         )
 
         context = _DummyToolContext(
@@ -89,9 +91,119 @@ class TestDynamicTaskToolGuards:
 
         assert result["status"] == "error"
         assert "concurrency limit" in result["error"].lower()
+        assert result["queued"] is False
         task_store = context.state.get("_dynamic_tasks", {})
         created = task_store.get(result.get("task_id", ""), {})
         assert isinstance(created, dict)
+
+    async def test_parallel_limit_wait_policy_queues_until_slot_frees(self, monkeypatch):
+        async def fake_run_dynamic_task(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(
+                max_parallel=1,
+                concurrency_policy="wait",
+                queue_timeout_seconds=0.5,
+            ),
+        )
+
+        key = "parent_wait:task_1"
+        task_dynamic._RUNTIME_REGISTRY[key] = task_dynamic._TaskRuntime(
+            runner=None,  # type: ignore[arg-type]
+            session_id="s1",
+            user_id="u1",
+            subagent_type="general_purpose",
+        )
+
+        context = _DummyToolContext(
+            state={
+                "_dynamic_tasks": {"task_1": {"subagent_type": "general_purpose"}},
+                "_dynamic_parent_session_id": "parent_wait",
+                "_dynamic_running_tasks": ["parent_wait:task_existing"],
+            }
+        )
+
+        async def _release_slot() -> None:
+            await asyncio.sleep(0.05)
+            running = context.state.get("_dynamic_running_tasks")
+            if isinstance(running, list) and "parent_wait:task_existing" in running:
+                running.remove("parent_wait:task_existing")
+
+        release_task = asyncio.create_task(_release_slot())
+
+        try:
+            result = await task_tool(
+                description="resume",
+                prompt="resume",
+                task_id="task_1",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            release_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await release_task
+            task_dynamic._RUNTIME_REGISTRY.pop(key, None)
+
+        assert result["status"] == "completed"
+        assert result["queued"] is True
+        assert result["queue_wait_seconds"] > 0
+
+    async def test_parallel_limit_wait_policy_times_out_when_queue_is_full(self):
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(
+                max_parallel=1,
+                concurrency_policy="wait",
+                queue_timeout_seconds=0.01,
+            ),
+        )
+
+        key = "parent_timeout:task_1"
+        task_dynamic._RUNTIME_REGISTRY[key] = task_dynamic._TaskRuntime(
+            runner=None,  # type: ignore[arg-type]
+            session_id="s1",
+            user_id="u1",
+            subagent_type="general_purpose",
+        )
+
+        context = _DummyToolContext(
+            state={
+                "_dynamic_tasks": {"task_1": {"subagent_type": "general_purpose"}},
+                "_dynamic_parent_session_id": "parent_timeout",
+                "_dynamic_running_tasks": ["parent_timeout:task_existing"],
+            }
+        )
+
+        try:
+            result = await task_tool(
+                description="resume",
+                prompt="resume",
+                task_id="task_1",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            task_dynamic._RUNTIME_REGISTRY.pop(key, None)
+
+        assert result["status"] == "error"
+        assert "queue timeout" in result["error"].lower()
+        assert result["queued"] is True
+        assert result["queue_wait_seconds"] > 0
 
     async def test_timeout_is_returned_as_tool_error(self, monkeypatch):
         async def fake_run_dynamic_task(*args, **kwargs):

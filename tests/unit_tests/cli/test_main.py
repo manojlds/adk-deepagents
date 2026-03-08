@@ -28,6 +28,7 @@ from adk_deepagents.cli.main import (
     resolve_model,
 )
 from adk_deepagents.cli.session_store import get_latest_thread, list_threads
+from adk_deepagents.types import DynamicTaskConfig
 
 
 def test_build_parser_parses_non_interactive_surface_flags() -> None:
@@ -558,6 +559,90 @@ def test_cli_main_interactive_mode_invokes_repl_runner(tmp_path, monkeypatch, ca
     assert captured_kwargs["first_prompt"] is None
     assert captured_kwargs["agent_name"] == "demo"
     assert captured_kwargs["auto_approve"] is False
+
+
+def test_cli_main_forwards_dynamic_task_settings_from_config(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    home_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    (home_dir / CONFIG_FILENAME).write_text(
+        (
+            'default_agent = "demo"\n'
+            "\n"
+            "[dynamic_task]\n"
+            "max_parallel = 7\n"
+            'concurrency_policy = "error"\n'
+            "queue_timeout_seconds = 4.5\n"
+        ),
+        encoding="utf-8",
+    )
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    exit_code = cli_main([])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    dynamic_task_config = cast(DynamicTaskConfig, captured_kwargs["dynamic_task_config"])
+    assert dynamic_task_config.max_parallel == 7
+    assert dynamic_task_config.concurrency_policy == "error"
+    assert dynamic_task_config.queue_timeout_seconds == 4.5
+
+
+def test_cli_main_dynamic_task_env_overrides_config(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    home_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+    monkeypatch.setattr(cli_main_module, "read_piped_stdin", lambda: None)
+
+    (home_dir / CONFIG_FILENAME).write_text(
+        (
+            'default_agent = "demo"\n'
+            "\n"
+            "[dynamic_task]\n"
+            "max_parallel = 7\n"
+            'concurrency_policy = "error"\n'
+            "queue_timeout_seconds = 4.5\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ADK_DYNAMIC_TASK_MAX_PARALLEL", "3")
+    monkeypatch.setenv("ADK_DYNAMIC_TASK_CONCURRENCY_POLICY", "wait")
+    monkeypatch.setenv("ADK_DYNAMIC_TASK_QUEUE_TIMEOUT_SECONDS", "1.25")
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _fake_run_interactive(**kwargs: object) -> int:
+        captured_kwargs.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_main_module, "run_interactive", _fake_run_interactive)
+
+    exit_code = cli_main([])
+    _ = capsys.readouterr()
+
+    assert exit_code == 0
+    dynamic_task_config = cast(DynamicTaskConfig, captured_kwargs["dynamic_task_config"])
+    assert dynamic_task_config.max_parallel == 3
+    assert dynamic_task_config.concurrency_policy == "wait"
+    assert dynamic_task_config.queue_timeout_seconds == 1.25
 
 
 def test_cli_main_forwards_discovered_memory_and_skills_precedence(
