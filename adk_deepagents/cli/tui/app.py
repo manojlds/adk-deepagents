@@ -108,7 +108,17 @@ class DeepAgentTui(App[None]):
 
         elif update.kind == "tool_call":
             messages.end_assistant_message()
-            messages.add_tool_call(update.tool_name or "unknown_tool")
+            messages.add_tool_call(
+                update.tool_name or "unknown_tool",
+                detail=update.tool_detail,
+            )
+
+        elif update.kind == "tool_result":
+            messages.end_assistant_message()
+            messages.add_tool_result(
+                update.tool_name or "unknown_tool",
+                detail=update.tool_detail,
+            )
 
         elif update.kind == "system":
             messages.end_assistant_message()
