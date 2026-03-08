@@ -104,6 +104,10 @@ When `concurrency_policy="wait"`, overflow task calls are queued in-process and
 wait for a free concurrency slot instead of immediately returning a
 "concurrency limit exceeded" error.
 
+The parent model is also informed of the active dynamic task limits via
+before-model system prompt injection (max parallelism, policy, queue timeout)
+so it can plan task waves proactively.
+
 ## State model (persisted vs process-local)
 
 ### Persisted in ADK session state
