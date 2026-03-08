@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import adk_deepagents.cli.interactive as repl
 from adk_deepagents.cli.session_store import ThreadRecord
+from adk_deepagents.types import DynamicTaskConfig
 
 
 class _FakeStdin:
@@ -81,6 +82,27 @@ class _TurnFakeRunner:
                     function_response=_FakeFunctionResponse(
                         "ls",
                         {"error": "permission denied"},
+                    )
+                )
+            ],
+        )
+
+
+class _QueuedTaskRunner:
+    async def run_async(self, *, user_id, session_id, new_message):
+        del user_id, session_id, new_message
+        yield _FakeEvent("assistant", [_FakePart(function_call=_FakeFunctionCall("task"))])
+        yield _FakeEvent(
+            "assistant",
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "task",
+                        {
+                            "status": "completed",
+                            "queued": True,
+                            "queue_wait_seconds": 0.125,
+                        },
                     )
                 )
             ],
@@ -329,6 +351,10 @@ def test_handle_slash_command_model_queries_and_switches() -> None:
 
 
 def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_CONCURRENCY_POLICY", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_QUEUE_TIMEOUT_SECONDS", raising=False)
+
     captured: dict[str, object] = {}
 
     def _fake_create_deep_agent(**kwargs: object):
@@ -342,6 +368,8 @@ def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:
     assert captured["name"] == "demo_cli"
     assert captured["execution"] == "local"
     assert captured["delegation_mode"] == "dynamic"
+    dynamic_config = cast(DynamicTaskConfig, captured["dynamic_task_config"])
+    assert dynamic_config.concurrency_policy == "wait"
     assert captured["interrupt_on"] == repl.INTERACTIVE_INTERRUPT_ON
 
 
@@ -390,6 +418,27 @@ def test_run_interactive_turn_streams_text_and_tool_events() -> None:
 
     assert out.getvalue() == "assistant> hello world\n[tool] ls\n"
     assert "[error] ls: permission denied" in err.getvalue()
+
+
+def test_run_interactive_turn_renders_task_queue_notice() -> None:
+    out = io.StringIO()
+    err = io.StringIO()
+
+    repl.asyncio.run(
+        repl._run_interactive_turn(
+            runner=_QueuedTaskRunner(),
+            prompt="hello",
+            user_id="u1",
+            session_id="s1",
+            stdout=out,
+            stderr=err,
+        )
+    )
+
+    rendered = out.getvalue()
+    assert "[tool] task" in rendered
+    assert "[tool] task -> queued (0.125s)" in rendered
+    assert err.getvalue() == ""
 
 
 def test_run_interactive_turn_hitl_approve_path() -> None:

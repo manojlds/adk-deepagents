@@ -121,3 +121,23 @@ def test_emit_event_updates_includes_tool_call_and_result_details() -> None:
     assert result_update.kind == "tool_result"
     assert result_update.tool_name == "glob"
     assert result_update.tool_detail == "status=success, entries=1"
+
+
+def test_format_tool_response_detail_for_task_includes_queue_metadata() -> None:
+    detail = _format_tool_response_detail(
+        "task",
+        {
+            "status": "completed",
+            "subagent_type": "summarizer",
+            "task_id": "task_2",
+            "queued": True,
+            "queue_wait_seconds": 0.125,
+        },
+    )
+
+    assert detail is not None
+    assert "status=completed" in detail
+    assert "subagent=summarizer" in detail
+    assert "task_id=task_2" in detail
+    assert "queued=True" in detail
+    assert "queue_wait=0.125s" in detail
