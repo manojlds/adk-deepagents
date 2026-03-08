@@ -10,7 +10,7 @@ from adk_deepagents.callbacks.before_model import (
     make_before_model_callback,
 )
 from adk_deepagents.summarization import DEFAULT_CONTEXT_WINDOW
-from adk_deepagents.types import SummarizationConfig
+from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 
 def _make_llm_request(system_instruction=None):
@@ -95,6 +95,28 @@ def test_runtime_subagent_docs_injected_from_state():
     si = str(request.config.system_instruction)
     assert "summarizer" in si
     assert "register_subagent" in si
+
+
+def test_dynamic_task_concurrency_limits_injected():
+    cb = make_before_model_callback(
+        subagent_descriptions=[{"name": "general_purpose", "description": "General task agent"}],
+        dynamic_task_config=DynamicTaskConfig(
+            max_parallel=3,
+            concurrency_policy="wait",
+            queue_timeout_seconds=12.5,
+        ),
+    )
+    ctx = MagicMock()
+    ctx.state = {}
+    request = _make_llm_request()
+
+    cb(ctx, request)
+
+    si = str(request.config.system_instruction)
+    assert "Dynamic Task Concurrency Limits" in si
+    assert "max_parallel=3" in si
+    assert "concurrency_policy=wait" in si
+    assert "queue_timeout_seconds=12.5" in si
 
 
 def test_dangling_tool_calls_patched():
