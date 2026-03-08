@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from adk_deepagents.cli.config import bootstrap_cli_home, resolve_cli_paths
 from adk_deepagents.cli.resources import (
@@ -103,3 +107,47 @@ def test_memory_mapped_filesystem_backend_keeps_workspace_download_behavior(tmp_
     assert responses[0].path == "/AGENTS.md"
     assert responses[0].error is None
     assert responses[0].content == b"project memory"
+
+
+def test_memory_mapped_filesystem_backend_hides_default_excluded_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / ".venv" / "lib").mkdir(parents=True)
+    (workspace / "src" / "keep.py").write_text("print('keep')\n", encoding="utf-8")
+    (workspace / ".venv" / "lib" / "hidden.py").write_text("print('hidden')\n", encoding="utf-8")
+
+    backend = MemoryMappedFilesystemBackend(root_dir=workspace)
+    entries = backend.glob_info("**/*.py", "/")
+    paths = {entry["path"] for entry in entries}
+
+    assert "/src/keep.py" in paths
+    assert all(not path.startswith("/.venv/") for path in paths)
+
+
+def test_memory_mapped_filesystem_backend_respects_gitignore_filters(tmp_path: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git executable is required for gitignore filtering test")
+
+    workspace = tmp_path / "workspace"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "ignored_dir").mkdir(parents=True)
+    (workspace / "src" / "keep.py").write_text("print('keep')\n", encoding="utf-8")
+    (workspace / "ignored.py").write_text("print('ignored')\n", encoding="utf-8")
+    (workspace / "ignored_dir" / "child.py").write_text("print('ignored dir')\n", encoding="utf-8")
+    (workspace / ".gitignore").write_text("ignored.py\nignored_dir/\n", encoding="utf-8")
+
+    subprocess.run(
+        ["git", "init"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    backend = MemoryMappedFilesystemBackend(root_dir=workspace)
+    entries = backend.glob_info("**/*.py", "/")
+    paths = {entry["path"] for entry in entries}
+
+    assert "/src/keep.py" in paths
+    assert "/ignored.py" not in paths
+    assert all(not path.startswith("/ignored_dir/") for path in paths)

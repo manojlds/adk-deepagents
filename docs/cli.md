@@ -8,6 +8,7 @@
 - Human-in-the-loop (HITL) approval for risky tool calls
 - Deterministic memory/skills discovery from global + project paths
 - Dynamic delegation tools (`task`, `register_subagent`) for runtime worker orchestration
+- Workspace filesystem filtering that respects `.gitignore` and skips common dependency caches
 
 > The CLI uses your configured model provider credentials (for example `GOOGLE_API_KEY`)
 > when it executes model turns.
