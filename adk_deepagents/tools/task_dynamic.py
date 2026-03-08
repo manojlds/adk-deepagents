@@ -37,6 +37,7 @@ _TASK_DEPTH_KEY = "_dynamic_delegation_depth"
 _RUNNING_TASKS_KEY = "_dynamic_running_tasks"
 _RUNTIME_SUBAGENT_STORE_KEY = "_dynamic_subagent_specs"
 _RUNTIME_REGISTRY: dict[str, _TaskRuntime] = {}
+_CONCURRENCY_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 @dataclass
@@ -45,6 +46,99 @@ class _TaskRuntime:
     session_id: str
     user_id: str
     subagent_type: str
+
+
+def _get_concurrency_lock(logical_parent_id: str) -> asyncio.Lock:
+    lock = _CONCURRENCY_LOCKS.get(logical_parent_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CONCURRENCY_LOCKS[logical_parent_id] = lock
+    return lock
+
+
+async def _acquire_concurrency_slot(
+    *,
+    running_tasks: list[str],
+    logical_parent_id: str,
+    run_key: str,
+    task_id: str,
+    config: DynamicTaskConfig,
+) -> tuple[bool, str | None, float]:
+    policy = config.concurrency_policy
+    if policy not in {"error", "wait"}:
+        return False, f"Invalid dynamic task concurrency policy: {policy!r}", 0.0
+
+    if config.max_parallel < 1:
+        return False, "Dynamic task max_parallel must be >= 1", 0.0
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    queue_timeout = max(0.0, config.queue_timeout_seconds)
+
+    while True:
+        lock = _get_concurrency_lock(logical_parent_id)
+        async with lock:
+            currently_running = len(running_tasks)
+            task_already_running = run_key in running_tasks
+
+            if not task_already_running and currently_running < config.max_parallel:
+                running_tasks.append(run_key)
+                return True, None, loop.time() - started
+
+        if policy == "error":
+            if task_already_running:
+                return (
+                    False,
+                    f"Dynamic task is already running: task_id={task_id}",
+                    0.0,
+                )
+            return (
+                False,
+                (
+                    "Dynamic task concurrency limit exceeded: "
+                    f"running={currently_running}, max_parallel={config.max_parallel}"
+                ),
+                0.0,
+            )
+
+        elapsed = loop.time() - started
+        if elapsed >= queue_timeout:
+            return (
+                False,
+                (
+                    "Dynamic task queue timeout after "
+                    f"{queue_timeout:.1f}s waiting for a concurrency slot "
+                    f"(running={currently_running}, max_parallel={config.max_parallel})"
+                ),
+                elapsed,
+            )
+
+        await asyncio.sleep(min(0.05, queue_timeout - elapsed))
+
+
+async def _release_concurrency_slot(
+    *,
+    running_tasks: list[str],
+    logical_parent_id: str,
+    run_key: str,
+) -> None:
+    lock = _get_concurrency_lock(logical_parent_id)
+    async with lock:
+        if run_key in running_tasks:
+            running_tasks.remove(run_key)
+
+        if not running_tasks:
+            _CONCURRENCY_LOCKS.pop(logical_parent_id, None)
+
+
+def _queue_wait_metadata(wait_seconds: float) -> dict[str, Any]:
+    if wait_seconds <= 0:
+        return {"queued": False, "queue_wait_seconds": 0.0}
+
+    return {
+        "queued": True,
+        "queue_wait_seconds": round(wait_seconds, 3),
+    }
 
 
 def _tool_name(tool: Any) -> str | None:
@@ -584,18 +678,23 @@ def create_dynamic_task_tool(
         if runtime is None:
             return {"status": "error", "error": "Failed to initialize dynamic task runtime"}
 
-        if len(running_tasks) >= task_config.max_parallel:
+        run_key = f"{logical_parent_id}:{task_id}"
+        acquired, acquire_error, queue_wait_seconds = await _acquire_concurrency_slot(
+            running_tasks=running_tasks,
+            logical_parent_id=logical_parent_id,
+            run_key=run_key,
+            task_id=task_id,
+            config=task_config,
+        )
+        if not acquired:
             return {
                 "status": "error",
                 "task_id": task_id,
-                "error": (
-                    f"Dynamic task concurrency limit exceeded: running={len(running_tasks)}, "
-                    f"max_parallel={task_config.max_parallel}"
-                ),
+                "subagent_type": normalized_type,
+                "error": acquire_error or "Failed to acquire dynamic task concurrency slot",
+                "created_subagent": created_subagent,
+                **_queue_wait_metadata(queue_wait_seconds),
             }
-
-        run_key = f"{logical_parent_id}:{task_id}"
-        running_tasks.append(run_key)
 
         try:
             result = await _run_dynamic_task(
@@ -604,8 +703,11 @@ def create_dynamic_task_tool(
                 timeout_seconds=task_config.timeout_seconds,
             )
         finally:
-            if run_key in running_tasks:
-                running_tasks.remove(run_key)
+            await _release_concurrency_slot(
+                running_tasks=running_tasks,
+                logical_parent_id=logical_parent_id,
+                run_key=run_key,
+            )
 
         tool_context.state["files"] = result["files"]
         tool_context.state["todos"] = result["todos"]
@@ -619,6 +721,7 @@ def create_dynamic_task_tool(
                 "result": result["result"],
                 "function_calls": result["function_calls"],
                 "created_subagent": created_subagent,
+                **_queue_wait_metadata(queue_wait_seconds),
             }
 
         error = result.get("error")
@@ -631,6 +734,7 @@ def create_dynamic_task_tool(
                 "result": result["result"],
                 "function_calls": result["function_calls"],
                 "created_subagent": created_subagent,
+                **_queue_wait_metadata(queue_wait_seconds),
             }
 
         return {
@@ -640,6 +744,7 @@ def create_dynamic_task_tool(
             "result": result["result"],
             "function_calls": result["function_calls"],
             "created_subagent": created_subagent,
+            **_queue_wait_metadata(queue_wait_seconds),
         }
 
     task.__name__ = "task"
