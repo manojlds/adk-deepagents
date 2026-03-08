@@ -20,11 +20,12 @@ from adk_deepagents.prompts import (
     EXECUTION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
     MEMORY_SYSTEM_PROMPT,
+    TASK_CONCURRENCY_SYSTEM_PROMPT,
     TASK_RUNTIME_SUBAGENT_PROMPT,
     TASK_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
 )
-from adk_deepagents.types import SummarizationConfig
+from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 
 def _append_to_system_instruction(llm_request: LlmRequest, text: str) -> None:
@@ -99,6 +100,15 @@ def _runtime_subagent_descriptions(state: Any) -> list[dict[str, str]]:
         descriptions.append({"name": name, "description": description})
 
     return descriptions
+
+
+def _format_dynamic_task_limits(config: DynamicTaskConfig) -> str:
+    """Format dynamic task concurrency limits for prompt injection."""
+    return TASK_CONCURRENCY_SYSTEM_PROMPT.format(
+        max_parallel=config.max_parallel,
+        concurrency_policy=config.concurrency_policy,
+        queue_timeout_seconds=config.queue_timeout_seconds,
+    )
 
 
 def _inject_dangling_tool_responses(
@@ -181,6 +191,7 @@ def make_before_model_callback(
     memory_sources: list[str] | None = None,
     has_execution: bool = False,
     subagent_descriptions: list[dict[str, str]] | None = None,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     summarization_config: SummarizationConfig | None = None,
     backend_factory: BackendFactory | None = None,
 ) -> Callable:
@@ -194,6 +205,9 @@ def make_before_model_callback(
         Whether execution tools (Heimdall/local) are available.
     subagent_descriptions:
         List of ``{"name": ..., "description": ...}`` for sub-agents.
+    dynamic_task_config:
+        Optional dynamic task concurrency configuration injected into
+        the system prompt as delegation guidance.
     summarization_config:
         Optional config for context window summarization.
     backend_factory:
@@ -243,6 +257,8 @@ def make_before_model_callback(
         if merged_subagent_descriptions:
             additions.append(_format_subagent_docs(merged_subagent_descriptions))
             additions.append(TASK_RUNTIME_SUBAGENT_PROMPT)
+            if dynamic_task_config is not None:
+                additions.append(_format_dynamic_task_limits(dynamic_task_config))
 
         # Inject all additions into system instruction
         combined = "\n\n".join(additions)

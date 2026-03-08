@@ -318,6 +318,21 @@ def _build_dynamic_registry(
     return registry
 
 
+def _dynamic_task_tool_doc(config: DynamicTaskConfig) -> str:
+    """Build dynamic task tool docs with live concurrency limits."""
+    return (
+        "Run a task in a dynamic sub-agent.\n\n"
+        "Dynamic concurrency limits:\n"
+        f"- max_parallel={config.max_parallel}\n"
+        f"- concurrency_policy={config.concurrency_policy}\n"
+        f"- queue_timeout_seconds={config.queue_timeout_seconds}\n\n"
+        "When delegating many tasks:\n"
+        f"- Launch in waves of <= {config.max_parallel} concurrent task calls\n"
+        "- Wait for one wave to complete before starting the next\n"
+        "- Reuse task_id to continue existing delegated work when needed"
+    )
+
+
 def create_register_subagent_tool(
     *,
     default_model: str | Any,
@@ -748,4 +763,5 @@ def create_dynamic_task_tool(
         }
 
     task.__name__ = "task"
+    task.__doc__ = _dynamic_task_tool_doc(task_config)
     return task

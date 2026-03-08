@@ -258,12 +258,14 @@ def create_deep_agent(
             skills_config=skills_config,
         )
 
+    resolved_dynamic_task_config: DynamicTaskConfig | None = None
     if delegation_mode in {"dynamic", "both"}:
+        resolved_dynamic_task_config = dynamic_task_config or DynamicTaskConfig()
         core_tools.append(
             create_register_subagent_tool(
                 default_model=model,
                 default_tools=list(core_tools),
-                config=dynamic_task_config,
+                config=resolved_dynamic_task_config,
             )
         )
         core_tools.append(
@@ -272,7 +274,7 @@ def create_deep_agent(
                 default_tools=list(core_tools),
                 subagents=subagents,
                 skills_config=skills_config,
-                config=dynamic_task_config,
+                config=resolved_dynamic_task_config,
             )
         )
 
@@ -332,6 +334,7 @@ def create_deep_agent(
         memory_sources=memory,
         has_execution=has_execution,
         subagent_descriptions=subagent_descriptions or None,
+        dynamic_task_config=resolved_dynamic_task_config,
         summarization_config=summarization,
         backend_factory=backend_factory if summarization else None,
     )
