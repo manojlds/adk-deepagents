@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from adk_deepagents.types import DynamicTaskConfig
+
 
 def run_tui(
     *,
@@ -15,6 +17,7 @@ def run_tui(
     session_id: str,
     db_path: Path,
     auto_approve: bool,
+    dynamic_task_config: DynamicTaskConfig | None = None,
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
@@ -30,6 +33,7 @@ def run_tui(
         session_id=session_id,
         db_path=db_path,
         auto_approve=auto_approve,
+        dynamic_task_config=dynamic_task_config,
         memory_sources=list(memory_sources),
         memory_source_paths=dict(memory_source_paths) if memory_source_paths else {},
         skills_dirs=list(skills_dirs),

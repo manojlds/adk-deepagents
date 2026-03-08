@@ -10,6 +10,7 @@ from textual.widgets import Footer, Header
 
 from adk_deepagents.cli.tui.agent_service import AgentService, UiUpdate
 from adk_deepagents.cli.tui.widgets import ApprovalBox, MessageDisplay, PromptInput
+from adk_deepagents.types import DynamicTaskConfig
 
 
 @dataclass
@@ -23,6 +24,7 @@ class TuiConfig:
     model: str | None = None
     first_prompt: str | None = None
     auto_approve: bool = False
+    dynamic_task_config: DynamicTaskConfig | None = None
     memory_sources: list[str] = field(default_factory=list)
     memory_source_paths: dict[str, Path] = field(default_factory=dict)
     skills_dirs: list[str] = field(default_factory=list)
@@ -64,6 +66,7 @@ class DeepAgentTui(App[None]):
             db_path=config.db_path,
             auto_approve=config.auto_approve,
             session_id=config.session_id,
+            dynamic_task_config=config.dynamic_task_config,
             memory_sources=config.memory_sources,
             memory_source_paths=config.memory_source_paths,
             skills_dirs=config.skills_dirs,

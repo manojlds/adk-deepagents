@@ -23,6 +23,7 @@ from adk_deepagents.cli.interactive import (
     _ToolConfirmationRequest,
     handle_slash_command,
 )
+from adk_deepagents.types import DynamicTaskConfig
 
 REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 
@@ -152,9 +153,21 @@ def _format_tool_response_detail(tool_name: str, response: dict[str, Any]) -> st
     if tool_name == "task":
         detail = _format_key_values(
             response,
-            keys=("status", "subagent_type", "task_id", "created_subagent"),
+            keys=(
+                "status",
+                "subagent_type",
+                "task_id",
+                "created_subagent",
+                "queued",
+            ),
             key_aliases={"subagent_type": "subagent"},
         )
+
+        queue_wait = response.get("queue_wait_seconds")
+        if isinstance(queue_wait, (int, float)):
+            queue_wait_detail = f"queue_wait={queue_wait:.3f}s"
+            detail = queue_wait_detail if detail is None else f"{detail}, {queue_wait_detail}"
+
         error_value = _as_preview(response.get("error"))
         if error_value:
             if detail is None:
@@ -234,6 +247,7 @@ class AgentService:
     db_path: Path
     auto_approve: bool
     session_id: str
+    dynamic_task_config: DynamicTaskConfig | None = None
     memory_sources: list[str] = field(default_factory=list)
     memory_source_paths: dict[str, Path] = field(default_factory=dict)
     skills_dirs: list[str] = field(default_factory=list)
@@ -257,6 +271,7 @@ class AgentService:
             agent_name=self.agent_name,
             model=self.model,
             db_path=self.db_path,
+            dynamic_task_config=self.dynamic_task_config,
             memory_sources=self.memory_sources,
             memory_source_paths=self.memory_source_paths or {},
             skills_dirs=self.skills_dirs,
@@ -275,6 +290,7 @@ class AgentService:
                 agent_name=self.agent_name,
                 model=new_model,
                 db_path=self.db_path,
+                dynamic_task_config=self.dynamic_task_config,
                 memory_sources=self.memory_sources,
                 memory_source_paths=self.memory_source_paths or {},
                 skills_dirs=self.skills_dirs,
