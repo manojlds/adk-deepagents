@@ -81,6 +81,10 @@ def build_subagent_tools(
     *,
     include_general_purpose: bool = True,
     skills_config: SkillsConfig | None = None,
+    before_agent_callback: Callable | None = None,
+    before_model_callback: Callable | None = None,
+    after_tool_callback: Callable | None = None,
+    default_interrupt_on: dict[str, bool] | None = None,
 ) -> list[AgentTool]:
     """Build ``AgentTool`` instances from sub-agent specifications.
 
@@ -97,6 +101,15 @@ def build_subagent_tools(
         unless one already exists in *subagents*.
     skills_config:
         Optional skills configuration for sub-agents that have ``skills`` set.
+    before_agent_callback:
+        Optional callback injected into created sub-agents.
+    before_model_callback:
+        Optional callback injected into created sub-agents.
+    after_tool_callback:
+        Optional callback injected into created sub-agents.
+    default_interrupt_on:
+        Optional fallback HITL configuration for sub-agents that don't specify
+        ``interrupt_on`` explicitly.
 
     Returns
     -------
@@ -139,7 +152,7 @@ def build_subagent_tools(
             sub_tools.extend(skill_tools)
 
         # Build before_tool_callback for HITL if specified
-        sub_interrupt_on = spec.get("interrupt_on")
+        sub_interrupt_on = spec.get("interrupt_on", default_interrupt_on)
         before_tool_cb = make_before_tool_callback(interrupt_on=sub_interrupt_on)
 
         sub_agent = LlmAgent(
@@ -148,6 +161,9 @@ def build_subagent_tools(
             instruction=spec.get("system_prompt", DEFAULT_SUBAGENT_PROMPT),
             description=spec["description"],
             tools=sub_tools,
+            before_agent_callback=before_agent_callback,
+            before_model_callback=before_model_callback,
+            after_tool_callback=after_tool_callback,
             before_tool_callback=before_tool_cb,
         )
         tools.append(AgentTool(agent=sub_agent))

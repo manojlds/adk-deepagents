@@ -24,14 +24,17 @@ litellm.disable_aiohttp_transport = True
 def make_litellm_model():
     """Create a LiteLlm model using available environment variables.
 
-    Reads from OPENAI_API_BASE / LITELLM_MODEL / OPENAI_API_KEY if set,
-    falling back to OPENCODE_API_KEY with default endpoint.
+    Reads model from ADK_DEEPAGENTS_MODEL first, then LITELLM_MODEL for
+    backward compatibility. API credentials come from OPENAI_API_KEY (or
+    OPENCODE_API_KEY) and OPENAI_API_BASE.
     """
     from google.adk.models.lite_llm import LiteLlm
 
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENCODE_API_KEY", "")
     api_base = os.environ.get("OPENAI_API_BASE", "https://opencode.ai/zen/v1")
-    model = os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini")
+    model = os.environ.get("ADK_DEEPAGENTS_MODEL") or os.environ.get(
+        "LITELLM_MODEL", "openai/gpt-4o-mini"
+    )
 
     return LiteLlm(
         model=model,

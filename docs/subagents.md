@@ -35,7 +35,10 @@ spec = SubAgentSpec(
 
 ## General-Purpose Sub-Agent
 
-A general-purpose sub-agent is **always included by default** when you pass `subagents` to `create_deep_agent`. It has access to all the same tools as the parent agent and is described as:
+A general-purpose sub-agent is **always included by default** when static
+delegation is enabled (`delegation_mode="static"` or `"both"`, including the
+default `create_deep_agent()` call). It has access to all the same tools as the
+parent agent and is described as:
 
 > General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks.
 

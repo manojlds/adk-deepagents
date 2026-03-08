@@ -71,8 +71,8 @@ class TestDefaultAgent:
         assert agent.model == "gemini-2.5-flash"
         names = _tool_names(agent)
         assert CORE_TOOL_NAMES.issubset(names)
-        # No sub-agent tools by default (subagents=None)
-        assert len(_agent_tools(agent)) == 0
+        # Static mode includes the default general_purpose sub-agent.
+        assert _agent_tool_names(agent) == {"general_purpose"}
 
 
 class TestCustomInstruction:
