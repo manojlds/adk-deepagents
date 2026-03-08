@@ -164,3 +164,38 @@ async def test_dynamic_task_wait_policy_surfaces_queue_metadata():
     )
     assert isinstance(payload["queued"], bool)
     assert isinstance(payload["queue_wait_seconds"], (int, float))
+
+
+@pytest.mark.timeout(120)
+async def test_dynamic_task_limits_are_visible_to_model_prompt():
+    """Model can read dynamic task limits injected into system instructions."""
+    model = make_litellm_model()
+
+    agent = create_deep_agent(
+        model=model,
+        name="dynamic_task_limit_prompt_visibility_test",
+        instruction=(
+            "Do not call tools. Reply in exactly one line using this format: "
+            "max_parallel=<n>;concurrency_policy=<policy>;queue_timeout_seconds=<seconds>."
+        ),
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            max_parallel=2,
+            concurrency_policy="wait",
+            queue_timeout_seconds=7.0,
+        ),
+    )
+
+    texts, _calls, _responses, _runner, _session = await run_agent_with_events(
+        agent,
+        "What are your dynamic task concurrency limits from your instructions?",
+    )
+
+    response_text = " ".join(texts).lower().replace(" ", "")
+    assert "max_parallel=2" in response_text, f"Expected max_parallel=2, got: {response_text}"
+    assert "concurrency_policy=wait" in response_text, (
+        f"Expected concurrency_policy=wait, got: {response_text}"
+    )
+    assert "queue_timeout_seconds=7" in response_text, (
+        f"Expected queue_timeout_seconds to reflect configured value, got: {response_text}"
+    )

@@ -96,6 +96,21 @@ sub-agents at runtime before delegating with the `task` tool.
 - If you call `task` with a new `subagent_type`, a runtime specialist is
   created automatically using default tools"""
 
+TASK_CONCURRENCY_SYSTEM_PROMPT = """\
+## Dynamic Task Concurrency Limits
+
+When delegating with `task`, follow these runtime limits:
+
+- `max_parallel={max_parallel}`
+- `concurrency_policy={concurrency_policy}`
+- `queue_timeout_seconds={queue_timeout_seconds}`
+
+Delegation guidance:
+- Launch task calls in waves of at most `{max_parallel}` concurrent calls
+- Wait for one wave to complete before starting the next wave
+- Reuse `task_id` when continuing existing delegated work
+- Avoid over-spawning; queue timeouts waste turns and tokens"""
+
 # ---------------------------------------------------------------------------
 # Memory prompt
 # ---------------------------------------------------------------------------

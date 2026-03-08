@@ -10,8 +10,10 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
+from google.genai import types
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.tools import task_dynamic
@@ -25,11 +27,17 @@ class _DummyToolContext:
     state: dict[str, Any]
 
 
-def _task_tool_from_agent(agent):
+def _task_tool_from_agent(agent: Any) -> Any:
     for tool in agent.tools:
         if getattr(tool, "__name__", None) == "task":
             return tool
     raise AssertionError("Dynamic task tool was not added to the agent")
+
+
+def _make_llm_request() -> Any:
+    request = MagicMock()
+    request.config = types.GenerateContentConfig()
+    return request
 
 
 def _cleanup_dynamic_runtime(context: _DummyToolContext) -> None:
@@ -169,3 +177,47 @@ async def test_dynamic_error_policy_rejects_overflow_parallel_calls(monkeypatch)
     assert second_result["status"] == "error"
     assert "concurrency limit" in second_result["error"].lower()
     assert second_result["queued"] is False
+
+
+def test_dynamic_task_tool_doc_exposes_concurrency_limits() -> None:
+    agent = create_deep_agent(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            max_parallel=3,
+            concurrency_policy="wait",
+            queue_timeout_seconds=12.5,
+        ),
+    )
+    task_tool = _task_tool_from_agent(agent)
+
+    doc = task_tool.__doc__ or ""
+    assert "max_parallel=3" in doc
+    assert "concurrency_policy=wait" in doc
+    assert "queue_timeout_seconds=12.5" in doc
+    assert "waves" in doc.lower()
+
+
+def test_dynamic_task_limits_are_injected_into_system_instruction() -> None:
+    agent = create_deep_agent(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            max_parallel=3,
+            concurrency_policy="wait",
+            queue_timeout_seconds=12.5,
+        ),
+    )
+
+    callback = cast(Any, agent.before_model_callback)
+    assert callback is not None
+
+    context = MagicMock()
+    context.state = {}
+    request = _make_llm_request()
+
+    callback(context, request)
+
+    system_instruction = str(request.config.system_instruction)
+    assert "Dynamic Task Concurrency Limits" in system_instruction
+    assert "max_parallel=3" in system_instruction
+    assert "concurrency_policy=wait" in system_instruction
+    assert "queue_timeout_seconds=12.5" in system_instruction
