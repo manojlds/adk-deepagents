@@ -54,6 +54,23 @@ You have access to a todo list for tracking tasks and progress.
 - read_todos: read the current todo list"""
 
 # ---------------------------------------------------------------------------
+# Conversation compaction prompt
+# ---------------------------------------------------------------------------
+
+COMPACT_CONVERSATION_SYSTEM_PROMPT = """\
+## Context Compaction Tool `compact_conversation`
+
+You can call `compact_conversation` to summarize older conversation messages
+and refresh context budget.
+
+Use it when:
+- You are switching to a new task and old context is no longer important
+- You finished a large investigation and want to reduce context bloat
+- The user explicitly asks to compact/summarize conversation history
+
+The tool takes no arguments."""
+
+# ---------------------------------------------------------------------------
 # Sub-agent / task tool prompt
 # ---------------------------------------------------------------------------
 

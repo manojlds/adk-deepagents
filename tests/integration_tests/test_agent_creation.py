@@ -225,6 +225,13 @@ class TestSummarizationConfig:
         agent = create_deep_agent(summarization=config)
         assert isinstance(agent, LlmAgent)
         assert agent.before_model_callback is not None
+        names = _tool_names(agent)
+        assert "compact_conversation" in names
+
+    def test_no_summarization_excludes_compact_conversation(self):
+        agent = create_deep_agent(summarization=None)
+        names = _tool_names(agent)
+        assert "compact_conversation" not in names
 
 
 class TestMemoryConfig:
