@@ -40,7 +40,8 @@ Dynamic delegation is implemented in `adk_deepagents/tools/task_dynamic.py`.
 runtime contract:
 
 - inputs: `description`, `prompt`, `subagent_type`, optional `task_id`, optional `model`
-- output: dict with `status` plus `task_id`, `subagent_type`, `result`, `function_calls`
+- output: dict with `status` plus `task_id`, `subagent_type`, `result`,
+  `function_calls`, and `recovered_runtime`
 
 `create_register_subagent_tool(...)` returns an async tool named
 `register_subagent` for runtime specialization:
@@ -76,7 +77,9 @@ For each tool call:
 
 1. Validate input and load state trackers.
 2. Resolve `subagent_type` against a runtime registry of specs/agents.
-3. If `task_id` is provided, resume existing runtime session from in-memory registry.
+3. If `task_id` is provided, resume existing runtime session from in-memory
+   registry when available; otherwise recover a fresh runtime from persisted
+   task metadata and history snapshots.
 4. If no `task_id`, spawn a new child `LlmAgent` and create a child ADK session.
 5. Execute child run with timeout via `asyncio.wait_for(...)`.
 6. Collect child text and function-call names from events.
@@ -120,7 +123,10 @@ Dynamic task metadata stored in parent session state:
 - `_dynamic_delegation_depth`
 - `_dynamic_running_tasks`
 
-These are JSON-serializable values only.
+`_dynamic_tasks` now stores enough JSON-serializable metadata to recover a
+delegated task runtime after process restarts (sub-agent type/depth,
+task-scoped files/todos snapshots, optional model override, and compact turn
+history used for resume prompts).
 
 ### Process-local registries (not persisted)
 
@@ -129,8 +135,10 @@ These are JSON-serializable values only.
 - `adk_deepagents/backends/runtime.py`:
   - `_backend_factory_by_session` maps ADK `session_id` -> backend factory
 
-These are intentionally in-memory to avoid sqlite serialization errors in
-`adk web` / `adk api_server` session storage.
+These remain in-memory to avoid sqlite serialization errors in `adk web` /
+`adk api_server` session storage. When `_RUNTIME_REGISTRY` entries are missing,
+the `task` tool now rehydrates a runtime from persisted `_dynamic_tasks`
+metadata.
 
 ## Backend propagation in delegated tasks
 
@@ -160,11 +168,12 @@ This prevents ADK Web event stream crashes from bubbling timeout errors.
 
 ## Known constraints
 
-- Process-local registries are per-process only (no cross-process resume).
+- Runtime recovery rebuilds delegated context from compact prompt/result
+  history, not raw full-fidelity child event streams.
 - Registry cleanup is currently manual (`clear_session_backend(...)` exists; no
   automatic session-end hook yet).
-- `_RUNTIME_REGISTRY` persists entries for resumable `task_id` behavior; it is
-  not currently TTL-pruned.
+- `_RUNTIME_REGISTRY` persists entries for active/resumable `task_id` behavior;
+  it is not currently TTL-pruned.
 
 ## Test coverage
 

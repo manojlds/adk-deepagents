@@ -10,6 +10,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from adk_deepagents import create_deep_agent
+from adk_deepagents.tools import task_dynamic
 from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec
 from tests.integration_tests.conftest import (
     make_litellm_model,
@@ -123,6 +124,63 @@ async def test_dynamic_task_tool_reuses_task_id_session():
         "Now call task again with task_id task_1 and ask: what codeword did I ask you "
         "to remember earlier? Return the exact codeword only.",
     )
+    response2 = " ".join(texts2).lower()
+    assert "task" in calls2, f"Expected task tool call on turn 2, got: {calls2}"
+    assert "task" in responses2, f"Expected task tool response on turn 2, got: {responses2}"
+    assert "orbit" in response2, f"Expected resumed task to recall ORBIT, got: {response2}"
+
+
+@pytest.mark.timeout(120)
+async def test_dynamic_task_tool_recovers_task_after_runtime_registry_reset():
+    """Task resume still works after clearing in-process runtime registry entries."""
+    model = make_litellm_model()
+
+    agent = create_deep_agent(
+        model=model,
+        name="dynamic_task_recovery_test",
+        instruction=(
+            "Always use the task tool for requests. "
+            "If the user provides a task_id, pass that same task_id to task."
+        ),
+        delegation_mode="dynamic",
+    )
+
+    texts1, calls1, responses1, runner, session = await run_agent_with_events(
+        agent,
+        "Use task to tell the delegated worker: remember this codeword exactly: ORBIT. "
+        "Acknowledge when done.",
+    )
+
+    response1 = " ".join(texts1).lower()
+    assert "task" in calls1, f"Expected task tool call on turn 1, got: {calls1}"
+    assert "task" in responses1, f"Expected task tool response on turn 1, got: {responses1}"
+    assert any(word in response1 for word in ("orbit", "remember", "done", "acknowledged")), (
+        f"Expected acknowledgement for codeword setup, got: {response1}"
+    )
+
+    refreshed = await runner.session_service.get_session(
+        app_name="integration_test",
+        user_id="test_user",
+        session_id=session.id,
+    )
+    logical_parent = refreshed.state.get("_dynamic_parent_session_id") if refreshed else None
+    registry_key = (
+        f"{logical_parent}:task_1" if isinstance(logical_parent, str) and logical_parent else None
+    )
+    if registry_key is not None:
+        task_dynamic._RUNTIME_REGISTRY.pop(registry_key, None)
+
+    try:
+        texts2, calls2, responses2 = await send_followup_with_events(
+            runner,
+            session,
+            "Now call task again with task_id task_1 and ask: what codeword did I ask you "
+            "to remember earlier? Return the exact codeword only.",
+        )
+    finally:
+        if registry_key is not None:
+            task_dynamic._RUNTIME_REGISTRY.pop(registry_key, None)
+
     response2 = " ".join(texts2).lower()
     assert "task" in calls2, f"Expected task tool call on turn 2, got: {calls2}"
     assert "task" in responses2, f"Expected task tool response on turn 2, got: {responses2}"

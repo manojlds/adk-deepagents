@@ -39,6 +39,9 @@ _RUNNING_TASKS_KEY = "_dynamic_running_tasks"
 _RUNTIME_SUBAGENT_STORE_KEY = "_dynamic_subagent_specs"
 _RUNTIME_REGISTRY: dict[str, _TaskRuntime] = {}
 _CONCURRENCY_LOCKS: dict[str, asyncio.Lock] = {}
+_TASK_HISTORY_MAX_ENTRIES = 12
+_TASK_HISTORY_MAX_PROMPT_CHARS = 1200
+_TASK_HISTORY_MAX_RESULT_CHARS = 2400
 
 
 @dataclass
@@ -297,6 +300,108 @@ def _coerce_backend_factory(value: Any) -> BackendFactory | None:
     if callable(value):
         return cast(BackendFactory, value)
     return None
+
+
+def _coerce_files_state(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _coerce_todos_state(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _coerce_positive_int(value: Any, fallback: int) -> int:
+    if isinstance(value, int) and value > 0:
+        return value
+    return fallback
+
+
+def _truncate_history_text(value: Any, *, max_chars: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "..."
+
+
+def _normalized_task_history(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+
+        prompt = _truncate_history_text(
+            item.get("prompt"), max_chars=_TASK_HISTORY_MAX_PROMPT_CHARS
+        )
+        result = _truncate_history_text(
+            item.get("result"), max_chars=_TASK_HISTORY_MAX_RESULT_CHARS
+        )
+        if not prompt and not result:
+            continue
+
+        normalized.append({"prompt": prompt, "result": result})
+
+    return normalized[-_TASK_HISTORY_MAX_ENTRIES:]
+
+
+def _append_task_history_entry(*, task_state: dict[str, Any], prompt: str, result: str) -> None:
+    history = _normalized_task_history(task_state.get("history"))
+    history.append(
+        {
+            "prompt": _truncate_history_text(prompt, max_chars=_TASK_HISTORY_MAX_PROMPT_CHARS),
+            "result": _truncate_history_text(result, max_chars=_TASK_HISTORY_MAX_RESULT_CHARS),
+        }
+    )
+    task_state["history"] = history[-_TASK_HISTORY_MAX_ENTRIES:]
+
+
+def _build_resume_prompt(*, history: list[dict[str, str]], prompt: str) -> str:
+    if not history:
+        return prompt
+
+    lines = [
+        "Continue this delegated task using the prior context below.",
+        "",
+        "Previous delegated turns:",
+    ]
+
+    for index, item in enumerate(history, start=1):
+        previous_prompt = item.get("prompt", "")
+        previous_result = item.get("result", "")
+        if previous_prompt:
+            lines.append(f"{index}. User instruction: {previous_prompt}")
+        if previous_result:
+            lines.append(f"{index}. Your previous response: {previous_result}")
+
+    lines.extend(
+        [
+            "",
+            "New instruction:",
+            prompt,
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _prune_stale_running_tasks(*, running_tasks: list[str], logical_parent_id: str) -> None:
+    """Drop stale in-flight task markers left behind after process restarts."""
+    prefix = f"{logical_parent_id}:"
+    if any(run_key.startswith(prefix) for run_key in _RUNTIME_REGISTRY):
+        return
+
+    running_tasks[:] = [
+        run_key
+        for run_key in running_tasks
+        if not (isinstance(run_key, str) and run_key.startswith(prefix))
+    ]
 
 
 def _build_dynamic_registry(
@@ -566,7 +671,10 @@ def create_dynamic_task_tool(
             return {"status": "error", "error": "Invalid dynamic task store in session state"}
 
         runtime: _TaskRuntime | None = None
+        task_state: dict[str, Any] | None = None
         created_subagent = False
+        recovered_runtime = False
+        resume_with_history = False
         normalized_type = _normalize_subagent_type(subagent_type)
         logical_parent_id = tool_context.state.get(_TASK_PARENT_ID_KEY)
         if not isinstance(logical_parent_id, str) or not logical_parent_id:
@@ -592,19 +700,129 @@ def create_dynamic_task_tool(
         if not isinstance(running_tasks, list):
             return {"status": "error", "error": "Invalid dynamic running task tracker in state"}
 
+        _prune_stale_running_tasks(
+            running_tasks=running_tasks,
+            logical_parent_id=logical_parent_id,
+        )
+
+        runtime_registry = _load_runtime_subagent_specs(
+            state=tool_context.state,
+            tool_index=tool_index,
+        )
+        selected_registry: dict[str, SubAgentSpec | LlmAgent] = dict(registry)
+        selected_registry.update(runtime_registry)
+
         if task_id:
             existing = store.get(task_id)
             if not isinstance(existing, dict):
                 return {"status": "error", "error": f"Unknown task_id: {task_id}"}
-            runtime = _RUNTIME_REGISTRY.get(f"{logical_parent_id}:{task_id}")
+
+            task_state = existing
+            stored_type = existing.get("subagent_type")
+            if isinstance(stored_type, str) and stored_type.strip():
+                normalized_type = _normalize_subagent_type(stored_type)
+
+            task_depth = _coerce_positive_int(existing.get("depth"), current_depth + 1)
+            run_key = f"{logical_parent_id}:{task_id}"
+            runtime = _RUNTIME_REGISTRY.get(run_key)
             if runtime is None:
-                return {
-                    "status": "error",
-                    "error": (
-                        f"Task runtime for task_id {task_id} is unavailable in this process. "
-                        "Start a new task."
-                    ),
-                }
+                selected = selected_registry.get(normalized_type)
+                if selected is None:
+                    return {
+                        "status": "error",
+                        "task_id": task_id,
+                        "subagent_type": normalized_type,
+                        "error": (
+                            f"Cannot recover dynamic task {task_id}: unknown sub-agent type "
+                            f"{normalized_type!r}."
+                        ),
+                    }
+
+                model_override_raw = existing.get("model_override")
+                model_override = (
+                    model_override_raw.strip()
+                    if isinstance(model_override_raw, str) and model_override_raw.strip()
+                    else None
+                )
+
+                if "files" in existing and isinstance(existing.get("files"), dict):
+                    task_files = cast(dict[str, Any], existing["files"])
+                else:
+                    task_files = _coerce_files_state(tool_context.state.get("files", {}))
+
+                if "todos" in existing and isinstance(existing.get("todos"), list):
+                    task_todos = cast(list[Any], existing["todos"])
+                else:
+                    task_todos = _coerce_todos_state(tool_context.state.get("todos", []))
+
+                if isinstance(selected, LlmAgent):
+                    if model_override and not task_config.allow_model_override:
+                        return {
+                            "status": "error",
+                            "error": "Model override is disabled for dynamic task delegation",
+                            "task_id": task_id,
+                        }
+                    child_agent = selected
+                else:
+                    try:
+                        child_agent = _build_spec_agent(
+                            selected,
+                            default_model=default_model,
+                            default_tools=default_tools,
+                            skills_config=skills_config,
+                            model_override=model_override,
+                            config=task_config,
+                            before_agent_callback=before_agent_callback,
+                            before_model_callback=before_model_callback,
+                            after_tool_callback=after_tool_callback,
+                            default_interrupt_on=default_interrupt_on,
+                        )
+                    except ValueError as exc:
+                        return {
+                            "status": "error",
+                            "error": str(exc),
+                            "task_id": task_id,
+                            "subagent_type": normalized_type,
+                        }
+
+                normalized_type = (
+                    _sanitize_agent_name(selected.name)
+                    if isinstance(selected, LlmAgent)
+                    else _sanitize_agent_name(selected.get("name", "general_purpose"))
+                )
+
+                runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
+                session = await runner.session_service.create_session(
+                    app_name="dynamic_task",
+                    user_id="dynamic_task_user",
+                    state={
+                        "files": task_files,
+                        "todos": task_todos,
+                        _TASK_DEPTH_KEY: task_depth,
+                    },
+                )
+                runtime = _TaskRuntime(
+                    runner=runner,
+                    session_id=session.id,
+                    user_id="dynamic_task_user",
+                    subagent_type=normalized_type,
+                )
+                _RUNTIME_REGISTRY[run_key] = runtime
+
+                if runtime_backend_factory is not None:
+                    register_backend_factory(runtime.session_id, runtime_backend_factory)
+
+                existing["subagent_type"] = normalized_type
+                existing["depth"] = task_depth
+                existing["files"] = task_files
+                existing["todos"] = task_todos
+                if model_override is not None:
+                    existing["model_override"] = model_override
+
+                history = _normalized_task_history(existing.get("history"))
+                existing["history"] = history
+                resume_with_history = bool(history)
+                recovered_runtime = True
             normalized_type = runtime.subagent_type
         else:
             if current_depth + 1 > task_config.max_depth:
@@ -618,13 +836,7 @@ def create_dynamic_task_tool(
             counter = int(tool_context.state.get(_TASK_COUNTER_KEY, 0)) + 1
             tool_context.state[_TASK_COUNTER_KEY] = counter
             task_id = f"task_{counter}"
-
-            runtime_registry = _load_runtime_subagent_specs(
-                state=tool_context.state,
-                tool_index=tool_index,
-            )
-            selected_registry: dict[str, SubAgentSpec | LlmAgent] = dict(registry)
-            selected_registry.update(runtime_registry)
+            task_depth = current_depth + 1
 
             selected = selected_registry.get(normalized_type)
             if selected is None:
@@ -688,9 +900,9 @@ def create_dynamic_task_tool(
                 app_name="dynamic_task",
                 user_id="dynamic_task_user",
                 state={
-                    "files": tool_context.state.get("files", {}),
-                    "todos": tool_context.state.get("todos", []),
-                    _TASK_DEPTH_KEY: current_depth + 1,
+                    "files": _coerce_files_state(tool_context.state.get("files", {})),
+                    "todos": _coerce_todos_state(tool_context.state.get("todos", [])),
+                    _TASK_DEPTH_KEY: task_depth,
                 },
             )
             runtime = _TaskRuntime(
@@ -699,10 +911,16 @@ def create_dynamic_task_tool(
                 user_id="dynamic_task_user",
                 subagent_type=normalized_type,
             )
-            store[task_id] = {
+            task_state = {
                 "subagent_type": normalized_type,
-                "depth": current_depth + 1,
+                "depth": task_depth,
+                "files": _coerce_files_state(tool_context.state.get("files", {})),
+                "todos": _coerce_todos_state(tool_context.state.get("todos", [])),
+                "history": [],
             }
+            if isinstance(model, str) and model.strip():
+                task_state["model_override"] = model.strip()
+            store[task_id] = task_state
             _RUNTIME_REGISTRY[f"{logical_parent_id}:{task_id}"] = runtime
 
             if runtime_backend_factory is not None:
@@ -710,6 +928,21 @@ def create_dynamic_task_tool(
 
         if runtime is None:
             return {"status": "error", "error": "Failed to initialize dynamic task runtime"}
+
+        if task_id is None:
+            return {"status": "error", "error": "Failed to initialize dynamic task id"}
+
+        if task_state is None:
+            existing_state = store.get(task_id)
+            if isinstance(existing_state, dict):
+                task_state = existing_state
+            else:
+                task_state = {
+                    "subagent_type": normalized_type,
+                    "depth": _coerce_positive_int(current_depth + 1, 1),
+                    "history": [],
+                }
+                store[task_id] = task_state
 
         run_key = f"{logical_parent_id}:{task_id}"
         acquired, acquire_error, queue_wait_seconds = await _acquire_concurrency_slot(
@@ -729,10 +962,15 @@ def create_dynamic_task_tool(
                 **_queue_wait_metadata(queue_wait_seconds),
             }
 
+        task_prompt = resolved_prompt
+        if resume_with_history:
+            history = _normalized_task_history(task_state.get("history"))
+            task_prompt = _build_resume_prompt(history=history, prompt=resolved_prompt)
+
         try:
             result = await _run_dynamic_task(
                 runtime,
-                prompt=resolved_prompt,
+                prompt=task_prompt,
                 timeout_seconds=task_config.timeout_seconds,
             )
         finally:
@@ -744,6 +982,17 @@ def create_dynamic_task_tool(
 
         tool_context.state["files"] = result["files"]
         tool_context.state["todos"] = result["todos"]
+        task_state["files"] = _coerce_files_state(result.get("files"))
+        task_state["todos"] = _coerce_todos_state(result.get("todos"))
+        task_state["subagent_type"] = normalized_type
+        task_state["depth"] = _coerce_positive_int(task_state.get("depth"), current_depth + 1)
+
+        result_text = result.get("result")
+        _append_task_history_entry(
+            task_state=task_state,
+            prompt=resolved_prompt,
+            result=result_text if isinstance(result_text, str) else "",
+        )
 
         if result.get("timed_out"):
             return {
@@ -754,6 +1003,7 @@ def create_dynamic_task_tool(
                 "result": result["result"],
                 "function_calls": result["function_calls"],
                 "created_subagent": created_subagent,
+                "recovered_runtime": recovered_runtime,
                 **_queue_wait_metadata(queue_wait_seconds),
             }
 
@@ -767,6 +1017,7 @@ def create_dynamic_task_tool(
                 "result": result["result"],
                 "function_calls": result["function_calls"],
                 "created_subagent": created_subagent,
+                "recovered_runtime": recovered_runtime,
                 **_queue_wait_metadata(queue_wait_seconds),
             }
 
@@ -777,6 +1028,7 @@ def create_dynamic_task_tool(
             "result": result["result"],
             "function_calls": result["function_calls"],
             "created_subagent": created_subagent,
+            "recovered_runtime": recovered_runtime,
             **_queue_wait_metadata(queue_wait_seconds),
         }
 

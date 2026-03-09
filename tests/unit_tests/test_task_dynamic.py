@@ -254,6 +254,106 @@ class TestDynamicTaskToolGuards:
         assert "timed out" in result["error"].lower()
         assert result["result"] == "partial output"
 
+    async def test_resume_recovers_runtime_from_persisted_task_state(self, monkeypatch):
+        observed: dict[str, str] = {}
+
+        async def fake_run_dynamic_task(runtime, *, prompt, timeout_seconds):
+            del runtime, timeout_seconds
+            observed["prompt"] = prompt
+            return {
+                "result": "ORBIT",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(),
+        )
+
+        context = _DummyToolContext(
+            state={
+                "_dynamic_parent_session_id": "parent_recover",
+                "_dynamic_tasks": {
+                    "task_1": {
+                        "subagent_type": "general_purpose",
+                        "depth": 1,
+                        "files": {},
+                        "todos": [],
+                        "history": [
+                            {
+                                "prompt": "Remember this codeword exactly: ORBIT",
+                                "result": "Understood. I will remember ORBIT.",
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        try:
+            result = await task_tool(
+                description="resume",
+                prompt="What codeword did I ask you to remember?",
+                task_id="task_1",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            _cleanup_runtime_registry(context)
+
+        assert result["status"] == "completed"
+        assert result["recovered_runtime"] is True
+        assert "Previous delegated turns" in observed["prompt"]
+        assert "Remember this codeword exactly: ORBIT" in observed["prompt"]
+
+    async def test_stale_running_task_entries_are_pruned_before_acquire(self, monkeypatch):
+        async def fake_run_dynamic_task(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(max_parallel=1, concurrency_policy="error"),
+        )
+
+        context = _DummyToolContext(
+            state={
+                "_dynamic_parent_session_id": "parent_stale",
+                "_dynamic_running_tasks": ["parent_stale:task_ghost"],
+            }
+        )
+        try:
+            result = await task_tool(
+                description="delegate",
+                prompt="delegate",
+                subagent_type="general",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            _cleanup_runtime_registry(context)
+
+        assert result["status"] == "completed"
+        assert result["queue_wait_seconds"] < 0.05
+        assert context.state.get("_dynamic_running_tasks") == []
+
 
 class TestDynamicRuntimeSubagents:
     async def test_register_subagent_persists_runtime_spec(self):
