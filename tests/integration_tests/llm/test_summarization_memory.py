@@ -18,7 +18,12 @@ import pytest
 from adk_deepagents import create_deep_agent
 from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.types import SummarizationConfig
-from tests.integration_tests.conftest import make_litellm_model, run_agent, send_followup
+from tests.integration_tests.conftest import (
+    make_litellm_model,
+    run_agent,
+    send_followup,
+    send_followup_with_events,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
@@ -135,3 +140,74 @@ async def test_memory_loading():
     assert has_mascot or has_motto, (
         f"Expected agent to reference memory content (Buddy or kindness), got: {response_text}"
     )
+
+
+@pytest.mark.timeout(180)
+async def test_compact_conversation_tool_forces_summarization_pass():
+    """Manual compact tool call triggers one forced summarization pass."""
+    model = make_litellm_model()
+
+    summarization = SummarizationConfig(
+        model=os.environ.get("ADK_DEEPAGENTS_MODEL")
+        or os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini"),
+        context_window=200_000,
+        trigger=("fraction", 0.95),
+        keep=("messages", 2),
+        use_llm_summary=False,
+    )
+
+    agent = create_deep_agent(
+        model=model,
+        name="compact_conversation_llm_test_agent",
+        instruction=(
+            "When the user asks to compact conversation, you MUST call "
+            "compact_conversation exactly once before your final answer."
+        ),
+        summarization=summarization,
+    )
+
+    _texts, runner, session = await run_agent(
+        agent,
+        "Remember this codeword for later: ORBIT-11.",
+    )
+    await send_followup(
+        runner,
+        session,
+        "Add context: project codename is Atlas and owner is Priya.",
+    )
+
+    before = await runner.session_service.get_session(
+        app_name="integration_test",
+        user_id="test_user",
+        session_id=session.id,
+    )
+    assert before is not None
+    assert "_summarization_state" not in before.state
+
+    texts, function_calls, function_responses = await send_followup_with_events(
+        runner,
+        session,
+        "Please compact conversation now, then tell me the codeword only.",
+    )
+
+    assert "compact_conversation" in function_calls, (
+        f"Expected compact_conversation tool call, got: {function_calls}"
+    )
+    assert "compact_conversation" in function_responses, (
+        f"Expected compact_conversation tool response, got: {function_responses}"
+    )
+
+    after = await runner.session_service.get_session(
+        app_name="integration_test",
+        user_id="test_user",
+        session_id=session.id,
+    )
+    assert after is not None
+    summ_state = after.state.get("_summarization_state", {})
+    summaries = summ_state.get("summaries_performed", 0)
+    assert isinstance(summaries, int) and summaries >= 1, (
+        f"Expected forced compaction to perform summarization, state: {summ_state}"
+    )
+
+    response_text = " ".join(texts).lower()
+    assert "orbit" in response_text, f"Expected codeword in final response, got: {response_text}"

@@ -403,6 +403,9 @@ Every agent created with `create_deep_agent()` includes these tools:
 
 With `execution="local"` or `execution="heimdall"`, an `execute` tool is also available for shell commands.
 
+With `summarization=SummarizationConfig(...)`, a `compact_conversation` tool is added for
+manual context compaction on the next model turn.
+
 With `browser="playwright"`, browser tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, etc.) are added for web page interaction.
 
 With `subagents=[...]` and `delegation_mode="static"` (default), one tool is generated per sub-agent specification.
@@ -441,6 +444,7 @@ adk_deepagents/
 ├── skills/
 │   └── integration.py   # adk-skills registry integration
 └── tools/
+    ├── compact.py       # Manual conversation compaction tool
     ├── filesystem.py    # Filesystem tool implementations
     ├── todos.py         # Todo tool implementations
     └── task.py          # Sub-agent delegation tools

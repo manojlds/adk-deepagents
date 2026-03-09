@@ -533,6 +533,7 @@ def maybe_summarize(
     use_llm_summary: bool = True,
     summary_model: str = "gemini-2.5-flash",
     truncate_args_config: TruncateArgsConfig | None = None,
+    force: bool = False,
 ) -> bool:
     """Check if summarization is needed and perform it if so.
 
@@ -562,6 +563,9 @@ def maybe_summarize(
         Model to use for LLM-based summary generation.
     truncate_args_config:
         Optional config for truncating large tool arguments.
+    force:
+        If ``True``, run one summarization pass regardless of token threshold
+        (still requires enough messages beyond the keep window).
 
     Returns
     -------
@@ -587,16 +591,23 @@ def maybe_summarize(
     current_tokens = count_messages_tokens(contents)
     trigger_threshold = int(context_window * trigger_fraction)
 
-    if current_tokens < trigger_threshold:
+    if not force and current_tokens < trigger_threshold:
         return args_were_truncated  # Args may have been truncated even if no summary
 
-    logger.info(
-        "Summarization triggered: %d tokens exceeds threshold %d (%.0f%% of %d)",
-        current_tokens,
-        trigger_threshold,
-        trigger_fraction * 100,
-        context_window,
-    )
+    if force:
+        logger.info(
+            "Summarization forced manually at %d tokens (threshold would be %d)",
+            current_tokens,
+            trigger_threshold,
+        )
+    else:
+        logger.info(
+            "Summarization triggered: %d tokens exceeds threshold %d (%.0f%% of %d)",
+            current_tokens,
+            trigger_threshold,
+            trigger_fraction * 100,
+            context_window,
+        )
 
     # Step 2: Partition messages
     to_summarize, to_keep = partition_messages(contents, keep_count=keep_messages)

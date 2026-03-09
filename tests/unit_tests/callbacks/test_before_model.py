@@ -1,6 +1,6 @@
 """Tests for before_model callback."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from google.genai import types
 
@@ -10,6 +10,7 @@ from adk_deepagents.callbacks.before_model import (
     make_before_model_callback,
 )
 from adk_deepagents.summarization import DEFAULT_CONTEXT_WINDOW
+from adk_deepagents.tools.compact import COMPACT_CONVERSATION_REQUEST_KEY
 from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 
@@ -22,6 +23,7 @@ def _make_llm_request(system_instruction=None):
         )
     else:
         request.config = types.GenerateContentConfig()
+    request.contents = []
     return request
 
 
@@ -117,6 +119,39 @@ def test_dynamic_task_concurrency_limits_injected():
     assert "max_parallel=3" in si
     assert "concurrency_policy=wait" in si
     assert "queue_timeout_seconds=12.5" in si
+
+
+def test_summarization_injects_compaction_prompt():
+    cb = make_before_model_callback(
+        summarization_config=SummarizationConfig(use_llm_summary=False),
+    )
+    ctx = MagicMock()
+    ctx.state = {}
+    request = _make_llm_request()
+
+    cb(ctx, request)
+
+    si = str(request.config.system_instruction)
+    assert "compact_conversation" in si
+
+
+def test_compaction_request_forces_one_summarization_pass():
+    cb = make_before_model_callback(
+        summarization_config=SummarizationConfig(use_llm_summary=False),
+    )
+    ctx = MagicMock()
+    ctx.state = {COMPACT_CONVERSATION_REQUEST_KEY: True}
+    request = _make_llm_request()
+    request.contents = [
+        types.Content(role="user", parts=[types.Part(text="hello")]),
+    ]
+
+    with patch("adk_deepagents.summarization.maybe_summarize", return_value=False) as patched:
+        cb(ctx, request)
+
+    assert COMPACT_CONVERSATION_REQUEST_KEY not in ctx.state
+    assert patched.call_args is not None
+    assert patched.call_args.kwargs["force"] is True
 
 
 def test_dangling_tool_calls_patched():

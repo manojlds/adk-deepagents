@@ -20,6 +20,7 @@ from adk_deepagents.callbacks.before_agent import make_before_agent_callback
 from adk_deepagents.callbacks.before_model import make_before_model_callback
 from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
+from adk_deepagents.tools.compact import create_compact_conversation_tool
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.task import (
     GENERAL_PURPOSE_SUBAGENT,
@@ -193,6 +194,14 @@ def create_deep_agent(
     # Add user-provided tools
     if tools:
         core_tools.extend(tools)
+
+    # 2b. Conversation compaction tool (manual trigger for summarization)
+    if summarization is not None:
+        core_tools.append(
+            create_compact_conversation_tool(
+                summarization_config=summarization,
+            )
+        )
 
     # 3. Skills integration (adk-skills)
     if skills:

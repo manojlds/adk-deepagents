@@ -424,6 +424,25 @@ def test_maybe_summarize_not_enough_to_partition():
     assert result is False
 
 
+def test_maybe_summarize_force_mode_ignores_threshold_once():
+    messages = [types.Content(role="user", parts=[types.Part(text=f"msg{i}")]) for i in range(4)]
+    ctx = _make_mock_context()
+    req = _make_mock_request(messages)
+
+    result = maybe_summarize(
+        ctx,
+        req,
+        context_window=1_000_000,
+        trigger_fraction=0.85,
+        keep_messages=2,
+        use_llm_summary=False,
+        force=True,
+    )
+
+    assert result is True
+    assert len(req.contents) == 3
+
+
 def test_maybe_summarize_with_arg_truncation():
     """Argument truncation runs before summarization check."""
     large_content = "x" * 5000

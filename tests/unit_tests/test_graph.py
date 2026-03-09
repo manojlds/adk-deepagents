@@ -172,6 +172,16 @@ class TestCreateDeepAgent:
         agent = create_deep_agent(summarization=config)
         assert isinstance(agent, LlmAgent)
 
+    def test_summarization_adds_compact_conversation_tool(self):
+        agent = create_deep_agent(summarization=SummarizationConfig())
+        tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "compact_conversation" in tool_names
+
+    def test_no_summarization_no_compact_conversation_tool(self):
+        agent = create_deep_agent(summarization=None)
+        tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
+        assert "compact_conversation" not in tool_names
+
     def test_memory_sources(self):
         agent = create_deep_agent(memory=["/AGENTS.md"])
         assert isinstance(agent, LlmAgent)

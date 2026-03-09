@@ -387,6 +387,43 @@ Tool call: read_todos()
 
 ---
 
+## Conversation Compaction Tool
+
+When you pass `summarization=SummarizationConfig(...)` to `create_deep_agent()`,
+the agent also gets a `compact_conversation` tool.
+
+### `compact_conversation`
+
+Request a manual compaction pass. The tool queues compaction and the next
+model turn forces one summarization pass using your configured
+`SummarizationConfig` (`model`, `keep`, `history_path_prefix`, and
+`use_llm_summary`).
+
+```python
+def compact_conversation(tool_context: ToolContext) -> dict:
+```
+
+**Arguments:** None (only `tool_context` is injected by ADK).
+
+**Returns:**
+
+```python
+{
+    "status": "queued",
+    "message": "Conversation compaction queued. The next model turn will summarize older context..."
+}
+```
+
+If a request is already queued, the tool returns `status="queued"` with an
+"already queued" message and leaves the existing request in place.
+
+**Example usage by the LLM:**
+```
+Tool call: compact_conversation()
+```
+
+---
+
 ## Execution Tools
 
 Execution tools provide shell command capabilities. They are added to the agent when you set `execution="local"` or `execution="heimdall"` in `create_deep_agent()`.

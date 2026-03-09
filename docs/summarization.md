@@ -4,6 +4,9 @@
 
 Long agent conversations can exceed the model's context window. adk-deepagents provides automatic conversation summarization that monitors token usage, summarizes older messages when a threshold is reached, and offloads the full history to the backend for reference. This keeps the agent functional during extended sessions without losing critical context.
 
+When summarization is enabled, the agent also gets a `compact_conversation`
+tool for manual compaction requests.
+
 The summarization system is implemented in `adk_deepagents.summarization` and integrates with the `before_model_callback` via the `maybe_summarize()` function.
 
 ## SummarizationConfig
@@ -191,6 +194,7 @@ was_summarized = maybe_summarize(
     use_llm_summary=True,
     summary_model="gemini-2.5-flash",
     truncate_args_config=None,
+    force=False,
 )
 ```
 
@@ -203,6 +207,10 @@ was_summarized = maybe_summarize(
 5. Generate summary (LLM-based or inline fallback)
 6. Replace old messages with summary content in `llm_request.contents`
 7. Update `SummarizationState` in session state
+
+When `force=True` (used by `compact_conversation`), step 2 bypasses the token
+threshold check and runs a single compaction pass if there are enough messages
+beyond the keep window.
 
 ## SummarizationState
 

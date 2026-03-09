@@ -1,5 +1,6 @@
 """Tools for the deep agent."""
 
+from adk_deepagents.tools.compact import create_compact_conversation_tool
 from adk_deepagents.tools.filesystem import (
     edit_file,
     glob,
@@ -11,6 +12,7 @@ from adk_deepagents.tools.filesystem import (
 from adk_deepagents.tools.todos import read_todos, write_todos
 
 __all__ = [
+    "create_compact_conversation_tool",
     "edit_file",
     "glob",
     "grep",

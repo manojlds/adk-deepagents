@@ -9,6 +9,7 @@ conversation summarization.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
@@ -17,6 +18,7 @@ from google.genai import types
 
 from adk_deepagents.backends.protocol import BackendFactory
 from adk_deepagents.prompts import (
+    COMPACT_CONVERSATION_SYSTEM_PROMPT,
     EXECUTION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
     MEMORY_SYSTEM_PROMPT,
@@ -25,6 +27,7 @@ from adk_deepagents.prompts import (
     TASK_SYSTEM_PROMPT,
     TODO_SYSTEM_PROMPT,
 )
+from adk_deepagents.tools.compact import COMPACT_CONVERSATION_REQUEST_KEY
 from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 
@@ -186,6 +189,20 @@ def _inject_dangling_tool_responses(
     llm_request.contents = patched
 
 
+def _clear_state_key(state: Any, key: str) -> None:
+    """Best-effort key clearing for ADK state wrappers.
+
+    Some ADK state objects support ``get``/``__setitem__`` but not
+    ``__delitem__``.
+    """
+    with suppress(Exception):
+        del state[key]
+        return
+
+    with suppress(Exception):
+        state[key] = None
+
+
 def make_before_model_callback(
     *,
     memory_sources: list[str] | None = None,
@@ -221,10 +238,14 @@ def make_before_model_callback(
     ) -> LlmResponse | None:
         state = callback_context.state
 
+        force_compaction = bool(state.get(COMPACT_CONVERSATION_REQUEST_KEY))
+        if COMPACT_CONVERSATION_REQUEST_KEY in state:
+            _clear_state_key(state, COMPACT_CONVERSATION_REQUEST_KEY)
+
         # 0. Patch dangling tool calls into the LLM request contents
         dangling = state.get("_dangling_tool_calls")
         if "_dangling_tool_calls" in state:
-            del state["_dangling_tool_calls"]  # type: ignore[not-subscriptable]
+            _clear_state_key(state, "_dangling_tool_calls")
         if dangling and llm_request.contents:
             _inject_dangling_tool_responses(llm_request, dangling)
 
@@ -260,6 +281,9 @@ def make_before_model_callback(
             if dynamic_task_config is not None:
                 additions.append(_format_dynamic_task_limits(dynamic_task_config))
 
+        if summarization_config:
+            additions.append(COMPACT_CONVERSATION_SYSTEM_PROMPT)
+
         # Inject all additions into system instruction
         combined = "\n\n".join(additions)
         _append_to_system_instruction(llm_request, combined)
@@ -279,6 +303,7 @@ def make_before_model_callback(
                 use_llm_summary=summarization_config.use_llm_summary,
                 summary_model=summarization_config.model,
                 truncate_args_config=summarization_config.truncate_args,
+                force=force_compaction,
             )
 
         return None  # Proceed with LLM call
