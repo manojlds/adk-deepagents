@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from examples.deep_research.agent import build_agent
@@ -13,7 +15,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 @pytest.mark.timeout(300)
 async def test_deep_research_uses_dynamic_task_and_writes_report():
-    agent = build_agent()
+    model = os.environ.get("ADK_DEEPAGENTS_MODEL") or os.environ.get(
+        "LITELLM_MODEL", "openai/gpt-4o-mini"
+    )
+    agent = build_agent(model=model)
 
     prompt = (
         "Run a minimal deep-research flow. Use dynamic task delegation at least once (planner is fine), "

@@ -96,6 +96,28 @@ def test_runtime_subagent_docs_injected_from_state():
 
     si = str(request.config.system_instruction)
     assert "summarizer" in si
+    assert "register_subagent" not in si
+
+
+def test_runtime_subagent_docs_include_dynamic_guidance_when_enabled():
+    cb = make_before_model_callback(
+        dynamic_task_config=DynamicTaskConfig(),
+    )
+    ctx = MagicMock()
+    ctx.state = {
+        "_dynamic_subagent_specs": {
+            "summarizer": {
+                "name": "summarizer",
+                "description": "Summarizes groups of files by topic.",
+            }
+        }
+    }
+    request = _make_llm_request()
+
+    cb(ctx, request)
+
+    si = str(request.config.system_instruction)
+    assert "summarizer" in si
     assert "register_subagent" in si
 
 

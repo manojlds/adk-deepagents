@@ -99,3 +99,27 @@ async def test_agent_with_prepopulated_files():
         word in response_text for word in ("zero", "division", "bug", "error", "check", "divide")
     )
     assert has_bug_ref, f"Expected agent to find the division bug, got: {response_text}"
+
+
+@pytest.mark.timeout(120)
+async def test_default_prompt_exposes_understand_act_verify_loop():
+    """Default prompt should expose the understand/act/verify workflow."""
+    model = make_litellm_model()
+
+    agent = create_deep_agent(
+        model=model,
+        name="default_loop_prompt_agent",
+    )
+
+    texts, _runner, _session = await run_agent(
+        agent,
+        (
+            "Without calling any tools, what three-step workflow should you follow "
+            "for non-trivial tasks? Keep it short."
+        ),
+    )
+
+    response_text = " ".join(texts).lower()
+    assert "understand" in response_text
+    assert any(word in response_text for word in ("act", "execute", "implement"))
+    assert any(word in response_text for word in ("verify", "check", "validation"))
