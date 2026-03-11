@@ -63,23 +63,13 @@ Summarization triggers when the total token count of conversation messages excee
 trigger_threshold = context_window × trigger_fraction
 ```
 
-The context window is resolved in this order:
+The context window is resolved dynamically via `model_info.resolve_context_window()`:
 
 1. **Explicit** — `SummarizationConfig.context_window` if set
-2. **Model lookup** — from `MODEL_CONTEXT_WINDOWS` dict
-3. **Default** — `200,000` tokens (`DEFAULT_CONTEXT_WINDOW`)
-
-Known model context windows:
-
-| Model | Tokens |
-|---|---|
-| `gemini-2.5-flash` | 1,048,576 |
-| `gemini-2.5-pro` | 1,048,576 |
-| `gemini-2.0-flash` | 1,048,576 |
-| `gemini-1.5-pro` | 2,097,152 |
-| `gpt-4o` | 128,000 |
-| `gpt-4o-mini` | 128,000 |
-| `claude-3.5-sonnet` | 200,000 |
+2. **litellm** — offline model database lookup via `litellm.get_model_info()` (covers thousands of models across providers)
+3. **google.genai** — live API call for Gemini models via `Client.models.get()` (requires API credentials)
+4. **Static fallback** — small built-in table for common models
+5. **Default** — `200,000` tokens (`DEFAULT_CONTEXT_WINDOW`)
 
 ## Message Partitioning
 

@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from adk_deepagents.backends.protocol import Backend, BackendFactory
     from adk_deepagents.types import TruncateArgsConfig
 
+from adk_deepagents.model_info import DEFAULT_CONTEXT_WINDOW
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -37,9 +39,6 @@ logger = logging.getLogger(__name__)
 
 NUM_CHARS_PER_TOKEN = 4
 """Rough heuristic: ~4 characters per token for English text."""
-
-DEFAULT_CONTEXT_WINDOW = 200_000
-"""Default context window size in tokens (Gemini 2.5 Flash)."""
 
 # Tool names whose arguments are eligible for truncation
 TRUNCATABLE_TOOLS = frozenset({"write_file", "edit_file"})
