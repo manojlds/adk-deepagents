@@ -48,6 +48,7 @@ async def test_filesystem_backend_write_and_read(tmp_path):
     texts, runner, session = await run_agent(
         agent,
         'Use write_file to create /hello.txt with content "Written to disk!". Confirm when done.',
+        state={"_backend_factory": _fs_backend_factory(tmp_path)},
     )
 
     response = " ".join(texts).lower()
@@ -95,6 +96,7 @@ async def test_filesystem_backend_reads_existing_files(tmp_path):
         agent,
         "Use read_file to read /existing.txt. Show me the content. "
         "Then use write_file to save the content to /copy.txt.",
+        state={"_backend_factory": _fs_backend_factory(tmp_path)},
     )
 
     # Verify the agent wrote the copy to disk
@@ -131,6 +133,7 @@ async def test_filesystem_backend_glob_and_grep(tmp_path):
         agent,
         'Use grep to search for "TODO" in all files under /src/. '
         "Then write a summary of the TODOs found to /todo_report.txt.",
+        state={"_backend_factory": _fs_backend_factory(tmp_path)},
     )
 
     # Verify the report was written to disk with actual TODO content

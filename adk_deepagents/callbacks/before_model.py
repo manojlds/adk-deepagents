@@ -277,9 +277,10 @@ def make_before_model_callback(
 
         if merged_subagent_descriptions:
             additions.append(_format_subagent_docs(merged_subagent_descriptions))
+
+        if dynamic_task_config is not None:
             additions.append(TASK_RUNTIME_SUBAGENT_PROMPT)
-            if dynamic_task_config is not None:
-                additions.append(_format_dynamic_task_limits(dynamic_task_config))
+            additions.append(_format_dynamic_task_limits(dynamic_task_config))
 
         if summarization_config:
             additions.append(COMPACT_CONVERSATION_SYSTEM_PROMPT)
