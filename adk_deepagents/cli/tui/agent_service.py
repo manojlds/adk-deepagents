@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +30,46 @@ REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 
 _DETAIL_VALUE_PREVIEW_LIMIT = 80
 _DETAIL_TEXT_PREVIEW_LIMIT = 180
+_STREAM_CHUNK_SIZE = 28
+_ACTIVITY_FRAMES: tuple[str, ...] = ("|", "/", "-", "\\")
+
+ActivityPhase = Literal["working", "thinking", "tool", "responding", "approval"]
+
+
+def _activity_label_for_phase(phase: ActivityPhase) -> str:
+    if phase == "thinking":
+        return "Thinking"
+    if phase == "tool":
+        return "Running tools"
+    if phase == "responding":
+        return "Responding"
+    if phase == "approval":
+        return "Awaiting approval"
+    return "Working"
+
+
+def _chunk_stream_text(text: str, *, chunk_size: int = _STREAM_CHUNK_SIZE) -> list[str]:
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    length = len(text)
+    while start < length:
+        end = min(start + chunk_size, length)
+        if end < length:
+            newline_cut = text.rfind("\n", start + 1, end)
+            space_cut = text.rfind(" ", start + 1, end)
+            cut = max(newline_cut, space_cut)
+            if cut > start:
+                end = cut + 1
+
+        chunk = text[start:end]
+        if chunk:
+            chunks.append(chunk)
+        start = end
+
+    return chunks
 
 
 def _truncate_preview(text: str, *, limit: int = _DETAIL_VALUE_PREVIEW_LIMIT) -> str:
@@ -223,6 +264,7 @@ class UiUpdate:
         "system",
         "error",
         "approval_request",
+        "activity",
         "turn_started",
         "turn_finished",
         "clear_transcript",
@@ -261,6 +303,8 @@ class AgentService:
         default=None, init=False, repr=False
     )
     _busy: bool = field(default=False, init=False, repr=False)
+    _activity_phase: ActivityPhase = field(default="working", init=False, repr=False)
+    _activity_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _pending_approval: asyncio.Future[tuple[bool, bool]] | None = field(
         default=None, init=False, repr=False
     )
@@ -321,6 +365,18 @@ class AgentService:
         if self._pending_approval and not self._pending_approval.done():
             self._pending_approval.set_result((approved, always))
 
+    def _set_activity_phase(self, phase: ActivityPhase) -> None:
+        self._activity_phase = phase
+
+    async def _run_activity_indicator(self) -> None:
+        frame_index = 0
+        while self._busy:
+            frame = _ACTIVITY_FRAMES[frame_index % len(_ACTIVITY_FRAMES)]
+            frame_index += 1
+            label = _activity_label_for_phase(self._activity_phase)
+            await self.updates.put(UiUpdate(kind="activity", text=f"{label} {frame}"))
+            await asyncio.sleep(0.12)
+
     async def _handle_slash_command(self, command: str) -> None:
         assert self._thread_context is not None
         assert self._model_context is not None
@@ -380,7 +436,9 @@ class AgentService:
         pending_messages: list[types.Content] = [
             types.Content(role="user", parts=[types.Part(text=prompt)])
         ]
+        self._set_activity_phase("working")
         await self.updates.put(UiUpdate(kind="turn_started"))
+        self._activity_task = asyncio.create_task(self._run_activity_indicator())
 
         try:
             while pending_messages:
@@ -396,7 +454,7 @@ class AgentService:
                     if getattr(event, "author", None) == "user":
                         continue
 
-                    self._emit_event_updates(event)
+                    await self._emit_event_updates(event)
 
                     for request in _extract_confirmation_requests(event):
                         if request.request_id not in seen_confirmation_ids:
@@ -415,13 +473,20 @@ class AgentService:
             await self.updates.put(UiUpdate(kind="error", text=str(exc)))
         finally:
             self._busy = False
+            activity_task = self._activity_task
+            self._activity_task = None
+            if activity_task is not None:
+                activity_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await activity_task
+            await self.updates.put(UiUpdate(kind="activity", text=None))
             await self.updates.put(UiUpdate(kind="turn_finished"))
 
-    def _emit_event_updates(self, event: Any) -> None:
-        """Parse an ADK event and queue UI updates (non-async, fire-and-forget)."""
+    async def _emit_event_updates(self, event: Any) -> None:
+        """Parse an ADK event and enqueue ordered UI updates."""
         error_message = getattr(event, "error_message", None)
         if isinstance(error_message, str) and error_message.strip():
-            self.updates.put_nowait(UiUpdate(kind="error", text=error_message.strip()))
+            await self.updates.put(UiUpdate(kind="error", text=error_message.strip()))
 
         content = getattr(event, "content", None)
         parts = getattr(content, "parts", None) if content is not None else None
@@ -433,20 +498,25 @@ class AgentService:
             if isinstance(text, str) and text:
                 is_thought = getattr(part, "thought", False)
                 kind = "thought_delta" if is_thought else "assistant_delta"
-                self.updates.put_nowait(UiUpdate(kind=kind, text=text))
+                self._set_activity_phase("thinking" if is_thought else "responding")
+                for chunk in _chunk_stream_text(text):
+                    await self.updates.put(UiUpdate(kind=kind, text=chunk))
+                    await asyncio.sleep(0)
 
             function_call = getattr(part, "function_call", None)
             if function_call is not None:
+                self._set_activity_phase("tool")
                 tool_name = getattr(function_call, "name", None) or "unknown_tool"
                 if tool_name != REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
                     args_dict = _coerce_payload_dict(getattr(function_call, "args", None))
                     detail = _format_tool_call_detail(tool_name, args_dict)
-                    self.updates.put_nowait(
+                    await self.updates.put(
                         UiUpdate(kind="tool_call", tool_name=tool_name, tool_detail=detail)
                     )
 
             function_response = getattr(part, "function_response", None)
             if function_response is not None:
+                self._set_activity_phase("tool")
                 tool_name = getattr(function_response, "name", None) or "unknown_tool"
                 if tool_name == REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
                     continue
@@ -455,14 +525,14 @@ class AgentService:
                 if isinstance(response, dict):
                     detail = _format_tool_response_detail(tool_name, response)
                     if detail is not None:
-                        self.updates.put_nowait(
+                        await self.updates.put(
                             UiUpdate(kind="tool_result", tool_name=tool_name, tool_detail=detail)
                         )
 
                     for key in ("error", "stderr"):
                         value = response.get(key)
                         if isinstance(value, str) and value.strip():
-                            self.updates.put_nowait(
+                            await self.updates.put(
                                 UiUpdate(kind="error", text=f"{tool_name}: {value.strip()}")
                             )
 
@@ -475,6 +545,7 @@ class AgentService:
             )
             return True
 
+        self._set_activity_phase("approval")
         loop = asyncio.get_running_loop()
         self._pending_approval = loop.create_future()
 

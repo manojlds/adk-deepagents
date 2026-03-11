@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from adk_deepagents.cli.tui.agent_service import (
     AgentService,
+    _activity_label_for_phase,
+    _chunk_stream_text,
     _coerce_payload_dict,
     _format_tool_call_detail,
     _format_tool_response_detail,
@@ -28,12 +31,15 @@ class _FakePart:
     def __init__(
         self,
         *,
+        text: str | None = None,
+        thought: bool = False,
         function_call: _FakeFunctionCall | None = None,
         function_response: _FakeFunctionResponse | None = None,
     ) -> None:
         self.function_call = function_call
         self.function_response = function_response
-        self.text = None
+        self.text = text
+        self.thought = thought
 
 
 class _FakeContent:
@@ -109,7 +115,7 @@ def test_emit_event_updates_includes_tool_call_and_result_details() -> None:
         ]
     )
 
-    service._emit_event_updates(event)
+    asyncio.run(service._emit_event_updates(event))
 
     call_update = service.updates.get_nowait()
     result_update = service.updates.get_nowait()
@@ -141,3 +147,35 @@ def test_format_tool_response_detail_for_task_includes_queue_metadata() -> None:
     assert "task_id=task_2" in detail
     assert "queued=True" in detail
     assert "queue_wait=0.125s" in detail
+
+
+def test_chunk_stream_text_splits_long_text_preserving_content() -> None:
+    text = "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+    chunks = _chunk_stream_text(text, chunk_size=16)
+
+    assert len(chunks) > 1
+    assert "".join(chunks) == text
+
+
+def test_emit_event_updates_streams_assistant_text_in_chunks() -> None:
+    service = _service()
+    text = "This response should arrive in several chunks for better UI streaming visibility."
+    event = _FakeEvent([_FakePart(text=text)])
+
+    asyncio.run(service._emit_event_updates(event))
+
+    updates = []
+    while not service.updates.empty():
+        updates.append(service.updates.get_nowait())
+
+    assert len(updates) > 1
+    assert all(update.kind == "assistant_delta" for update in updates)
+    assert "".join(update.text or "" for update in updates) == text
+
+
+def test_activity_labels_cover_all_phases() -> None:
+    assert _activity_label_for_phase("working") == "Working"
+    assert _activity_label_for_phase("thinking") == "Thinking"
+    assert _activity_label_for_phase("tool") == "Running tools"
+    assert _activity_label_for_phase("responding") == "Responding"
+    assert _activity_label_for_phase("approval") == "Awaiting approval"

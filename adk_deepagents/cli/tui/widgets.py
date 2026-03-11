@@ -357,4 +357,12 @@ class PromptInput(Static):
     def enable_input(self) -> None:
         inp = self.query_one("#prompt-input", Input)
         inp.disabled = False
+        inp.placeholder = "Send a message or /help"
         inp.focus()
+
+    def set_activity_status(self, status: str | None) -> None:
+        inp = self.query_one("#prompt-input", Input)
+        if status:
+            inp.placeholder = status
+        else:
+            inp.placeholder = "Send a message or /help"
