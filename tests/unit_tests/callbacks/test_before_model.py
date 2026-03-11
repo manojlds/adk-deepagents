@@ -5,11 +5,10 @@ from unittest.mock import MagicMock, patch
 from google.genai import types
 
 from adk_deepagents.callbacks.before_model import (
-    MODEL_CONTEXT_WINDOWS,
     _resolve_context_window,
     make_before_model_callback,
 )
-from adk_deepagents.summarization import DEFAULT_CONTEXT_WINDOW
+from adk_deepagents.model_info import DEFAULT_CONTEXT_WINDOW, resolve_context_window
 from adk_deepagents.tools.compact import COMPACT_CONVERSATION_REQUEST_KEY
 from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
@@ -277,12 +276,12 @@ def test_resolve_context_window_explicit_config():
 
 
 def test_resolve_context_window_known_model():
-    """Known models resolve to their lookup table values."""
+    """Known models resolve via dynamic lookup (litellm / fallback table)."""
     config = SummarizationConfig(model="gemini-2.5-flash")
-    assert _resolve_context_window(config) == MODEL_CONTEXT_WINDOWS["gemini-2.5-flash"]
+    assert _resolve_context_window(config) == resolve_context_window("gemini-2.5-flash")
 
     config = SummarizationConfig(model="gpt-4o")
-    assert _resolve_context_window(config) == 128_000
+    assert _resolve_context_window(config) == resolve_context_window("gpt-4o")
 
 
 def test_resolve_context_window_unknown_model():
@@ -298,6 +297,6 @@ def test_resolve_context_window_explicit_overrides_model():
 
 
 def test_resolve_context_window_none_defaults():
-    """Default SummarizationConfig (no context_window) uses model lookup."""
+    """Default SummarizationConfig (no context_window) uses dynamic model lookup."""
     config = SummarizationConfig()  # model defaults to "gemini-2.5-flash"
-    assert _resolve_context_window(config) == MODEL_CONTEXT_WINDOWS["gemini-2.5-flash"]
+    assert _resolve_context_window(config) == resolve_context_window("gemini-2.5-flash")
