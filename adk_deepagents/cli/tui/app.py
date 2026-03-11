@@ -142,13 +142,18 @@ class DeepAgentTui(App[None]):
             composer.disable_input()
             self._waiting_for_approval = True
 
+        elif update.kind == "activity":
+            composer.set_activity_status(update.text)
+
         elif update.kind == "turn_started":
             composer.disable_input()
+            composer.set_activity_status("Working...")
 
         elif update.kind == "turn_finished":
             messages.end_assistant_message()
             if not self._waiting_for_approval:
                 composer.enable_input()
+                composer.set_activity_status(None)
 
         elif update.kind == "clear_transcript":
             messages.clear_transcript()
