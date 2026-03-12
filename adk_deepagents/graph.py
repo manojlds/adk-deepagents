@@ -7,6 +7,7 @@ and summarization into a configured ``LlmAgent``.
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, cast
@@ -62,11 +63,31 @@ def _compose_callbacks(
     same arguments and its result is returned.
 
     If either side is ``None``, the other is returned as-is.
+
+    Handles async callbacks: if either callback is async, the composed
+    callback is also async.
     """
     if extra is None:
         return builtin
     if builtin is None:
         return extra
+
+    either_async = asyncio.iscoroutinefunction(builtin) or asyncio.iscoroutinefunction(extra)
+
+    if either_async:
+
+        async def composed_async(*args: Any, **kwargs: Any) -> Any:
+            if asyncio.iscoroutinefunction(builtin):
+                result = await builtin(*args, **kwargs)
+            else:
+                result = builtin(*args, **kwargs)
+            if result is not None:
+                return result
+            if asyncio.iscoroutinefunction(extra):
+                return await extra(*args, **kwargs)
+            return extra(*args, **kwargs)
+
+        return composed_async
 
     def composed(*args: Any, **kwargs: Any) -> Any:
         result = builtin(*args, **kwargs)

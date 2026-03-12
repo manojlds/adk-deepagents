@@ -197,7 +197,7 @@ def test_dynamic_task_tool_doc_exposes_concurrency_limits() -> None:
     assert "waves" in doc.lower()
 
 
-def test_dynamic_task_limits_are_injected_into_system_instruction() -> None:
+async def test_dynamic_task_limits_are_injected_into_system_instruction() -> None:
     agent = create_deep_agent(
         delegation_mode="dynamic",
         dynamic_task_config=DynamicTaskConfig(
@@ -214,7 +214,7 @@ def test_dynamic_task_limits_are_injected_into_system_instruction() -> None:
     context.state = {}
     request = _make_llm_request()
 
-    callback(context, request)
+    await callback(context, request)
 
     system_instruction = str(request.config.system_instruction)
     assert "Dynamic Task Concurrency Limits" in system_instruction

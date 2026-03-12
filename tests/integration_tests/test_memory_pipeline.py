@@ -137,12 +137,12 @@ class TestMemoryInCallbacks:
         assert "/AGENTS.md" in ctx.state["memory_contents"]
         assert "Project context here." in ctx.state["memory_contents"]["/AGENTS.md"]
 
-    def test_memory_in_before_model_callback(self):
+    async def test_memory_in_before_model_callback(self):
         memory_contents = {"/AGENTS.md": "Remember to be concise."}
         cb = make_before_model_callback(memory_sources=["/AGENTS.md"])
         ctx = _make_callback_context(state={"memory_contents": memory_contents})
         req = _make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert "Remember to be concise." in si
         assert "agent_memory" in si

@@ -131,52 +131,52 @@ class TestBeforeAgentBackendFactory:
 
 
 class TestBeforeModelSystemPromptInjection:
-    def test_system_prompt_injection_filesystem(self):
+    async def test_system_prompt_injection_filesystem(self):
         cb = make_before_model_callback()
         ctx = make_callback_context()
         req = make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert FILESYSTEM_SYSTEM_PROMPT in si
 
-    def test_system_prompt_injection_todo(self):
+    async def test_system_prompt_injection_todo(self):
         cb = make_before_model_callback()
         ctx = make_callback_context()
         req = make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert TODO_SYSTEM_PROMPT in si
 
-    def test_system_prompt_injection_execution(self):
+    async def test_system_prompt_injection_execution(self):
         cb = make_before_model_callback(has_execution=True)
         ctx = make_callback_context()
         req = make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert EXECUTION_SYSTEM_PROMPT in si
 
-    def test_system_prompt_injection_memory(self):
+    async def test_system_prompt_injection_memory(self):
         cb = make_before_model_callback(memory_sources=["/AGENTS.md"])
         state = {"memory_contents": {"/AGENTS.md": "Be helpful and kind."}}
         ctx = make_callback_context(state=state)
         req = make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert "Be helpful and kind." in si
         assert "agent_memory" in si
 
-    def test_system_prompt_injection_subagents(self):
+    async def test_system_prompt_injection_subagents(self):
         descs = [{"name": "researcher", "description": "Researches topics"}]
         cb = make_before_model_callback(subagent_descriptions=descs)
         ctx = make_callback_context()
         req = make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert TASK_SYSTEM_PROMPT in si
         assert "researcher" in si
         assert "Researches topics" in si
 
-    def test_dangling_tool_calls_patched(self):
+    async def test_dangling_tool_calls_patched(self):
         cb = make_before_model_callback()
         dangling = [{"id": "call_abc", "name": "write_file"}]
         ctx = make_callback_context(state={"_dangling_tool_calls": dangling})
@@ -184,7 +184,7 @@ class TestBeforeModelSystemPromptInjection:
         fc = types.FunctionCall(id="call_abc", name="write_file", args={})
         model_msg = types.Content(role="model", parts=[types.Part(function_call=fc)])
         req = make_llm_request(contents=[model_msg])
-        cb(ctx, req)
+        await cb(ctx, req)
         # Should have inserted a synthetic function_response
         assert len(req.contents) == 2
         patched = req.contents[1]
@@ -196,7 +196,7 @@ class TestBeforeModelSystemPromptInjection:
         # dangling should be cleared from state
         assert "_dangling_tool_calls" not in ctx.state
 
-    def test_all_prompts_combined(self):
+    async def test_all_prompts_combined(self):
         descs = [{"name": "worker", "description": "Does work"}]
         cb = make_before_model_callback(
             memory_sources=["/AGENTS.md"],
@@ -206,7 +206,7 @@ class TestBeforeModelSystemPromptInjection:
         state = {"memory_contents": {"/AGENTS.md": "Context info."}}
         ctx = make_callback_context(state=state)
         req = make_llm_request()
-        cb(ctx, req)
+        await cb(ctx, req)
         si = req.config.system_instruction
         assert FILESYSTEM_SYSTEM_PROMPT in si
         assert TODO_SYSTEM_PROMPT in si

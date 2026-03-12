@@ -232,7 +232,7 @@ def make_before_model_callback(
         for history offloading).
     """
 
-    def before_model_callback(
+    async def before_model_callback(
         callback_context: CallbackContext,
         llm_request: LlmRequest,
     ) -> LlmResponse | None:
@@ -293,7 +293,7 @@ def make_before_model_callback(
         if summarization_config:
             from adk_deepagents.summarization import maybe_summarize
 
-            maybe_summarize(
+            await maybe_summarize(
                 callback_context,
                 llm_request,
                 context_window=_resolve_context_window(summarization_config),

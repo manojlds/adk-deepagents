@@ -254,28 +254,40 @@ def test_truncate_tool_args_skips_non_truncatable_tools():
 # ---------------------------------------------------------------------------
 
 
-def test_generate_llm_summary_success():
-    """LLM summary returns text when API call succeeds."""
+async def test_generate_llm_summary_success():
+    """LLM summary returns text when ADK LiteLlm call succeeds."""
     messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
 
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(message=MagicMock(content="## SESSION INTENT\nGreeting exchange."))
-    ]
+    mock_llm_response = MagicMock()
+    mock_llm_response.content = types.Content(
+        role="model",
+        parts=[types.Part(text="## SESSION INTENT\nGreeting exchange.")],
+    )
 
-    with patch("litellm.completion", return_value=mock_response):
-        result = generate_llm_summary(messages, model="openai/test-model")
+    async def fake_generate_content_async(*args, **kwargs):
+        yield mock_llm_response
+
+    with patch(
+        "adk_deepagents.summarization.LiteLlm",
+    ) as MockLiteLlm:
+        mock_instance = MagicMock()
+        mock_instance.generate_content_async = fake_generate_content_async
+        MockLiteLlm.return_value = mock_instance
+        result = await generate_llm_summary(messages, model="openai/test-model")
 
     assert result is not None
     assert "SESSION INTENT" in result
 
 
-def test_generate_llm_summary_failure_returns_none():
-    """LLM summary returns None when API call fails."""
+async def test_generate_llm_summary_failure_returns_none():
+    """LLM summary returns None when ADK LiteLlm call fails."""
     messages = [types.Content(role="user", parts=[types.Part(text="Hello")])]
 
-    with patch("litellm.completion", side_effect=Exception("API error")):
-        result = generate_llm_summary(messages, model="openai/test-model")
+    with patch(
+        "adk_deepagents.summarization.LiteLlm",
+        side_effect=Exception("API error"),
+    ):
+        result = await generate_llm_summary(messages, model="openai/test-model")
 
     assert result is None
 
@@ -297,30 +309,30 @@ def _make_mock_request(messages: list[types.Content] | None = None):
     return req
 
 
-def test_maybe_summarize_no_contents():
+async def test_maybe_summarize_no_contents():
     ctx = _make_mock_context()
     req = _make_mock_request([])
-    assert maybe_summarize(ctx, req) is False
+    assert await maybe_summarize(ctx, req) is False
 
 
-def test_maybe_summarize_below_threshold():
+async def test_maybe_summarize_below_threshold():
     messages = [
         types.Content(role="user", parts=[types.Part(text="short message")]),
     ]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
-    result = maybe_summarize(ctx, req, context_window=200_000, use_llm_summary=False)
+    result = await maybe_summarize(ctx, req, context_window=200_000, use_llm_summary=False)
     assert result is False
 
 
-def test_maybe_summarize_triggers():
+async def test_maybe_summarize_triggers():
     """Summarization triggers with inline mode (no LLM call)."""
     long_text = "x" * 100_000
     messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
 
-    result = maybe_summarize(
+    result = await maybe_summarize(
         ctx, req, context_window=1000, trigger_fraction=0.5, keep_messages=2, use_llm_summary=False
     )
     assert result is True
@@ -333,18 +345,27 @@ def test_maybe_summarize_triggers():
     assert ctx.state["_summarization_state"]["summaries_performed"] == 1
 
 
-def test_maybe_summarize_triggers_with_llm():
-    """Summarization triggers with LLM-based summary."""
+async def test_maybe_summarize_triggers_with_llm():
+    """Summarization triggers with LLM-based summary via ADK LiteLlm."""
     long_text = "x" * 100_000
     messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
 
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=MagicMock(content="## SESSION INTENT\nTest task."))]
+    mock_llm_response = MagicMock()
+    mock_llm_response.content = types.Content(
+        role="model",
+        parts=[types.Part(text="## SESSION INTENT\nTest task.")],
+    )
 
-    with patch("litellm.completion", return_value=mock_response):
-        result = maybe_summarize(
+    async def fake_generate_content_async(*args, **kwargs):
+        yield mock_llm_response
+
+    with patch("adk_deepagents.summarization.LiteLlm") as MockLiteLlm:
+        mock_instance = MagicMock()
+        mock_instance.generate_content_async = fake_generate_content_async
+        MockLiteLlm.return_value = mock_instance
+        result = await maybe_summarize(
             ctx,
             req,
             context_window=1000,
@@ -359,7 +380,7 @@ def test_maybe_summarize_triggers_with_llm():
     assert "SESSION INTENT" in summary_text
 
 
-def test_maybe_summarize_offloads_to_backend():
+async def test_maybe_summarize_offloads_to_backend():
     long_text = "x" * 100_000
     messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
     ctx = _make_mock_context()
@@ -369,7 +390,7 @@ def test_maybe_summarize_offloads_to_backend():
     mock_backend.download_files.return_value = [MagicMock(content=None)]
     mock_factory = MagicMock(return_value=mock_backend)
 
-    result = maybe_summarize(
+    result = await maybe_summarize(
         ctx,
         req,
         context_window=1000,
@@ -385,7 +406,7 @@ def test_maybe_summarize_offloads_to_backend():
     assert "/conversation_history/" in call_args[0][0]
 
 
-def test_maybe_summarize_with_offload_path_in_summary():
+async def test_maybe_summarize_with_offload_path_in_summary():
     """When history is offloaded, summary includes the file path."""
     long_text = "x" * 100_000
     messages = [types.Content(role="user", parts=[types.Part(text=long_text)]) for _ in range(10)]
@@ -396,7 +417,7 @@ def test_maybe_summarize_with_offload_path_in_summary():
     mock_backend.download_files.return_value = [MagicMock(content=None)]
     mock_factory = MagicMock(return_value=mock_backend)
 
-    maybe_summarize(
+    await maybe_summarize(
         ctx,
         req,
         context_window=1000,
@@ -411,25 +432,25 @@ def test_maybe_summarize_with_offload_path_in_summary():
     assert "/conversation_history/" in summary_text
 
 
-def test_maybe_summarize_not_enough_to_partition():
+async def test_maybe_summarize_not_enough_to_partition():
     messages = [
         types.Content(role="user", parts=[types.Part(text="x" * 100_000)]) for _ in range(2)
     ]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
 
-    result = maybe_summarize(
+    result = await maybe_summarize(
         ctx, req, context_window=1000, trigger_fraction=0.5, keep_messages=6, use_llm_summary=False
     )
     assert result is False
 
 
-def test_maybe_summarize_force_mode_ignores_threshold_once():
+async def test_maybe_summarize_force_mode_ignores_threshold_once():
     messages = [types.Content(role="user", parts=[types.Part(text=f"msg{i}")]) for i in range(4)]
     ctx = _make_mock_context()
     req = _make_mock_request(messages)
 
-    result = maybe_summarize(
+    result = await maybe_summarize(
         ctx,
         req,
         context_window=1_000_000,
@@ -443,7 +464,7 @@ def test_maybe_summarize_force_mode_ignores_threshold_once():
     assert len(req.contents) == 3
 
 
-def test_maybe_summarize_with_arg_truncation():
+async def test_maybe_summarize_with_arg_truncation():
     """Argument truncation runs before summarization check."""
     large_content = "x" * 5000
     fc_part = types.Part(
@@ -466,7 +487,7 @@ def test_maybe_summarize_with_arg_truncation():
         max_length=100,
     )
 
-    result = maybe_summarize(
+    result = await maybe_summarize(
         ctx,
         req,
         context_window=200_000,
