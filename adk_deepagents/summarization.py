@@ -11,6 +11,10 @@ Ported from deepagents.middleware.summarization with full feature parity:
 - Tool argument truncation for older messages (TruncateArgsConfig)
 - Append-based history offloading with timestamps
 - Inline text fallback when LLM summary is disabled
+
+LLM summary generation uses ADK's model infrastructure
+(``LiteLlm.generate_content_async()``) so any model supported by ADK
+works — Gemini, OpenAI, Anthropic, Ollama, etc.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from google.adk.models.lite_llm import LiteLlm
+from google.adk.models.llm_request import LlmRequest as AdkLlmRequest
 from google.genai import types
 
 if TYPE_CHECKING:
@@ -270,16 +276,16 @@ def create_summary_content(
     )
 
 
-def generate_llm_summary(
+async def generate_llm_summary(
     messages: list[types.Content],
     model: str = "gemini-2.5-flash",
     max_input_tokens: int = 4000,
 ) -> str | None:
-    """Generate a summary of messages using an LLM call via LiteLLM.
+    """Generate a summary of messages using ADK's model infrastructure.
 
-    All LLM calls go through ``litellm.completion()`` so any model
-    supported by LiteLLM works (including OpenAI-compatible endpoints
-    configured via env vars).
+    Uses ``LiteLlm.generate_content_async()`` — the same model resolution
+    pipeline that ``LlmAgent`` uses internally.  Any model string supported
+    by ADK works (Gemini, OpenAI, Anthropic, Ollama, etc.).
 
     The *model* can differ from the main agent model, allowing a cheaper
     or faster model to be used for summarization (configured via
@@ -292,14 +298,12 @@ def generate_llm_summary(
     messages:
         Messages to summarize.
     model:
-        LiteLLM model string (e.g. ``"openai/glm-5-free"``,
-        ``"gemini/gemini-2.5-flash"``).
+        Model string (e.g. ``"openai/gpt-4o-mini"``,
+        ``"gemini-2.5-flash"``, ``"anthropic/claude-3-haiku-20240307"``).
     max_input_tokens:
         Maximum tokens of conversation text to include in the prompt.
     """
     try:
-        import litellm
-
         formatted = format_messages_for_summary(messages)
 
         # Trim to max_input_tokens to avoid exceeding the summary model's limit
@@ -310,13 +314,28 @@ def generate_llm_summary(
 
         prompt = LLM_SUMMARY_PROMPT.format(messages=formatted)
 
-        response = litellm.completion(
+        llm = LiteLlm(model=model)
+        llm_request = AdkLlmRequest(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=prompt)],
+                ),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+            ),
         )
-        text = response.choices[0].message.content
-        if text:
-            return text.strip()
+
+        response = None
+        async for llm_response in llm.generate_content_async(llm_request, stream=False):
+            response = llm_response
+
+        if response is not None and response.content and response.content.parts:
+            text = response.content.parts[0].text
+            if text:
+                return text.strip()
         return None
     except Exception:
         logger.exception("LLM summary generation failed, falling back to inline")
@@ -520,7 +539,7 @@ class SummarizationState:
     last_summary: str = ""
 
 
-def maybe_summarize(
+async def maybe_summarize(
     callback_context: CallbackContext,
     llm_request: LlmRequest,
     *,
@@ -637,7 +656,7 @@ def maybe_summarize(
     summary_text: str | None = None
 
     if use_llm_summary:
-        summary_text = generate_llm_summary(
+        summary_text = await generate_llm_summary(
             to_summarize,
             model=summary_model,
             max_input_tokens=4000,

@@ -211,11 +211,11 @@ class TestOffloadToBackend:
 
 
 class TestMaybeSummarize:
-    def test_maybe_summarize_below_threshold(self):
+    async def test_maybe_summarize_below_threshold(self):
         messages = [_make_text_content("user", "short")]
         ctx = _make_callback_context()
         req = _make_llm_request(contents=messages)
-        result = maybe_summarize(
+        result = await maybe_summarize(
             ctx,
             req,
             context_window=1_000_000,
@@ -226,14 +226,14 @@ class TestMaybeSummarize:
         # Messages should be unchanged
         assert len(req.contents) == 1
 
-    def test_maybe_summarize_triggers(self):
+    async def test_maybe_summarize_triggers(self):
         # Create enough content to exceed a small threshold
         big_text = "x" * 4000  # ~1000 tokens
         messages = [_make_text_content("user", big_text) for _ in range(10)]
         ctx = _make_callback_context()
         req = _make_llm_request(contents=messages)
         # Set a tiny context window so we exceed 85% easily
-        result = maybe_summarize(
+        result = await maybe_summarize(
             ctx,
             req,
             context_window=100,
@@ -245,12 +245,12 @@ class TestMaybeSummarize:
         # Should have a summary + 4 kept messages
         assert len(req.contents) == 5
 
-    def test_maybe_summarize_updates_state(self):
+    async def test_maybe_summarize_updates_state(self):
         big_text = "x" * 4000
         messages = [_make_text_content("user", big_text) for _ in range(10)]
         ctx = _make_callback_context()
         req = _make_llm_request(contents=messages)
-        maybe_summarize(
+        await maybe_summarize(
             ctx,
             req,
             context_window=100,

@@ -1,6 +1,6 @@
 """Tests for before_model callback."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from google.genai import types
 
@@ -26,13 +26,13 @@ def _make_llm_request(system_instruction=None):
     return request
 
 
-def test_basic_callback_injects_prompts():
+async def test_basic_callback_injects_prompts():
     cb = make_before_model_callback()
     ctx = MagicMock()
     ctx.state = {}
     request = _make_llm_request()
 
-    result = cb(ctx, request)
+    result = await cb(ctx, request)
     assert result is None  # Should return None to proceed
 
     # System instruction should have been set
@@ -41,44 +41,44 @@ def test_basic_callback_injects_prompts():
     assert "Filesystem" in str(si) or "Todo" in str(si)
 
 
-def test_memory_injection():
+async def test_memory_injection():
     cb = make_before_model_callback(memory_sources=["./AGENTS.md"])
     ctx = MagicMock()
     ctx.state = {"memory_contents": {"./AGENTS.md": "I am a helpful agent."}}
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "agent_memory" in si or "memory" in si.lower()
 
 
-def test_execution_prompt_injected():
+async def test_execution_prompt_injected():
     cb = make_before_model_callback(has_execution=True)
     ctx = MagicMock()
     ctx.state = {}
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "execute" in si.lower()
 
 
-def test_subagent_docs_injected():
+async def test_subagent_docs_injected():
     descs = [{"name": "researcher", "description": "Researches topics"}]
     cb = make_before_model_callback(subagent_descriptions=descs)
     ctx = MagicMock()
     ctx.state = {}
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "researcher" in si
 
 
-def test_runtime_subagent_docs_injected_from_state():
+async def test_runtime_subagent_docs_injected_from_state():
     cb = make_before_model_callback()
     ctx = MagicMock()
     ctx.state = {
@@ -91,14 +91,14 @@ def test_runtime_subagent_docs_injected_from_state():
     }
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "summarizer" in si
     assert "register_subagent" not in si
 
 
-def test_runtime_subagent_docs_include_dynamic_guidance_when_enabled():
+async def test_runtime_subagent_docs_include_dynamic_guidance_when_enabled():
     cb = make_before_model_callback(
         dynamic_task_config=DynamicTaskConfig(),
     )
@@ -113,14 +113,14 @@ def test_runtime_subagent_docs_include_dynamic_guidance_when_enabled():
     }
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "summarizer" in si
     assert "register_subagent" in si
 
 
-def test_dynamic_task_concurrency_limits_injected():
+async def test_dynamic_task_concurrency_limits_injected():
     cb = make_before_model_callback(
         subagent_descriptions=[{"name": "general_purpose", "description": "General task agent"}],
         dynamic_task_config=DynamicTaskConfig(
@@ -133,7 +133,7 @@ def test_dynamic_task_concurrency_limits_injected():
     ctx.state = {}
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "Dynamic Task Concurrency Limits" in si
@@ -142,7 +142,7 @@ def test_dynamic_task_concurrency_limits_injected():
     assert "queue_timeout_seconds=12.5" in si
 
 
-def test_summarization_injects_compaction_prompt():
+async def test_summarization_injects_compaction_prompt():
     cb = make_before_model_callback(
         summarization_config=SummarizationConfig(use_llm_summary=False),
     )
@@ -150,13 +150,13 @@ def test_summarization_injects_compaction_prompt():
     ctx.state = {}
     request = _make_llm_request()
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     si = str(request.config.system_instruction)
     assert "compact_conversation" in si
 
 
-def test_compaction_request_forces_one_summarization_pass():
+async def test_compaction_request_forces_one_summarization_pass():
     cb = make_before_model_callback(
         summarization_config=SummarizationConfig(use_llm_summary=False),
     )
@@ -167,15 +167,19 @@ def test_compaction_request_forces_one_summarization_pass():
         types.Content(role="user", parts=[types.Part(text="hello")]),
     ]
 
-    with patch("adk_deepagents.summarization.maybe_summarize", return_value=False) as patched:
-        cb(ctx, request)
+    with patch(
+        "adk_deepagents.summarization.maybe_summarize",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as patched:
+        await cb(ctx, request)
 
     assert COMPACT_CONVERSATION_REQUEST_KEY not in ctx.state
     assert patched.call_args is not None
     assert patched.call_args.kwargs["force"] is True
 
 
-def test_dangling_tool_calls_patched():
+async def test_dangling_tool_calls_patched():
     """Dangling tool calls in state are injected as synthetic responses."""
     cb = make_before_model_callback()
     ctx = MagicMock()
@@ -198,7 +202,7 @@ def test_dangling_tool_calls_patched():
     request = _make_llm_request()
     request.contents = [model_msg]
 
-    result = cb(ctx, request)
+    result = await cb(ctx, request)
     assert result is None
 
     # The dangling calls should be consumed from state
@@ -212,7 +216,7 @@ def test_dangling_tool_calls_patched():
     assert patched_content.parts[0].function_response.id == "call_abc"
 
 
-def test_dangling_calls_not_double_patched():
+async def test_dangling_calls_not_double_patched():
     """If a response already exists for a dangling call, it's not duplicated."""
     cb = make_before_model_callback()
     ctx = MagicMock()
@@ -243,13 +247,13 @@ def test_dangling_calls_not_double_patched():
     request = _make_llm_request()
     request.contents = [model_msg, tool_msg]
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     # No extra messages should be injected since the response already exists
     assert len(request.contents) == 2
 
 
-def test_no_dangling_calls_no_patching():
+async def test_no_dangling_calls_no_patching():
     """When there are no dangling calls, contents are not modified."""
     cb = make_before_model_callback()
     ctx = MagicMock()
@@ -259,7 +263,7 @@ def test_no_dangling_calls_no_patching():
     request = _make_llm_request()
     request.contents = [msg]
 
-    cb(ctx, request)
+    await cb(ctx, request)
 
     assert len(request.contents) == 1
 
