@@ -9,6 +9,7 @@ from adk_deepagents.types import (
     SkillsConfig,
     SubAgentSpec,
     SummarizationConfig,
+    TemporalTaskConfig,
     TruncateArgsConfig,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "SkillsConfig",
     "SubAgentSpec",
     "SummarizationConfig",
+    "TemporalTaskConfig",
     "TruncateArgsConfig",
 ]

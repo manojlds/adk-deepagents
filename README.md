@@ -43,6 +43,9 @@ npm i -g @heimdall-ai/heimdall
 
 # For browser automation via Playwright MCP
 uv pip install "adk-deepagents[browser]"
+
+# For Temporal-backed dynamic task delegation
+uv pip install "adk-deepagents[temporal]"
 ```
 
 ## CLI Quickstart (`adk-deepagents`)
@@ -149,7 +152,7 @@ agent = create_deep_agent(
     browser=None,                    # "playwright" or BrowserConfig
     summarization=None,              # SummarizationConfig
     delegation_mode="static",       # "static", "dynamic", or "both"
-    dynamic_task_config=None,        # DynamicTaskConfig for task tool behavior
+    dynamic_task_config=None,        # DynamicTaskConfig (includes optional Temporal backend)
     interrupt_on=None,               # Tool names requiring approval
     name="deep_agent",              # Agent name
 )
@@ -323,6 +326,30 @@ agent = create_deep_agent(
 Use `delegation_mode="both"` to keep static sub-agent tools and add the dynamic
 `task` tool side by side.
 
+#### Temporal-backed dynamic tasks
+
+To run delegated `task()` turns on Temporal workers instead of in-process
+sessions, set `DynamicTaskConfig.temporal`:
+
+```python
+from adk_deepagents import create_deep_agent
+from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
+
+agent = create_deep_agent(
+    delegation_mode="dynamic",
+    dynamic_task_config=DynamicTaskConfig(
+        temporal=TemporalTaskConfig(
+            target_host="127.0.0.1:7233",
+            namespace="default",
+            task_queue="adk-deepagents-tasks",
+        )
+    ),
+)
+```
+
+See [docs/temporal.md](docs/temporal.md) for worker setup, `devenv` services,
+and integration test instructions.
+
 ### Summarization
 
 Automatic context window management. When the conversation exceeds a configurable fraction of the context window, older messages are replaced with a condensed summary.
@@ -443,6 +470,11 @@ adk_deepagents/
 │   └── prompts.py       # Browser agent system prompts
 ├── skills/
 │   └── integration.py   # adk-skills registry integration
+├── temporal/
+│   ├── client.py        # Temporal workflow dispatch client
+│   ├── workflows.py     # Dynamic task workflow definition
+│   ├── activities.py    # Dynamic task activity implementation
+│   └── worker.py        # Temporal worker factory
 └── tools/
     ├── compact.py       # Manual conversation compaction tool
     ├── filesystem.py    # Filesystem tool implementations

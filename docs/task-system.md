@@ -100,6 +100,8 @@ future turns.
 - `max_depth`: delegation depth cap (`_dynamic_delegation_depth`)
 - `timeout_seconds`: per dynamic task run timeout
 - `allow_model_override`: controls whether `model=` input is honored
+- `temporal`: optional `TemporalTaskConfig`; when set, each task turn is
+  dispatched to Temporal workflows/workers instead of in-process child sessions
 
 Enforcement is inside `task(...)` before/around child execution.
 
@@ -110,6 +112,26 @@ wait for a free concurrency slot instead of immediately returning a
 The parent model is also informed of the active dynamic task limits via
 before-model system prompt injection (max parallelism, policy, queue timeout)
 so it can plan task waves proactively.
+
+## Temporal execution path (optional)
+
+When `DynamicTaskConfig.temporal` is configured:
+
+1. `task()` builds a JSON-serializable task snapshot.
+2. `adk_deepagents.temporal.client.run_task_via_temporal()` dispatches that
+   snapshot to a deterministic workflow ID (`{prefix}:{parent_id}:{task_id}`).
+3. Workflow update `run_turn` executes activity `run_dynamic_task`.
+4. The activity runs one delegated sub-agent turn, then returns
+   `{result, function_calls, files, todos, timed_out, error}`.
+
+When Temporal is enabled, the parent process does not need to instantiate
+in-process child runtimes for execution and can resume `task_id` turns from
+persisted metadata alone. Runtime sub-agent specializations registered via
+`register_subagent` are serialized into task snapshots and forwarded to the
+worker for execution parity. Temporal update calls carry a spec hash and only
+send full spec payloads when the specialization changes.
+
+See [Temporal Backend](temporal.md) for setup details.
 
 ## State model (persisted vs process-local)
 
@@ -183,5 +205,8 @@ Primary tests covering this system:
 - `tests/integration_tests/test_agent_creation.py`
 - `tests/unit_tests/test_task_dynamic.py`
 - `tests/integration_tests/llm/test_dynamic_task_delegation.py`
+- `tests/integration_tests/llm/test_temporal_dynamic_task_delegation.py`
+- `tests/integration_tests/test_temporal_workflow_local_env.py`
 - `tests/integration_tests/llm/test_deep_research_dynamic.py`
 - `tests/integration_tests/test_callback_pipeline.py`
+- `tests/unit_tests/temporal/`
