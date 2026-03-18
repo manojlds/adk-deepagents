@@ -296,6 +296,66 @@ def _load_runtime_subagent_specs(
     return runtime_registry
 
 
+def _coerce_subagent_spec_payload(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    raw_name = value.get("name")
+    raw_description = value.get("description")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        return None
+    if not isinstance(raw_description, str) or not raw_description.strip():
+        return None
+
+    payload: dict[str, Any] = {
+        "name": _normalize_subagent_type(raw_name),
+        "description": raw_description.strip(),
+    }
+
+    raw_system_prompt = value.get("system_prompt")
+    if isinstance(raw_system_prompt, str) and raw_system_prompt.strip():
+        payload["system_prompt"] = raw_system_prompt.strip()
+
+    raw_model = value.get("model")
+    if isinstance(raw_model, str) and raw_model.strip():
+        payload["model"] = raw_model.strip()
+
+    raw_tool_names = value.get("tool_names")
+    if isinstance(raw_tool_names, list):
+        normalized_tool_names: list[str] = []
+        seen: set[str] = set()
+        for entry in raw_tool_names:
+            if not isinstance(entry, str):
+                continue
+            name = entry.strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            normalized_tool_names.append(name)
+        payload["tool_names"] = normalized_tool_names
+
+    return payload
+
+
+def _runtime_subagent_spec_payload(*, state: Any, subagent_type: str) -> dict[str, Any] | None:
+    raw_store = state.get(_RUNTIME_SUBAGENT_STORE_KEY, {})
+    if not isinstance(raw_store, dict):
+        return None
+
+    direct = _coerce_subagent_spec_payload(raw_store.get(subagent_type))
+    if direct is not None:
+        return direct
+
+    for raw_spec in raw_store.values():
+        payload = _coerce_subagent_spec_payload(raw_spec)
+        if payload is None:
+            continue
+        if _normalize_subagent_type(payload["name"]) == subagent_type:
+            return payload
+
+    return None
+
+
 def _coerce_backend_factory(value: Any) -> BackendFactory | None:
     if callable(value):
         return cast(BackendFactory, value)
@@ -629,6 +689,32 @@ async def _run_dynamic_task(
     }
 
 
+async def _run_dynamic_task_temporal(
+    snapshot_data: dict[str, Any],
+    *,
+    logical_parent_id: str,
+    task_id: str,
+    task_config: DynamicTaskConfig,
+) -> dict[str, Any]:
+    """Dispatch a dynamic task turn to Temporal."""
+    try:
+        from adk_deepagents.temporal.activities import TaskSnapshot
+        from adk_deepagents.temporal.client import run_task_via_temporal
+    except ImportError:
+        raise ImportError(
+            "Temporal support requires the 'temporalio' package. "
+            "Install it with: pip install adk-deepagents[temporal]"
+        ) from None
+
+    snapshot = TaskSnapshot.from_dict(snapshot_data)
+    return await run_task_via_temporal(
+        snapshot=snapshot,
+        logical_parent_id=logical_parent_id,
+        task_id=task_id,
+        task_config=task_config,
+    )
+
+
 def create_dynamic_task_tool(
     *,
     default_model: str | Any,
@@ -672,9 +758,11 @@ def create_dynamic_task_tool(
 
         runtime: _TaskRuntime | None = None
         task_state: dict[str, Any] | None = None
+        temporal_enabled = task_config.temporal is not None
         created_subagent = False
         recovered_runtime = False
         resume_with_history = False
+        subagent_spec_payload: dict[str, Any] | None = None
         normalized_type = _normalize_subagent_type(subagent_type)
         logical_parent_id = tool_context.state.get(_TASK_PARENT_ID_KEY)
         if not isinstance(logical_parent_id, str) or not logical_parent_id:
@@ -724,10 +812,17 @@ def create_dynamic_task_tool(
 
             task_depth = _coerce_positive_int(existing.get("depth"), current_depth + 1)
             run_key = f"{logical_parent_id}:{task_id}"
-            runtime = _RUNTIME_REGISTRY.get(run_key)
+            runtime = None if temporal_enabled else _RUNTIME_REGISTRY.get(run_key)
             if runtime is None:
                 selected = selected_registry.get(normalized_type)
-                if selected is None:
+                subagent_spec_payload = _coerce_subagent_spec_payload(existing.get("subagent_spec"))
+                if subagent_spec_payload is None:
+                    subagent_spec_payload = _runtime_subagent_spec_payload(
+                        state=tool_context.state,
+                        subagent_type=normalized_type,
+                    )
+
+                if selected is None and subagent_spec_payload is None:
                     return {
                         "status": "error",
                         "task_id": task_id,
@@ -755,62 +850,70 @@ def create_dynamic_task_tool(
                 else:
                     task_todos = _coerce_todos_state(tool_context.state.get("todos", []))
 
-                if isinstance(selected, LlmAgent):
-                    if model_override and not task_config.allow_model_override:
-                        return {
-                            "status": "error",
-                            "error": "Model override is disabled for dynamic task delegation",
-                            "task_id": task_id,
-                        }
-                    child_agent = selected
-                else:
-                    try:
-                        child_agent = _build_spec_agent(
-                            selected,
-                            default_model=default_model,
-                            default_tools=default_tools,
-                            skills_config=skills_config,
-                            model_override=model_override,
-                            config=task_config,
-                            before_agent_callback=before_agent_callback,
-                            before_model_callback=before_model_callback,
-                            after_tool_callback=after_tool_callback,
-                            default_interrupt_on=default_interrupt_on,
-                        )
-                    except ValueError as exc:
-                        return {
-                            "status": "error",
-                            "error": str(exc),
-                            "task_id": task_id,
-                            "subagent_type": normalized_type,
-                        }
+                if model_override and not task_config.allow_model_override:
+                    return {
+                        "status": "error",
+                        "error": "Model override is disabled for dynamic task delegation",
+                        "task_id": task_id,
+                    }
 
-                normalized_type = (
-                    _sanitize_agent_name(selected.name)
-                    if isinstance(selected, LlmAgent)
-                    else _sanitize_agent_name(selected.get("name", "general_purpose"))
-                )
+                if selected is not None:
+                    normalized_type = (
+                        _sanitize_agent_name(selected.name)
+                        if isinstance(selected, LlmAgent)
+                        else _sanitize_agent_name(selected.get("name", "general_purpose"))
+                    )
+                elif subagent_spec_payload is not None:
+                    normalized_type = _normalize_subagent_type(subagent_spec_payload["name"])
 
-                runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
-                session = await runner.session_service.create_session(
-                    app_name="dynamic_task",
-                    user_id="dynamic_task_user",
-                    state={
-                        "files": task_files,
-                        "todos": task_todos,
-                        _TASK_DEPTH_KEY: task_depth,
-                    },
-                )
-                runtime = _TaskRuntime(
-                    runner=runner,
-                    session_id=session.id,
-                    user_id="dynamic_task_user",
-                    subagent_type=normalized_type,
-                )
-                _RUNTIME_REGISTRY[run_key] = runtime
+                if not temporal_enabled:
+                    assert selected is not None
+                    if isinstance(selected, LlmAgent):
+                        child_agent = selected
+                    else:
+                        try:
+                            child_agent = _build_spec_agent(
+                                selected,
+                                default_model=default_model,
+                                default_tools=default_tools,
+                                skills_config=skills_config,
+                                model_override=model_override,
+                                config=task_config,
+                                before_agent_callback=before_agent_callback,
+                                before_model_callback=before_model_callback,
+                                after_tool_callback=after_tool_callback,
+                                default_interrupt_on=default_interrupt_on,
+                            )
+                        except ValueError as exc:
+                            return {
+                                "status": "error",
+                                "error": str(exc),
+                                "task_id": task_id,
+                                "subagent_type": normalized_type,
+                            }
 
-                if runtime_backend_factory is not None:
-                    register_backend_factory(runtime.session_id, runtime_backend_factory)
+                    runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
+                    session = await runner.session_service.create_session(
+                        app_name="dynamic_task",
+                        user_id="dynamic_task_user",
+                        state={
+                            "files": task_files,
+                            "todos": task_todos,
+                            _TASK_DEPTH_KEY: task_depth,
+                        },
+                    )
+                    runtime = _TaskRuntime(
+                        runner=runner,
+                        session_id=session.id,
+                        user_id="dynamic_task_user",
+                        subagent_type=normalized_type,
+                    )
+                    _RUNTIME_REGISTRY[run_key] = runtime
+
+                    if runtime_backend_factory is not None:
+                        register_backend_factory(runtime.session_id, runtime_backend_factory)
+
+                    recovered_runtime = True
 
                 existing["subagent_type"] = normalized_type
                 existing["depth"] = task_depth
@@ -818,12 +921,15 @@ def create_dynamic_task_tool(
                 existing["todos"] = task_todos
                 if model_override is not None:
                     existing["model_override"] = model_override
+                if subagent_spec_payload is not None:
+                    existing["subagent_spec"] = subagent_spec_payload
 
                 history = _normalized_task_history(existing.get("history"))
                 existing["history"] = history
                 resume_with_history = bool(history)
-                recovered_runtime = True
-            normalized_type = runtime.subagent_type
+
+            if runtime is not None:
+                normalized_type = runtime.subagent_type
         else:
             if current_depth + 1 > task_config.max_depth:
                 return {
@@ -865,52 +971,65 @@ def create_dynamic_task_tool(
                 else _sanitize_agent_name(selected.get("name", "general_purpose"))
             )
 
-            if isinstance(selected, LlmAgent):
-                if model and not task_config.allow_model_override:
-                    return {
-                        "status": "error",
-                        "error": "Model override is disabled for dynamic task delegation",
-                        "task_id": task_id,
-                    }
-                child_agent = selected
-            else:
-                try:
-                    child_agent = _build_spec_agent(
-                        selected,
-                        default_model=default_model,
-                        default_tools=default_tools,
-                        skills_config=skills_config,
-                        model_override=model,
-                        config=task_config,
-                        before_agent_callback=before_agent_callback,
-                        before_model_callback=before_model_callback,
-                        after_tool_callback=after_tool_callback,
-                        default_interrupt_on=default_interrupt_on,
-                    )
-                except ValueError as exc:
-                    return {
-                        "status": "error",
-                        "error": str(exc),
-                        "task_id": task_id,
-                        "created_subagent": created_subagent,
-                    }
-
-            runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
-            session = await runner.session_service.create_session(
-                app_name="dynamic_task",
-                user_id="dynamic_task_user",
-                state={
-                    "files": _coerce_files_state(tool_context.state.get("files", {})),
-                    "todos": _coerce_todos_state(tool_context.state.get("todos", [])),
-                    _TASK_DEPTH_KEY: task_depth,
-                },
-            )
-            runtime = _TaskRuntime(
-                runner=runner,
-                session_id=session.id,
-                user_id="dynamic_task_user",
+            subagent_spec_payload = _runtime_subagent_spec_payload(
+                state=tool_context.state,
                 subagent_type=normalized_type,
             )
+
+            model_override = model.strip() if isinstance(model, str) and model.strip() else None
+            if model_override and not task_config.allow_model_override:
+                return {
+                    "status": "error",
+                    "error": "Model override is disabled for dynamic task delegation",
+                    "task_id": task_id,
+                }
+
+            if not temporal_enabled:
+                if isinstance(selected, LlmAgent):
+                    child_agent = selected
+                else:
+                    try:
+                        child_agent = _build_spec_agent(
+                            selected,
+                            default_model=default_model,
+                            default_tools=default_tools,
+                            skills_config=skills_config,
+                            model_override=model_override,
+                            config=task_config,
+                            before_agent_callback=before_agent_callback,
+                            before_model_callback=before_model_callback,
+                            after_tool_callback=after_tool_callback,
+                            default_interrupt_on=default_interrupt_on,
+                        )
+                    except ValueError as exc:
+                        return {
+                            "status": "error",
+                            "error": str(exc),
+                            "task_id": task_id,
+                            "created_subagent": created_subagent,
+                        }
+
+                runner = InMemoryRunner(agent=child_agent, app_name="dynamic_task")
+                session = await runner.session_service.create_session(
+                    app_name="dynamic_task",
+                    user_id="dynamic_task_user",
+                    state={
+                        "files": _coerce_files_state(tool_context.state.get("files", {})),
+                        "todos": _coerce_todos_state(tool_context.state.get("todos", [])),
+                        _TASK_DEPTH_KEY: task_depth,
+                    },
+                )
+                runtime = _TaskRuntime(
+                    runner=runner,
+                    session_id=session.id,
+                    user_id="dynamic_task_user",
+                    subagent_type=normalized_type,
+                )
+                _RUNTIME_REGISTRY[f"{logical_parent_id}:{task_id}"] = runtime
+
+                if runtime_backend_factory is not None:
+                    register_backend_factory(runtime.session_id, runtime_backend_factory)
+
             task_state = {
                 "subagent_type": normalized_type,
                 "depth": task_depth,
@@ -918,15 +1037,13 @@ def create_dynamic_task_tool(
                 "todos": _coerce_todos_state(tool_context.state.get("todos", [])),
                 "history": [],
             }
-            if isinstance(model, str) and model.strip():
-                task_state["model_override"] = model.strip()
+            if model_override is not None:
+                task_state["model_override"] = model_override
+            if subagent_spec_payload is not None:
+                task_state["subagent_spec"] = subagent_spec_payload
             store[task_id] = task_state
-            _RUNTIME_REGISTRY[f"{logical_parent_id}:{task_id}"] = runtime
 
-            if runtime_backend_factory is not None:
-                register_backend_factory(runtime.session_id, runtime_backend_factory)
-
-        if runtime is None:
+        if not temporal_enabled and runtime is None:
             return {"status": "error", "error": "Failed to initialize dynamic task runtime"}
 
         if task_id is None:
@@ -943,6 +1060,15 @@ def create_dynamic_task_tool(
                     "history": [],
                 }
                 store[task_id] = task_state
+
+        subagent_spec_payload = _coerce_subagent_spec_payload(task_state.get("subagent_spec"))
+        if subagent_spec_payload is None:
+            subagent_spec_payload = _runtime_subagent_spec_payload(
+                state=tool_context.state,
+                subagent_type=normalized_type,
+            )
+            if subagent_spec_payload is not None:
+                task_state["subagent_spec"] = subagent_spec_payload
 
         run_key = f"{logical_parent_id}:{task_id}"
         acquired, acquire_error, queue_wait_seconds = await _acquire_concurrency_slot(
@@ -968,11 +1094,30 @@ def create_dynamic_task_tool(
             task_prompt = _build_resume_prompt(history=history, prompt=resolved_prompt)
 
         try:
-            result = await _run_dynamic_task(
-                runtime,
-                prompt=task_prompt,
-                timeout_seconds=task_config.timeout_seconds,
-            )
+            if temporal_enabled:
+                result = await _run_dynamic_task_temporal(
+                    snapshot_data={
+                        "subagent_type": normalized_type,
+                        "prompt": task_prompt,
+                        "depth": _coerce_positive_int(task_state.get("depth"), current_depth + 1),
+                        "files": _coerce_files_state(task_state.get("files")),
+                        "todos": _coerce_todos_state(task_state.get("todos")),
+                        "history": _normalized_task_history(task_state.get("history")),
+                        "model_override": task_state.get("model_override"),
+                        "subagent_spec": subagent_spec_payload,
+                        "timeout_seconds": task_config.timeout_seconds,
+                    },
+                    logical_parent_id=logical_parent_id,
+                    task_id=task_id,
+                    task_config=task_config,
+                )
+            else:
+                assert runtime is not None
+                result = await _run_dynamic_task(
+                    runtime,
+                    prompt=task_prompt,
+                    timeout_seconds=task_config.timeout_seconds,
+                )
         finally:
             await _release_concurrency_slot(
                 running_tasks=running_tasks,

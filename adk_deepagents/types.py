@@ -26,6 +26,43 @@ SubAgentSpec.__required_keys__ = frozenset({"name", "description"})
 
 
 @dataclass
+class TemporalTaskConfig:
+    """Configuration for running dynamic tasks on Temporal workers.
+
+    Attach this to ``DynamicTaskConfig.temporal`` to dispatch dynamic
+    sub-agent turns through Temporal workflows instead of in-process
+    ``InMemoryRunner`` execution.
+
+    Requires ``pip install adk-deepagents[temporal]``.
+    """
+
+    target_host: str = "localhost:7233"
+    """Temporal server gRPC endpoint."""
+
+    namespace: str = "default"
+    """Temporal namespace."""
+
+    task_queue: str = "adk-deepagents-tasks"
+    """Task queue used by Temporal workers for dynamic task workflows."""
+
+    workflow_id_prefix: str = "dynamic-task"
+    """Workflow ID prefix. IDs are ``{prefix}:{parent_id}:{task_id}``."""
+
+    activity_timeout_seconds: float | None = None
+    """Optional activity timeout override.
+
+    If ``None``, the worker uses ``DynamicTaskConfig.timeout_seconds``.
+    """
+
+    retry_max_attempts: int = 1
+    """Maximum activity retry attempts (default: no retries)."""
+
+    idle_timeout_seconds: float = 600.0
+    """Seconds a workflow may sit idle (no ``run_turn`` updates) before
+    it automatically completes.  Prevents leaked workflows."""
+
+
+@dataclass
 class DynamicTaskConfig:
     """Configuration for dynamic task-based sub-agent delegation."""
 
@@ -50,6 +87,13 @@ class DynamicTaskConfig:
 
     allow_model_override: bool = False
     """Allow callers to override the sub-agent model per task invocation."""
+
+    temporal: TemporalTaskConfig | None = None
+    """Optional Temporal backend for dynamic task execution.
+
+    When set, ``task()`` dispatches sub-agent turns to Temporal workers
+    instead of running child sessions in-process.
+    """
 
 
 @dataclass

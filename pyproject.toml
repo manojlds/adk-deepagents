@@ -19,6 +19,9 @@ skills = [
 browser = [
     "google-adk[mcp]>=1.0.0",
 ]
+temporal = [
+    "temporalio>=1.23,<2",
+]
 
 [project.scripts]
 adk-deepagents = "adk_deepagents.cli.main:cli_main"
@@ -31,6 +34,7 @@ dev = [
     "pytest-asyncio>=0.21",
     "pytest-timeout>=2.0",
     "ruff>=0.4",
+    "temporalio>=1.23,<2",
     "ty>=0.0.15",
 ]
 
