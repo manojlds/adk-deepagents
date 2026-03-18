@@ -12,6 +12,7 @@ Build autonomous, tool-using AI agents with filesystem access, shell execution, 
 | **Shell execution** | Local subprocess or sandboxed execution via [Heimdall MCP](https://github.com/heimdall-ai/heimdall) |
 | **Browser automation** | Navigate, interact with, and extract data from websites via [@playwright/mcp](https://github.com/microsoft/playwright-mcp) or [agent-browser](https://github.com/vercel-labs/agent-browser) CLI skill |
 | **Sub-agent delegation** | Spawn child agents for isolated, parallelizable sub-tasks with `AgentTool` |
+| **Temporal backend (optional)** | Dispatch dynamic `task()` delegation to Temporal workflows/workers |
 | **Conversation summarization** | Automatic context window management — older messages are replaced with condensed summaries |
 | **Persistent memory** | Load `AGENTS.md` files into the system prompt across sessions |
 | **Todo tracking** | Built-in `write_todos` / `read_todos` tools for task management |
@@ -98,6 +99,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Sub-Agent Delegation](subagents.md) | Static `AgentTool` delegation, `SubAgentSpec`, general-purpose sub-agent behavior |
 | [Skills Integration](skills.md) | Root-agent and sub-agent skills, `add_skills_tools`, prompt injection |
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
+| [Temporal Backend](temporal.md) | Configure Temporal-backed dynamic tasks, workers, and devenv services |
 
 ## Project Structure
 
@@ -131,6 +133,11 @@ adk_deepagents/
 │   └── prompts.py       # Browser agent system prompts
 ├── skills/
 │   └── integration.py   # adk-skills registry integration
+├── temporal/
+│   ├── client.py        # Temporal workflow dispatch client
+│   ├── workflows.py     # Dynamic task workflow definition
+│   ├── activities.py    # Dynamic task activity implementation
+│   └── worker.py        # Temporal worker factory
 └── tools/
     ├── filesystem.py    # ls, read_file, write_file, edit_file, glob, grep
     ├── todos.py         # write_todos, read_todos
