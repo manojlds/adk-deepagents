@@ -179,3 +179,34 @@ def test_activity_labels_cover_all_phases() -> None:
     assert _activity_label_for_phase("tool") == "Running tools"
     assert _activity_label_for_phase("responding") == "Responding"
     assert _activity_label_for_phase("approval") == "Awaiting approval"
+
+
+class TestCancelTurn:
+    """Test the cancel_turn() method."""
+
+    def test_cancel_returns_false_when_not_busy(self) -> None:
+        service = _service()
+        assert service.cancel_turn() is False
+
+    def test_cancel_returns_false_when_no_task(self) -> None:
+        service = _service()
+        service._busy = True
+        service._turn_task = None
+        assert service.cancel_turn() is False
+
+    def test_cancel_returns_true_and_cancels_task(self) -> None:
+        service = _service()
+        service._busy = True
+
+        async def _noop() -> None:
+            await asyncio.sleep(10)
+
+        loop = asyncio.new_event_loop()
+        try:
+            task = loop.create_task(_noop())
+            service._turn_task = task
+            result = service.cancel_turn()
+            assert result is True
+            assert task.cancelled() or task.cancel()
+        finally:
+            loop.close()
