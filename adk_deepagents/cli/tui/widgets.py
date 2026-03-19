@@ -273,6 +273,51 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
 
 
 # ---------------------------------------------------------------------------
+# SubmittableTextArea – TextArea that submits on Enter, newline on Shift+Enter
+# ---------------------------------------------------------------------------
+
+
+class SubmittableTextArea(TextArea):
+    """A ``TextArea`` where **Enter** submits and **Shift+Enter** inserts a newline.
+
+    Textual's stock ``TextArea._on_key`` intercepts the ``enter`` key and
+    inserts ``"\\n"`` *before* the event can bubble to the parent widget.
+    This subclass overrides that behaviour so that plain Enter fires a
+    ``Submitted`` message while Shift+Enter (or Ctrl+Enter) still inserts
+    a newline.
+    """
+
+    class Submitted(Message):
+        """Fired when the user presses Enter (without Shift/Ctrl)."""
+
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "enter" and not self.read_only:
+            # Plain Enter → submit the text instead of inserting a newline.
+            event.stop()
+            event.prevent_default()
+            value = self.text.strip()
+            if value:
+                self.post_message(self.Submitted(value))
+                self.clear()
+            return
+
+        if event.key in {"shift+enter", "ctrl+enter"} and not self.read_only:
+            # Shift/Ctrl+Enter → insert a newline (mimic stock behaviour).
+            event.stop()
+            event.prevent_default()
+            start, end = self.selection
+            self._replace_via_keyboard("\n", start, end)
+            return
+
+        # Everything else → delegate to the stock handler.
+        await super()._on_key(event)
+
+
+# ---------------------------------------------------------------------------
 # PromptInput – multi-line TextArea with slash-command picker
 # ---------------------------------------------------------------------------
 
@@ -293,15 +338,15 @@ class PromptInput(Static):
         padding: 0 1;
     }
 
-    PromptInput TextArea {
+    PromptInput SubmittableTextArea {
         width: 1fr;
-        min-height: 1;
+        min-height: 3;
         max-height: 10;
-        border: none;
+        border: tall $accent;
     }
 
-    PromptInput TextArea:focus {
-        border: none;
+    PromptInput SubmittableTextArea:focus {
+        border: tall $accent;
     }
 
     PromptInput .prompt-placeholder {
@@ -343,17 +388,22 @@ class PromptInput(Static):
     def compose(self) -> ComposeResult:
         yield OptionList(id="command-picker")
         yield Static("Send a message or /help", classes="prompt-placeholder visible")
-        yield TextArea(id="prompt-input", language=None)
+        yield SubmittableTextArea(id="prompt-input", language=None)
 
     def on_mount(self) -> None:
-        ta = self.query_one("#prompt-input", TextArea)
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
         ta.show_line_numbers = False
-        # Start with one line visible.
-        ta.styles.height = 1
+
+    def on_submittable_text_area_submitted(self, event: SubmittableTextArea.Submitted) -> None:
+        """Relay the submission from the TextArea as a PromptInput.Submitted."""
+        event.stop()
+        picker = self.query_one("#command-picker", OptionList)
+        picker.remove_class("visible")
+        self.post_message(self.Submitted(event.value))
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         """Show/hide the slash-command picker and manage placeholder."""
-        ta = self.query_one("#prompt-input", TextArea)
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
         text = ta.text
         placeholder = self.query_one(".prompt-placeholder", Static)
 
@@ -362,10 +412,6 @@ class PromptInput(Static):
             placeholder.remove_class("visible")
         else:
             placeholder.add_class("visible")
-
-        # Auto-resize height (min 1, max 10 lines)
-        line_count = max(1, min(10, text.count("\n") + 1))
-        ta.styles.height = line_count
 
         # Slash-command picker
         picker = self.query_one("#command-picker", OptionList)
@@ -386,9 +432,8 @@ class PromptInput(Static):
             picker.remove_class("visible")
 
     def on_key(self, event: events.Key) -> None:
-        """Handle Enter/Shift+Enter and forward arrow keys to picker."""
+        """Forward arrow keys to the picker and handle Escape."""
         picker = self.query_one("#command-picker", OptionList)
-        ta = self.query_one("#prompt-input", TextArea)
 
         # Close picker on Escape
         if event.key == "escape" and picker.has_class("visible"):
@@ -402,18 +447,6 @@ class PromptInput(Static):
             picker.focus()
             return
 
-        # Enter = submit (no modifier), Shift+Enter / Ctrl+Enter = newline
-        if event.key == "enter":
-            event.prevent_default()
-            event.stop()
-            value = ta.text.strip()
-            if value:
-                self.post_message(self.Submitted(value))
-                ta.clear()
-                # Reset picker
-                picker.remove_class("visible")
-            return
-
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Fill the input with the selected slash command."""
         event.stop()
@@ -421,7 +454,7 @@ class PromptInput(Static):
         picker.remove_class("visible")
 
         cmd_id = event.option_id or ""
-        ta = self.query_one("#prompt-input", TextArea)
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
 
         # Commands with no arguments — submit immediately
         if cmd_id in {"/help", "/clear", "/quit", "/details", "/compact"}:
@@ -438,12 +471,12 @@ class PromptInput(Static):
             ta.focus()
 
     def disable_input(self) -> None:
-        ta = self.query_one("#prompt-input", TextArea)
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
         ta.read_only = True
         self.query_one("#command-picker", OptionList).remove_class("visible")
 
     def enable_input(self) -> None:
-        ta = self.query_one("#prompt-input", TextArea)
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
         ta.read_only = False
         ta.focus()
         placeholder = self.query_one(".prompt-placeholder", Static)
@@ -458,7 +491,7 @@ class PromptInput(Static):
             placeholder.add_class("visible")
         else:
             placeholder.update("Send a message or /help")
-            ta = self.query_one("#prompt-input", TextArea)
+            ta = self.query_one("#prompt-input", SubmittableTextArea)
             if not ta.text:
                 placeholder.add_class("visible")
             else:

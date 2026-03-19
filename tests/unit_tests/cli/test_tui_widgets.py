@@ -16,6 +16,7 @@ from adk_deepagents.cli.tui.widgets import (
     CommandPaletteItem,
     MessageDisplay,
     PromptInput,
+    SubmittableTextArea,
 )
 
 
@@ -175,3 +176,19 @@ class TestCommandPaletteClass:
     def test_default_css_exists(self):
         assert CommandPalette.DEFAULT_CSS is not None
         assert isinstance(CommandPalette.DEFAULT_CSS, str)
+
+
+class TestSubmittableTextArea:
+    """Test SubmittableTextArea class structure."""
+
+    def test_has_submitted_message(self):
+        assert hasattr(SubmittableTextArea, "Submitted")
+
+    def test_submitted_message_value(self):
+        msg = SubmittableTextArea.Submitted(value="hello")
+        assert msg.value == "hello"
+
+    def test_is_textarea_subclass(self):
+        from textual.widgets import TextArea
+
+        assert issubclass(SubmittableTextArea, TextArea)
