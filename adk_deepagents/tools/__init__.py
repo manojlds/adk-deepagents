@@ -9,13 +9,16 @@ from adk_deepagents.tools.filesystem import (
     read_file,
     write_file,
 )
+from adk_deepagents.tools.http import fetch_url, http_request
 from adk_deepagents.tools.todos import read_todos, write_todos
 
 __all__ = [
     "create_compact_conversation_tool",
     "edit_file",
+    "fetch_url",
     "glob",
     "grep",
+    "http_request",
     "ls",
     "read_file",
     "read_todos",

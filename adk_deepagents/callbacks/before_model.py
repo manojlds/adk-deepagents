@@ -203,14 +203,49 @@ def _clear_state_key(state: Any, key: str) -> None:
         state[key] = None
 
 
+def _inject_queued_messages(
+    llm_request: LlmRequest,
+    queued: list[Any],
+) -> None:
+    """Inject externally queued messages into the LLM request.
+
+    Messages are expected as dicts with at least a ``"text"`` key.
+    They are merged into a single user message appended to the
+    conversation contents.
+    """
+    if not llm_request.contents:
+        return
+
+    text_parts: list[str] = []
+    for msg in queued:
+        if not isinstance(msg, dict):
+            continue
+        text = msg.get("text")
+        if isinstance(text, str) and text.strip():
+            text_parts.append(text.strip())
+
+    if not text_parts:
+        return
+
+    combined_text = "\n\n---\n\n".join(text_parts)
+    injected = types.Content(
+        role="user",
+        parts=[types.Part(text=f"[Injected message]\n{combined_text}")],
+    )
+    llm_request.contents.append(injected)
+
+
 def make_before_model_callback(
     *,
     memory_sources: list[str] | None = None,
     has_execution: bool = False,
+    has_http_tools: bool = False,
     subagent_descriptions: list[dict[str, str]] | None = None,
     dynamic_task_config: DynamicTaskConfig | None = None,
     summarization_config: SummarizationConfig | None = None,
     backend_factory: BackendFactory | None = None,
+    message_queue: bool = False,
+    multimodal: bool = False,
 ) -> Callable:
     """Create a ``before_model_callback`` that injects dynamic system prompts.
 
@@ -220,6 +255,8 @@ def make_before_model_callback(
         List of AGENTS.md paths (loaded by before_agent_callback into state).
     has_execution:
         Whether execution tools (Heimdall/local) are available.
+    has_http_tools:
+        Whether HTTP tools (fetch_url, http_request) are available.
     subagent_descriptions:
         List of ``{"name": ..., "description": ...}`` for sub-agents.
     dynamic_task_config:
@@ -230,6 +267,12 @@ def make_before_model_callback(
     backend_factory:
         Optional factory for creating backends (used by summarization
         for history offloading).
+    message_queue:
+        When ``True``, check ``state["_message_queue"]`` for externally
+        injected messages and append them to the LLM request contents.
+    multimodal:
+        When ``True``, scan user messages for image URLs and fetch them
+        as inline base64 data parts for multimodal model support.
     """
 
     async def before_model_callback(
@@ -249,6 +292,13 @@ def make_before_model_callback(
         if dangling and llm_request.contents:
             _inject_dangling_tool_responses(llm_request, dangling)
 
+        # 0b. Process message queue (externally injected messages)
+        if message_queue and llm_request.contents is not None:
+            queued = state.get("_message_queue")
+            if queued and isinstance(queued, list):
+                _clear_state_key(state, "_message_queue")
+                _inject_queued_messages(llm_request, queued)
+
         additions: list[str] = []
 
         # Todo tools documentation
@@ -260,6 +310,12 @@ def make_before_model_callback(
         # Execution tools documentation
         if has_execution:
             additions.append(EXECUTION_SYSTEM_PROMPT)
+
+        # HTTP tools documentation
+        if has_http_tools:
+            from adk_deepagents.prompts import HTTP_SYSTEM_PROMPT
+
+            additions.append(HTTP_SYSTEM_PROMPT)
 
         # Memory injection
         if memory_sources:
@@ -306,6 +362,17 @@ def make_before_model_callback(
                 truncate_args_config=summarization_config.truncate_args,
                 force=force_compaction,
             )
+
+        # Multimodal: fetch and attach images from user messages
+        if multimodal and llm_request.contents:
+            from adk_deepagents.tools.multimodal import process_multimodal_content
+
+            # Use state to cache fetched images across turns
+            image_cache = state.get("_image_cache")
+            if not isinstance(image_cache, dict):
+                image_cache = {}
+            process_multimodal_content(llm_request.contents, fetched_cache=image_cache)
+            state["_image_cache"] = image_cache
 
         return None  # Proceed with LLM call
 

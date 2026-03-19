@@ -19,6 +19,9 @@ skills = [
 browser = [
     "google-adk[mcp]>=1.0.0",
 ]
+http = [
+    "markdownify>=0.11",
+]
 temporal = [
     "temporalio>=1.23,<2",
 ]
