@@ -71,6 +71,34 @@ The context window is resolved dynamically via `model_info.resolve_context_windo
 4. **Static fallback** — small built-in table for common models
 5. **Default** — `200,000` tokens (`DEFAULT_CONTEXT_WINDOW`)
 
+Results are cached with `@lru_cache(maxsize=64)` so repeated lookups for the same model are instant.
+
+**Static fallback table** (used when litellm and google.genai are unavailable):
+
+| Model | Context Window |
+|-------|---------------|
+| `gemini-2.5-flash` | 1,048,576 |
+| `gemini-2.5-pro` | 1,048,576 |
+| `gemini-2.0-flash` | 1,048,576 |
+| `gemini-1.5-flash` | 1,048,576 |
+| `gemini-1.5-pro` | 2,097,152 |
+| `gpt-4o` | 128,000 |
+| `gpt-4o-mini` | 128,000 |
+| `gpt-4-turbo` | 128,000 |
+| `claude-3-opus` | 200,000 |
+| `claude-3-sonnet` | 200,000 |
+| `claude-3-haiku` | 200,000 |
+| `claude-3.5-sonnet` | 200,000 |
+| `claude-sonnet-4` | 1,000,000 |
+
+```python
+from adk_deepagents.model_info import resolve_context_window
+
+resolve_context_window("gemini-2.5-flash")  # → 1048576 (from litellm or fallback)
+resolve_context_window("gpt-4o")            # → 128000
+resolve_context_window("unknown-model")     # → 200000 (DEFAULT_CONTEXT_WINDOW)
+```
+
 ## Message Partitioning
 
 The `partition_messages` function splits the conversation into two lists:

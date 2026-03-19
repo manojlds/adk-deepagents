@@ -2,9 +2,9 @@
 
 ## Overview
 
-adk-deepagents uses ADK's four callback points to implement middleware functionality. Each callback is a function created by a factory (`make_*_callback`) and composed with optional user-provided callbacks via `_compose_callbacks`.
+adk-deepagents uses ADK's callback points to implement middleware functionality. Each callback is a function created by a factory (`make_*_callback`) and composed with optional user-provided callbacks via `_compose_callbacks`.
 
-The callbacks handle memory loading, system prompt injection, human-in-the-loop approval, large result eviction, conversation summarization, and dangling tool call patching.
+The callbacks handle memory loading, system prompt injection, empty response guarding, human-in-the-loop approval, large result eviction, conversation summarization, and dangling tool call patching.
 
 ## Four Callback Points
 
@@ -12,6 +12,7 @@ The callbacks handle memory loading, system prompt injection, human-in-the-loop 
 |---|---|---|
 | `before_agent` | Once when the agent starts | `callbacks/before_agent.py` |
 | `before_model` | Before every LLM call | `callbacks/before_model.py` |
+| `after_model` | After every LLM response | `callbacks/after_model.py` |
 | `before_tool` | Before each tool execution | `callbacks/before_tool.py` |
 | `after_tool` | After each tool execution | `callbacks/after_tool.py` |
 
@@ -61,6 +62,29 @@ callback = make_before_model_callback(
     summarization_config=my_config,
     backend_factory=my_factory,
 )
+```
+
+### after_model_callback
+
+Created by `make_after_model_callback`. Runs after every LLM response.
+
+**What it does:**
+
+- **Empty response guard** — Detects model responses that contain no text and no tool calls (empty or whitespace-only). When detected, replaces the empty response with a nudge message that prompts the model to self-correct:
+
+  > *"I notice I produced an empty response. Let me re-examine the task and provide a substantive response with concrete actions."*
+
+This prevents no-op turns where the model silently produces nothing, which would stall the agent loop.
+
+**Detection logic:** A response is considered empty if:
+1. `content` is `None`, or
+2. `content.parts` is empty, or
+3. All parts have no text (or only whitespace) and no `function_call`
+
+```python
+from adk_deepagents.callbacks.after_model import make_after_model_callback
+
+callback = make_after_model_callback()
 ```
 
 ### before_tool_callback
