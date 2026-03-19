@@ -13,6 +13,7 @@ from adk_deepagents.cli.tui.agent_service import (
     _extract_diff_content,
     _format_tool_call_detail,
     _format_tool_response_detail,
+    _generate_unified_diff,
 )
 
 
@@ -227,6 +228,63 @@ class TestExtractDiffContent:
     def test_returns_none_for_non_diff_content(self) -> None:
         assert _extract_diff_content("edit_file", {"status": "success"}) is None
 
+    def test_generates_diff_from_call_args_on_success(self) -> None:
+        result = _extract_diff_content(
+            "edit_file",
+            {"status": "success", "path": "readme.md"},
+            call_args={
+                "file_path": "readme.md",
+                "old_string": "Hello world",
+                "new_string": "Hello universe",
+            },
+        )
+        assert result is not None
+        assert "--- a/readme.md" in result
+        assert "+++ b/readme.md" in result
+        assert "-Hello world" in result
+        assert "+Hello universe" in result
+
+    def test_no_diff_from_call_args_on_error_status(self) -> None:
+        result = _extract_diff_content(
+            "edit_file",
+            {"status": "error", "message": "not found"},
+            call_args={
+                "file_path": "readme.md",
+                "old_string": "Hello",
+                "new_string": "World",
+            },
+        )
+        assert result is None
+
+    def test_no_diff_from_call_args_when_strings_identical(self) -> None:
+        result = _extract_diff_content(
+            "edit_file",
+            {"status": "success", "path": "f.py"},
+            call_args={
+                "file_path": "f.py",
+                "old_string": "same",
+                "new_string": "same",
+            },
+        )
+        assert result is None
+
+    def test_no_diff_from_call_args_when_missing_old_string(self) -> None:
+        result = _extract_diff_content(
+            "edit_file",
+            {"status": "success", "path": "f.py"},
+            call_args={"file_path": "f.py", "new_string": "new"},
+        )
+        assert result is None
+
+    def test_call_args_uses_response_path_as_fallback(self) -> None:
+        result = _extract_diff_content(
+            "edit_file",
+            {"status": "success", "path": "fallback.py"},
+            call_args={"old_string": "a", "new_string": "b"},
+        )
+        assert result is not None
+        assert "fallback.py" in result
+
     def test_extracts_diff_from_diff_key_starting_with_triple_dash(self) -> None:
         diff_text = "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,3 @@\n-old\n+new\n context"
         result = _extract_diff_content("edit_file", {"diff": diff_text})
@@ -289,11 +347,101 @@ class TestExtractDiffContent:
         result = _extract_diff_content("glob", {"output": "diff --git a/file.py b/file.py"})
         assert result is None
 
+    def test_multiline_diff_from_call_args(self) -> None:
+        result = _extract_diff_content(
+            "edit_file",
+            {"status": "success", "path": "app.py"},
+            call_args={
+                "file_path": "app.py",
+                "old_string": "line1\nline2\nline3",
+                "new_string": "line1\nmodified\nline3",
+            },
+        )
+        assert result is not None
+        assert "-line2" in result
+        assert "+modified" in result
+        assert " line1" in result  # context line
+
+
+class TestGenerateUnifiedDiff:
+    """Test the _generate_unified_diff helper."""
+
+    def test_basic_diff(self) -> None:
+        result = _generate_unified_diff("old line\n", "new line\n", file_path="test.py")
+        assert result is not None
+        assert "--- a/test.py" in result
+        assert "+++ b/test.py" in result
+        assert "-old line" in result
+        assert "+new line" in result
+
+    def test_identical_text_returns_none(self) -> None:
+        assert _generate_unified_diff("same", "same") is None
+
+    def test_empty_to_content(self) -> None:
+        result = _generate_unified_diff("", "new content\n", file_path="f.py")
+        assert result is not None
+        assert "+new content" in result
+
+    def test_content_to_empty(self) -> None:
+        result = _generate_unified_diff("old content\n", "", file_path="f.py")
+        assert result is not None
+        assert "-old content" in result
+
+    def test_default_file_path(self) -> None:
+        result = _generate_unified_diff("a\n", "b\n")
+        assert result is not None
+        assert "a/file" in result
+        assert "b/file" in result
+
+    def test_context_lines(self) -> None:
+        old = "line1\nline2\nline3\nline4\nline5\n"
+        new = "line1\nline2\nCHANGED\nline4\nline5\n"
+        result = _generate_unified_diff(old, new, context_lines=1)
+        assert result is not None
+        assert " line2" in result
+        assert "-line3" in result
+        assert "+CHANGED" in result
+        assert " line4" in result
+
 
 class TestDiffContentEmission:
     """Test that diff_content UiUpdates are emitted from _emit_event_updates."""
 
-    def test_diff_content_emitted_for_edit_file_with_diff(self) -> None:
+    def test_diff_content_emitted_for_edit_file_with_call_args(self) -> None:
+        service = _service()
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "edit_file",
+                        {
+                            "file_path": "readme.md",
+                            "old_string": "Hello",
+                            "new_string": "Goodbye",
+                        },
+                    )
+                ),
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "path": "readme.md", "occurrences": 1},
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 1
+        assert "-Hello" in (diff_updates[0].text or "")
+        assert "+Goodbye" in (diff_updates[0].text or "")
+
+    def test_diff_content_emitted_for_edit_file_with_diff_key(self) -> None:
         service = _service()
         diff_text = "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new"
         event = _FakeEvent(

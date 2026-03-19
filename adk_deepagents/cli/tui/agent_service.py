@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import io
 import json
 from contextlib import suppress
@@ -251,14 +252,30 @@ def _format_tool_response_detail(tool_name: str, response: dict[str, Any]) -> st
     return None
 
 
-def _extract_diff_content(tool_name: str, response: dict[str, Any]) -> str | None:
-    """Extract unified diff text from a tool response, if present.
+def _extract_diff_content(
+    tool_name: str,
+    response: dict[str, Any],
+    call_args: dict[str, Any] | None = None,
+) -> str | None:
+    """Extract or generate unified diff text from a tool response.
 
-    Returns the diff string when the response looks like it contains a diff
-    (e.g. from ``edit_file`` or ``execute`` with ``git diff`` output).
-    Returns ``None`` otherwise.
+    For ``edit_file`` responses with ``status: "success"``, a diff is
+    synthesised from the ``old_string`` / ``new_string`` call arguments
+    using :mod:`difflib`.  For ``execute`` responses whose output looks
+    like ``git diff`` output, the raw text is returned.  A literal
+    ``"diff"`` key in the response is also honoured.
+
+    Returns ``None`` when no diff can be produced.
     """
-    # edit_file responses may include a "diff" key directly.
+    # edit_file: generate a diff from old_string / new_string when the edit succeeded.
+    if tool_name == "edit_file" and call_args and response.get("status") == "success":
+        old_string = call_args.get("old_string")
+        new_string = call_args.get("new_string")
+        file_path = call_args.get("file_path", response.get("path", "file"))
+        if isinstance(old_string, str) and isinstance(new_string, str) and old_string != new_string:
+            return _generate_unified_diff(old_string, new_string, file_path=str(file_path))
+
+    # Literal "diff" key in the response (defensive / future-proof).
     diff_value = response.get("diff")
     if isinstance(diff_value, str) and diff_value.strip():
         stripped = diff_value.strip()
@@ -277,6 +294,33 @@ def _extract_diff_content(tool_name: str, response: dict[str, Any]) -> str | Non
                 return stripped
 
     return None
+
+
+def _generate_unified_diff(
+    old_text: str,
+    new_text: str,
+    *,
+    file_path: str = "file",
+    context_lines: int = 3,
+) -> str | None:
+    """Produce a unified diff string from two text fragments.
+
+    Returns ``None`` if the texts are identical.
+    """
+    old_lines = old_text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+    diff_lines = list(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile=f"a/{file_path}",
+            tofile=f"b/{file_path}",
+            n=context_lines,
+        )
+    )
+    if not diff_lines:
+        return None
+    return "".join(diff_lines).rstrip()
 
 
 @dataclass
@@ -537,6 +581,10 @@ class AgentService:
         if not parts:
             return
 
+        # Collect edit_file call args so we can generate diffs when the
+        # response arrives (both may appear in the same event).
+        pending_edit_args: dict[str, Any] | None = None
+
         for part in parts:
             text = getattr(part, "text", None)
             if isinstance(text, str) and text:
@@ -557,6 +605,9 @@ class AgentService:
                     await self.updates.put(
                         UiUpdate(kind="tool_call", tool_name=tool_name, tool_detail=detail)
                     )
+                    # Stash args for edit_file so we can generate a diff later.
+                    if tool_name == "edit_file":
+                        pending_edit_args = args_dict
 
             function_response = getattr(part, "function_response", None)
             if function_response is not None:
@@ -574,9 +625,12 @@ class AgentService:
                         )
 
                     # Emit diff content for syntax-highlighted rendering.
-                    diff_text = _extract_diff_content(tool_name, response)
+                    call_args = pending_edit_args if tool_name == "edit_file" else None
+                    diff_text = _extract_diff_content(tool_name, response, call_args=call_args)
                     if diff_text is not None:
                         await self.updates.put(UiUpdate(kind="diff_content", text=diff_text))
+                    if tool_name == "edit_file":
+                        pending_edit_args = None
 
                     for key in ("error", "stderr"):
                         value = response.get(key)
