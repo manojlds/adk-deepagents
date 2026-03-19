@@ -17,6 +17,7 @@ from adk_deepagents.cli.tui.widgets import (
     MessageDisplay,
     PromptInput,
     SubmittableTextArea,
+    ThemePicker,
 )
 
 
@@ -43,6 +44,11 @@ class TestSlashCommands:
         cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
         assert "/details" in cmd_names
         assert "/compact" in cmd_names
+
+    def test_phase2_commands_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/thinking" in cmd_names
+        assert "/theme" in cmd_names
 
     def test_descriptions_are_nonempty(self):
         for cmd, desc in SLASH_COMMANDS:
@@ -92,6 +98,9 @@ class TestMessageDisplayClassAttributes:
 
     def test_tool_details_default_visible(self):
         assert MessageDisplay._show_tool_details is True
+
+    def test_show_thinking_default_visible(self):
+        assert MessageDisplay._show_thinking is True
 
 
 class TestApprovalBoxClass:
@@ -157,6 +166,11 @@ class TestDefaultPaletteItems:
         assert "session_interrupt" in actions
         assert "tool_details_toggle" in actions
 
+    def test_phase2_actions_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "thinking_toggle" in actions
+        assert "theme_picker" in actions
+
     def test_all_have_label_and_description(self):
         for item in DEFAULT_PALETTE_ITEMS:
             assert item.label.strip(), f"Empty label for {item.action}"
@@ -192,3 +206,28 @@ class TestSubmittableTextArea:
         from textual.widgets import TextArea
 
         assert issubclass(SubmittableTextArea, TextArea)
+
+
+# ---------------------------------------------------------------------------
+# ThemePicker tests
+# ---------------------------------------------------------------------------
+
+
+class TestThemePickerClass:
+    """Test ThemePicker class structure (no Textual app required)."""
+
+    def test_has_theme_selected_message(self):
+        assert hasattr(ThemePicker, "ThemeSelected")
+
+    def test_theme_selected_message(self):
+        msg = ThemePicker.ThemeSelected(theme_name="catppuccin")
+        assert msg.theme_name == "catppuccin"
+
+    def test_default_css_exists(self):
+        assert ThemePicker.DEFAULT_CSS is not None
+        assert isinstance(ThemePicker.DEFAULT_CSS, str)
+
+    def test_is_vertical_subclass(self):
+        from textual.containers import Vertical
+
+        assert issubclass(ThemePicker, Vertical)

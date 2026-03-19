@@ -23,6 +23,7 @@ def run_tui(
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
     keybinds_raw: dict[str, Any] | None = None,
+    theme_name: str | None = None,
 ) -> int:
     """Launch the Textual TUI and block until exit."""
     from adk_deepagents.cli.tui.app import DeepAgentTui, TuiConfig
@@ -40,6 +41,7 @@ def run_tui(
         memory_source_paths=dict(memory_source_paths) if memory_source_paths else {},
         skills_dirs=list(skills_dirs),
         keybinds_raw=keybinds_raw,
+        theme_name=theme_name,
     )
 
     app = DeepAgentTui(config)

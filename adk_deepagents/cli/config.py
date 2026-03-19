@@ -41,6 +41,7 @@ class CliDefaults:
     dynamic_task_concurrency_policy: Literal["error", "wait"] | None = None
     dynamic_task_queue_timeout_seconds: float | None = None
     tui_keybinds: dict[str, Any] | None = field(default=None)
+    tui_theme: str | None = None
 
 
 def resolve_cli_paths(home_dir: Path | None = None) -> CliPaths:
@@ -138,6 +139,7 @@ def load_cli_defaults(paths: CliPaths) -> CliDefaults:
             dynamic_task_queue_timeout_seconds = queue_timeout
 
     tui_keybinds: dict[str, Any] | None = None
+    tui_theme: str | None = None
     tui_raw = config_data.get("tui")
     if tui_raw is not None:
         if not isinstance(tui_raw, dict):
@@ -147,6 +149,11 @@ def load_cli_defaults(paths: CliPaths) -> CliDefaults:
             if not isinstance(keybinds_raw, dict):
                 raise ValueError("config.toml [tui.keybinds] must be a table.")
             tui_keybinds = keybinds_raw
+        theme_raw = tui_raw.get("theme")
+        if theme_raw is not None:
+            if not isinstance(theme_raw, str):
+                raise ValueError("config.toml [tui] theme must be a string.")
+            tui_theme = theme_raw.strip() or None
 
     return CliDefaults(
         default_agent=default_agent,
@@ -155,6 +162,7 @@ def load_cli_defaults(paths: CliPaths) -> CliDefaults:
         dynamic_task_concurrency_policy=dynamic_task_concurrency_policy,
         dynamic_task_queue_timeout_seconds=dynamic_task_queue_timeout_seconds,
         tui_keybinds=tui_keybinds,
+        tui_theme=tui_theme,
     )
 
 
@@ -186,11 +194,16 @@ def save_cli_defaults(paths: CliPaths, defaults: CliDefaults) -> None:
         if defaults.dynamic_task_queue_timeout_seconds is not None:
             lines.append(f"queue_timeout_seconds = {defaults.dynamic_task_queue_timeout_seconds}")
 
-    if defaults.tui_keybinds:
+    if defaults.tui_keybinds or defaults.tui_theme:
         lines.append("")
-        lines.append("[tui.keybinds]")
-        for action, combo in sorted(defaults.tui_keybinds.items()):
-            lines.append(f'{action} = "{_toml_escape(str(combo))}"')
+        if defaults.tui_theme:
+            lines.append("[tui]")
+            lines.append(f'theme = "{_toml_escape(defaults.tui_theme)}"')
+            lines.append("")
+        if defaults.tui_keybinds:
+            lines.append("[tui.keybinds]")
+            for action, combo in sorted(defaults.tui_keybinds.items()):
+                lines.append(f'{action} = "{_toml_escape(str(combo))}"')
 
     _atomic_write_text(paths.config_path, "\n".join(lines) + "\n")
 

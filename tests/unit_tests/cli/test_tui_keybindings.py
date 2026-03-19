@@ -27,6 +27,14 @@ class TestDefaults:
         assert "session_new" in DEFAULT_KEYBINDS
         assert "help" in DEFAULT_KEYBINDS
 
+    def test_phase2_actions_present(self):
+        assert "thinking_toggle" in DEFAULT_KEYBINDS
+        assert "theme_picker" in DEFAULT_KEYBINDS
+
+    def test_phase2_leader_bindings(self):
+        assert "<leader>" in DEFAULT_KEYBINDS["thinking_toggle"]
+        assert "<leader>" in DEFAULT_KEYBINDS["theme_picker"]
+
     def test_leader_placeholder_in_defaults(self):
         """Some defaults should use <leader> placeholder."""
         assert "<leader>" in DEFAULT_KEYBINDS["session_new"]
@@ -124,3 +132,25 @@ class TestLoadKeybindConfig:
         config = load_keybind_config(None)
         combos = config.keys_for("app_quit")
         assert combos == ["ctrl+c"]
+
+    def test_thinking_toggle_default_binding(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("thinking_toggle")
+        assert len(combos) > 0
+        assert combos[0] == "ctrl+x t"
+
+    def test_theme_picker_default_binding(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("theme_picker")
+        assert len(combos) > 0
+        assert combos[0] == "ctrl+x k"
+
+    def test_thinking_toggle_custom_leader(self):
+        config = load_keybind_config({"leader": "ctrl+a"})
+        combos = config.keys_for("thinking_toggle")
+        assert combos[0] == "ctrl+a t"
+
+    def test_theme_picker_custom_leader(self):
+        config = load_keybind_config({"leader": "ctrl+a"})
+        combos = config.keys_for("theme_picker")
+        assert combos[0] == "ctrl+a k"

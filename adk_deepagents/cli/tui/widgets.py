@@ -43,6 +43,10 @@ class MessageDisplay(VerticalScroll):
         margin-bottom: 1;
     }
 
+    MessageDisplay .thought-msg.hidden {
+        display: none;
+    }
+
     MessageDisplay .tool-msg {
         color: $success;
         text-opacity: 80%;
@@ -55,10 +59,18 @@ class MessageDisplay(VerticalScroll):
         text-opacity: 75%;
     }
 
+    MessageDisplay .tool-detail-msg.hidden {
+        display: none;
+    }
+
     MessageDisplay .tool-result-msg {
         color: $accent;
         margin-bottom: 1;
         text-opacity: 85%;
+    }
+
+    MessageDisplay .tool-result-msg.hidden {
+        display: none;
     }
 
     MessageDisplay .system-msg {
@@ -91,6 +103,36 @@ class MessageDisplay(VerticalScroll):
     MessageDisplay .approval-box .approval-buttons Button {
         margin-right: 1;
     }
+
+    MessageDisplay .diff-block {
+        margin-bottom: 1;
+        padding: 0;
+    }
+
+    MessageDisplay .diff-line-added {
+        color: #a6e3a1;
+        margin: 0;
+        padding: 0;
+    }
+
+    MessageDisplay .diff-line-removed {
+        color: #f38ba8;
+        margin: 0;
+        padding: 0;
+    }
+
+    MessageDisplay .diff-line-hunk {
+        color: #89b4fa;
+        text-style: bold;
+        margin: 0;
+        padding: 0;
+    }
+
+    MessageDisplay .diff-line-context {
+        color: $text-muted;
+        margin: 0;
+        padding: 0;
+    }
     """
 
     _current_assistant_md: Markdown | None = None
@@ -101,6 +143,8 @@ class MessageDisplay(VerticalScroll):
 
     # Whether tool call/result details are shown.
     _show_tool_details: bool = True
+    # Whether thinking/reasoning blocks are shown.
+    _show_thinking: bool = True
 
     def add_user_message(self, text: str) -> None:
         """Append a user message bubble."""
@@ -137,7 +181,8 @@ class MessageDisplay(VerticalScroll):
             return
         self._in_thought = True
         self._current_thought_text = ""
-        widget = Static("thinking... ", classes="thought-msg")
+        classes = "thought-msg" if self._show_thinking else "thought-msg hidden"
+        widget = Static("thinking... ", classes=classes)
         self._current_thought = widget
         self.mount(widget)
 
@@ -160,17 +205,17 @@ class MessageDisplay(VerticalScroll):
         self._end_assistant()
         widget = Static(f"$ {tool_name}", classes="tool-msg")
         self.mount(widget)
-        if detail and self._show_tool_details:
-            self.mount(Static(f"  {detail}", classes="tool-detail-msg"))
+        if detail:
+            classes = "tool-detail-msg" if self._show_tool_details else "tool-detail-msg hidden"
+            self.mount(Static(f"  {detail}", classes=classes))
         self.scroll_end(animate=False)
 
     def add_tool_result(self, tool_name: str, *, detail: str | None = None) -> None:
         """Show a concise tool result summary."""
         self._end_assistant()
-        if not self._show_tool_details:
-            return
         rendered = f"  -> {detail}" if detail else f"  -> {tool_name} completed"
-        self.mount(Static(rendered, classes="tool-result-msg"))
+        classes = "tool-result-msg" if self._show_tool_details else "tool-result-msg hidden"
+        self.mount(Static(rendered, classes=classes))
         self.scroll_end(animate=False)
 
     def add_system_message(self, text: str, *, error: bool = False) -> None:
@@ -179,6 +224,22 @@ class MessageDisplay(VerticalScroll):
         cls = "error-msg" if error else "system-msg"
         widget = Static(text, classes=cls)
         self.mount(widget)
+        self.scroll_end(animate=False)
+
+    def add_diff_block(self, diff_text: str) -> None:
+        """Render a unified diff with per-line coloring."""
+        self._end_assistant()
+        container = Vertical(classes="diff-block")
+        self.mount(container)
+        for line in diff_text.splitlines():
+            if line.startswith("@@"):
+                container.mount(Static(line, classes="diff-line-hunk"))
+            elif line.startswith("+"):
+                container.mount(Static(line, classes="diff-line-added"))
+            elif line.startswith("-"):
+                container.mount(Static(line, classes="diff-line-removed"))
+            else:
+                container.mount(Static(line, classes="diff-line-context"))
         self.scroll_end(animate=False)
 
     def add_approval_prompt(
@@ -203,9 +264,30 @@ class MessageDisplay(VerticalScroll):
         self.remove_children()
 
     def toggle_tool_details(self) -> bool:
-        """Toggle tool detail visibility. Returns the new state."""
+        """Toggle tool detail visibility retroactively. Returns new state."""
         self._show_tool_details = not self._show_tool_details
+        # Retroactively show/hide existing detail and result widgets.
+        for widget in self.query(".tool-detail-msg"):
+            if self._show_tool_details:
+                widget.remove_class("hidden")
+            else:
+                widget.add_class("hidden")
+        for widget in self.query(".tool-result-msg"):
+            if self._show_tool_details:
+                widget.remove_class("hidden")
+            else:
+                widget.add_class("hidden")
         return self._show_tool_details
+
+    def toggle_thinking(self) -> bool:
+        """Toggle thinking block visibility retroactively. Returns new state."""
+        self._show_thinking = not self._show_thinking
+        for widget in self.query(".thought-msg"):
+            if self._show_thinking:
+                widget.remove_class("hidden")
+            else:
+                widget.add_class("hidden")
+        return self._show_thinking
 
     def _end_assistant(self) -> None:
         self._current_assistant_md = None
@@ -267,6 +349,8 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/model", "Show the active model"),
     ("/model <name>", "Switch model (or 'default' to reset)"),
     ("/details", "Toggle tool detail visibility"),
+    ("/thinking", "Toggle thinking block visibility"),
+    ("/theme", "Switch TUI color theme"),
     ("/compact", "Compact/summarize the session context"),
     ("/quit", "Exit the TUI"),
 ]
@@ -457,7 +541,7 @@ class PromptInput(Static):
         ta = self.query_one("#prompt-input", SubmittableTextArea)
 
         # Commands with no arguments — submit immediately
-        if cmd_id in {"/help", "/clear", "/quit", "/details", "/compact"}:
+        if cmd_id in {"/help", "/clear", "/quit", "/details", "/compact", "/thinking", "/theme"}:
             ta.clear()
             self.post_message(self.Submitted(cmd_id))
         else:
@@ -547,6 +631,18 @@ DEFAULT_PALETTE_ITEMS: list[CommandPaletteItem] = [
         action="tool_details_toggle",
         label="Toggle Details",
         description="Show/hide tool call details",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="thinking_toggle",
+        label="Toggle Thinking",
+        description="Show/hide thinking blocks",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="theme_picker",
+        label="Theme",
+        description="Switch TUI color theme",
         keybind="",
     ),
     CommandPaletteItem(
@@ -682,5 +778,131 @@ class CommandPalette(Vertical):
                 text += f"  [{item.keybind}]"
             if not q or q in item.label.lower() or q in item.description.lower():
                 option_list.add_option(Option(text, id=item.action))
+        if option_list.option_count > 0:
+            option_list.highlighted = 0
+
+
+# ---------------------------------------------------------------------------
+# ThemePicker – overlay for switching color themes
+# ---------------------------------------------------------------------------
+
+
+class ThemePicker(Vertical):
+    """Modal overlay for choosing a TUI color theme.
+
+    Shows all available themes in an ``OptionList``.  Fires
+    :class:`ThemePicker.ThemeSelected` when the user picks one.
+    """
+
+    DEFAULT_CSS = """
+    ThemePicker {
+        display: none;
+        width: 50;
+        max-width: 70%;
+        height: auto;
+        max-height: 20;
+        background: $surface;
+        border: solid $accent;
+        padding: 0 1;
+        layer: overlay;
+        align-horizontal: center;
+        offset-y: 2;
+    }
+
+    ThemePicker.visible {
+        display: block;
+    }
+
+    ThemePicker Input {
+        width: 1fr;
+        margin-bottom: 1;
+    }
+
+    ThemePicker OptionList {
+        width: 1fr;
+        max-height: 14;
+    }
+    """
+
+    class ThemeSelected(Message):
+        """Fired when the user selects a theme."""
+
+        def __init__(self, theme_name: str) -> None:
+            super().__init__()
+            self.theme_name = theme_name
+
+    def __init__(
+        self,
+        theme_names: list[tuple[str, str]] | None = None,
+        *,
+        current_theme: str = "",
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
+        self._theme_entries: list[tuple[str, str]] = theme_names or []
+        self._current_theme = current_theme
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="Type to filter themes...", id="theme-search")
+        yield OptionList(id="theme-list")
+
+    def show(
+        self,
+        theme_entries: list[tuple[str, str]] | None = None,
+        current_theme: str = "",
+    ) -> None:
+        """Open the picker. *theme_entries* are ``(name, label)`` pairs."""
+        if theme_entries is not None:
+            self._theme_entries = theme_entries
+        if current_theme:
+            self._current_theme = current_theme
+        self.add_class("visible")
+        self._populate_list("")
+        search_input = self.query_one("#theme-search", Input)
+        search_input.value = ""
+        search_input.focus()
+
+    def hide(self) -> None:
+        self.remove_class("visible")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._populate_list(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        option_list = self.query_one("#theme-list", OptionList)
+        idx = option_list.highlighted
+        if idx is not None and 0 <= idx < option_list.option_count:
+            option = option_list.get_option_at_index(idx)
+            if option.id:
+                self.post_message(self.ThemeSelected(option.id))
+        self.hide()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            self.post_message(self.ThemeSelected(event.option_id))
+        self.hide()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.hide()
+            event.prevent_default()
+            event.stop()
+        elif event.key in {"up", "down"}:
+            self.query_one("#theme-list", OptionList).focus()
+
+    def _populate_list(self, query: str) -> None:
+        option_list = self.query_one("#theme-list", OptionList)
+        option_list.clear_options()
+        q = query.lower().strip()
+        for theme_name, theme_label in self._theme_entries:
+            marker = " *" if theme_name == self._current_theme else ""
+            text = f"{theme_label}{marker}"
+            if not q or q in theme_name.lower() or q in theme_label.lower():
+                option_list.add_option(Option(text, id=theme_name))
         if option_list.option_count > 0:
             option_list.highlighted = 0

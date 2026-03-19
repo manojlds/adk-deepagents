@@ -33,6 +33,10 @@ DEFAULT_KEYBINDS: dict[str, str] = {
     "help": "<leader> h",
     # Tool details toggle
     "tool_details_toggle": "<leader> d",
+    # Thinking toggle
+    "thinking_toggle": "<leader> t",
+    # Theme picker
+    "theme_picker": "<leader> k",
     # Editor
     "editor_open": "<leader> e",
     # Scroll (vim-style)
