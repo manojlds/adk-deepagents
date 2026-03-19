@@ -153,3 +153,118 @@ def test_save_cli_defaults_omits_tui_section_when_none(tmp_path) -> None:
 
     data = tomllib.loads(paths.config_path.read_text(encoding="utf-8"))
     assert "tui" not in data
+
+
+# ---------------------------------------------------------------------------
+# tui_theme config tests
+# ---------------------------------------------------------------------------
+
+
+def test_load_cli_defaults_parses_tui_theme(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+    paths.config_path.write_text(
+        ('default_agent = "agent"\n\n[tui]\ntheme = "tokyonight"\n'),
+        encoding="utf-8",
+    )
+
+    defaults = load_cli_defaults(paths)
+    assert defaults.tui_theme == "tokyonight"
+
+
+def test_load_cli_defaults_tui_theme_none_when_absent(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+    paths.config_path.write_text(
+        'default_agent = "agent"\n',
+        encoding="utf-8",
+    )
+
+    defaults = load_cli_defaults(paths)
+    assert defaults.tui_theme is None
+
+
+def test_load_cli_defaults_tui_theme_none_when_empty(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+    paths.config_path.write_text(
+        'default_agent = "agent"\n\n[tui]\ntheme = ""\n',
+        encoding="utf-8",
+    )
+
+    defaults = load_cli_defaults(paths)
+    assert defaults.tui_theme is None
+
+
+def test_load_cli_defaults_rejects_non_string_tui_theme(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+    paths.config_path.write_text(
+        'default_agent = "agent"\n\n[tui]\ntheme = 42\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="theme"):
+        load_cli_defaults(paths)
+
+
+def test_save_cli_defaults_writes_tui_theme(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+
+    save_cli_defaults(
+        paths,
+        CliDefaults(default_agent="agent", tui_theme="gruvbox"),
+    )
+
+    data = tomllib.loads(paths.config_path.read_text(encoding="utf-8"))
+    assert data["tui"]["theme"] == "gruvbox"
+
+
+def test_save_cli_defaults_omits_tui_theme_when_none(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+
+    save_cli_defaults(paths, CliDefaults(default_agent="agent", tui_theme=None))
+
+    data = tomllib.loads(paths.config_path.read_text(encoding="utf-8"))
+    assert "tui" not in data
+
+
+def test_save_cli_defaults_writes_theme_and_keybinds(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+
+    save_cli_defaults(
+        paths,
+        CliDefaults(
+            default_agent="agent",
+            tui_theme="nord",
+            tui_keybinds={"app_quit": "ctrl+q"},
+        ),
+    )
+
+    data = tomllib.loads(paths.config_path.read_text(encoding="utf-8"))
+    assert data["tui"]["theme"] == "nord"
+    assert data["tui"]["keybinds"]["app_quit"] == "ctrl+q"
+
+
+def test_load_cli_defaults_parses_theme_with_keybinds(tmp_path) -> None:
+    paths = resolve_cli_paths(tmp_path)
+    paths.root_dir.mkdir(parents=True, exist_ok=True)
+    paths.config_path.write_text(
+        (
+            'default_agent = "agent"\n'
+            "\n"
+            "[tui]\n"
+            'theme = "catppuccin"\n'
+            "\n"
+            "[tui.keybinds]\n"
+            'app_quit = "ctrl+q"\n'
+        ),
+        encoding="utf-8",
+    )
+
+    defaults = load_cli_defaults(paths)
+    assert defaults.tui_theme == "catppuccin"
+    assert defaults.tui_keybinds == {"app_quit": "ctrl+q"}

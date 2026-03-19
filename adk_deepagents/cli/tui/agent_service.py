@@ -251,6 +251,34 @@ def _format_tool_response_detail(tool_name: str, response: dict[str, Any]) -> st
     return None
 
 
+def _extract_diff_content(tool_name: str, response: dict[str, Any]) -> str | None:
+    """Extract unified diff text from a tool response, if present.
+
+    Returns the diff string when the response looks like it contains a diff
+    (e.g. from ``edit_file`` or ``execute`` with ``git diff`` output).
+    Returns ``None`` otherwise.
+    """
+    # edit_file responses may include a "diff" key directly.
+    diff_value = response.get("diff")
+    if isinstance(diff_value, str) and diff_value.strip():
+        stripped = diff_value.strip()
+        # Basic validation: must contain typical diff markers.
+        if any(stripped.startswith(p) for p in ("---", "@@", "diff --")):
+            return stripped
+        if "\n@@" in stripped or "\n---" in stripped:
+            return stripped
+
+    # execute responses may contain diff output in the "output" key.
+    if tool_name == "execute":
+        output = response.get("output")
+        if isinstance(output, str) and output.strip():
+            stripped = output.strip()
+            if stripped.startswith("diff --git") or stripped.startswith("--- a/"):
+                return stripped
+
+    return None
+
+
 @dataclass
 class UiUpdate:
     """Event pushed from the agent service to the TUI."""
@@ -261,6 +289,7 @@ class UiUpdate:
         "thought_delta",
         "tool_call",
         "tool_result",
+        "diff_content",
         "system",
         "error",
         "approval_request",
@@ -543,6 +572,11 @@ class AgentService:
                         await self.updates.put(
                             UiUpdate(kind="tool_result", tool_name=tool_name, tool_detail=detail)
                         )
+
+                    # Emit diff content for syntax-highlighted rendering.
+                    diff_text = _extract_diff_content(tool_name, response)
+                    if diff_text is not None:
+                        await self.updates.put(UiUpdate(kind="diff_content", text=diff_text))
 
                     for key in ("error", "stderr"):
                         value = response.get(key)

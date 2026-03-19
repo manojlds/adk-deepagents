@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,12 @@ from textual.widgets import Footer, Header
 
 from adk_deepagents.cli.tui.agent_service import AgentService, UiUpdate
 from adk_deepagents.cli.tui.keybindings import KeybindConfig, load_keybind_config
+from adk_deepagents.cli.tui.themes import (
+    BUILTIN_THEMES,
+    DEFAULT_THEME_NAME,
+    Theme,
+    get_theme,
+)
 from adk_deepagents.cli.tui.widgets import (
     DEFAULT_PALETTE_ITEMS,
     ApprovalBox,
@@ -19,6 +26,7 @@ from adk_deepagents.cli.tui.widgets import (
     CommandPaletteItem,
     MessageDisplay,
     PromptInput,
+    ThemePicker,
 )
 from adk_deepagents.types import DynamicTaskConfig
 
@@ -39,6 +47,7 @@ class TuiConfig:
     memory_source_paths: dict[str, Path] = field(default_factory=dict)
     skills_dirs: list[str] = field(default_factory=list)
     keybinds_raw: dict[str, Any] | None = None
+    theme_name: str | None = None
 
 
 def _build_bindings(kb: KeybindConfig) -> list[Binding]:
@@ -59,6 +68,8 @@ def _build_bindings(kb: KeybindConfig) -> list[Binding]:
         "session_compact": ("Compact", False),
         "help": ("Help", False),
         "tool_details_toggle": ("Toggle Details", False),
+        "thinking_toggle": ("Toggle Thinking", False),
+        "theme_picker": ("Theme", False),
         "editor_open": ("Editor", False),
         "messages_half_page_up": ("Half Page Up", False),
         "messages_half_page_down": ("Half Page Down", False),
@@ -123,6 +134,11 @@ class DeepAgentTui(App[None]):
         dock: top;
         margin: 2 4;
     }
+
+    #theme-picker {
+        dock: top;
+        margin: 2 4;
+    }
     """
 
     # BINDINGS is set dynamically in __init__ based on keybind config.
@@ -135,6 +151,15 @@ class DeepAgentTui(App[None]):
         # Build palette items with resolved keybinds before super().__init__
         # so they're ready when compose() runs.
         self._palette_items = _enrich_palette_items(DEFAULT_PALETTE_ITEMS, self._keybind_config)
+
+        # Resolve theme.
+        theme_name = config.theme_name or DEFAULT_THEME_NAME
+        self._active_theme: Theme = (
+            get_theme(theme_name)
+            or get_theme(DEFAULT_THEME_NAME)
+            or next(iter(BUILTIN_THEMES.values()))
+        )
+
         super().__init__()
         self._config = config
         self._service = AgentService(
@@ -163,9 +188,13 @@ class DeepAgentTui(App[None]):
         yield MessageDisplay(id="messages")
         yield PromptInput(id="composer")
         yield CommandPalette(items=self._palette_items, id="command-palette")
+        yield ThemePicker(id="theme-picker")
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Apply initial theme.
+        self._apply_theme(self._active_theme)
+
         self._service.initialize()
         self.run_worker(self._pump_updates(), exclusive=False)
 
@@ -174,6 +203,58 @@ class DeepAgentTui(App[None]):
 
         if self._config.first_prompt:
             await self._service.handle_input(self._config.first_prompt)
+
+    # -----------------------------------------------------------------
+    # Theme management
+    # -----------------------------------------------------------------
+
+    def _apply_theme(self, theme: Theme) -> None:
+        """Apply the given theme's CSS to the app."""
+        self._active_theme = theme
+        with suppress(Exception):
+            self.screen.styles.background = theme.background
+
+        # Store theme colors as an app-level attribute for widgets to access.
+        self.theme_colors: dict[str, str] = {
+            "background": theme.background,
+            "surface": theme.surface,
+            "panel": theme.panel,
+            "text": theme.text,
+            "text_muted": theme.text_muted,
+            "primary": theme.primary,
+            "secondary": theme.secondary,
+            "accent": theme.accent,
+            "success": theme.success,
+            "warning": theme.warning,
+            "error": theme.error,
+            "info": theme.info,
+            "border": theme.border,
+            "border_active": theme.border_active,
+            "diff_added": theme.diff_added,
+            "diff_removed": theme.diff_removed,
+            "thought": theme.thought,
+        }
+
+        # Update diff line colors in existing message display.
+        try:
+            md = self.query_one(MessageDisplay)
+            for w in md.query(".diff-line-added"):
+                w.styles.color = theme.diff_added
+            for w in md.query(".diff-line-removed"):
+                w.styles.color = theme.diff_removed
+            for w in md.query(".diff-line-hunk"):
+                w.styles.color = theme.diff_hunk_header
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _open_theme_picker(self) -> None:
+        """Show the theme picker overlay."""
+        entries = [
+            (name, t.label)
+            for name, t in sorted(BUILTIN_THEMES.items(), key=lambda kv: kv[1].label)
+        ]
+        picker = self.query_one(ThemePicker)
+        picker.show(theme_entries=entries, current_theme=self._active_theme.name)
 
     # -----------------------------------------------------------------
     # Key handling for leader-key sequences
@@ -242,6 +323,10 @@ class DeepAgentTui(App[None]):
             self.run_worker(self._service.handle_input("/help"))
         elif action == "tool_details_toggle":
             self._do_toggle_details()
+        elif action == "thinking_toggle":
+            self._do_toggle_thinking()
+        elif action == "theme_picker":
+            self._open_theme_picker()
         elif action == "messages_half_page_up":
             self.query_one(MessageDisplay).scroll_up(animate=False)
         elif action == "messages_half_page_down":
@@ -272,6 +357,13 @@ class DeepAgentTui(App[None]):
         new_state = messages.toggle_tool_details()
         label = "shown" if new_state else "hidden"
         messages.add_system_message(f"Tool details: {label}")
+
+    def _do_toggle_thinking(self) -> None:
+        """Toggle thinking block visibility."""
+        messages = self.query_one(MessageDisplay)
+        new_state = messages.toggle_thinking()
+        label = "shown" if new_state else "hidden"
+        messages.add_system_message(f"Thinking blocks: {label}")
 
     # -----------------------------------------------------------------
     # UI update pump
@@ -310,6 +402,10 @@ class DeepAgentTui(App[None]):
                 update.tool_name or "unknown_tool",
                 detail=update.tool_detail,
             )
+
+        elif update.kind == "diff_content":
+            messages.end_assistant_message()
+            messages.add_diff_block(update.text or "")
 
         elif update.kind == "system":
             messages.end_assistant_message()
@@ -359,6 +455,12 @@ class DeepAgentTui(App[None]):
         if value == "/details":
             self._do_toggle_details()
             return
+        if value == "/thinking":
+            self._do_toggle_thinking()
+            return
+        if value == "/theme":
+            self._open_theme_picker()
+            return
         await self._service.handle_input(value)
 
     def on_approval_box_resolved(self, event: ApprovalBox.Resolved) -> None:
@@ -369,3 +471,11 @@ class DeepAgentTui(App[None]):
     def on_command_palette_action_selected(self, event: CommandPalette.ActionSelected) -> None:
         """Handle command palette selection."""
         self._handle_action(event.action)
+
+    def on_theme_picker_theme_selected(self, event: ThemePicker.ThemeSelected) -> None:
+        """Handle theme selection from the picker."""
+        theme = get_theme(event.theme_name)
+        if theme is not None:
+            self._apply_theme(theme)
+            messages = self.query_one(MessageDisplay)
+            messages.add_system_message(f"Theme: {theme.label}")

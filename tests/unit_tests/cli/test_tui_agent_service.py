@@ -10,6 +10,7 @@ from adk_deepagents.cli.tui.agent_service import (
     _activity_label_for_phase,
     _chunk_stream_text,
     _coerce_payload_dict,
+    _extract_diff_content,
     _format_tool_call_detail,
     _format_tool_response_detail,
 )
@@ -210,3 +211,130 @@ class TestCancelTurn:
             assert task.cancelled() or task.cancel()
         finally:
             loop.close()
+
+
+# ---------------------------------------------------------------------------
+# _extract_diff_content tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDiffContent:
+    """Test the _extract_diff_content helper function."""
+
+    def test_returns_none_for_empty_response(self) -> None:
+        assert _extract_diff_content("edit_file", {}) is None
+
+    def test_returns_none_for_non_diff_content(self) -> None:
+        assert _extract_diff_content("edit_file", {"status": "success"}) is None
+
+    def test_extracts_diff_from_diff_key_starting_with_triple_dash(self) -> None:
+        diff_text = "--- a/file.py\n+++ b/file.py\n@@ -1,3 +1,3 @@\n-old\n+new\n context"
+        result = _extract_diff_content("edit_file", {"diff": diff_text})
+        assert result is not None
+        assert "--- a/file.py" in result
+
+    def test_extracts_diff_from_diff_key_starting_with_hunk(self) -> None:
+        diff_text = "@@ -1,3 +1,3 @@\n-old\n+new\n context"
+        result = _extract_diff_content("edit_file", {"diff": diff_text})
+        assert result is not None
+        assert "@@ -1,3 +1,3 @@" in result
+
+    def test_extracts_diff_from_diff_key_starting_with_diff_git(self) -> None:
+        diff_text = "diff --git a/file.py b/file.py\n--- a/file.py\n+++ b/file.py"
+        result = _extract_diff_content("edit_file", {"diff": diff_text})
+        assert result is not None
+        assert "diff --git" in result
+
+    def test_extracts_diff_from_diff_key_with_embedded_hunk(self) -> None:
+        diff_text = "some header\n@@ -1,3 +1,3 @@\n-old\n+new"
+        result = _extract_diff_content("edit_file", {"diff": diff_text})
+        assert result is not None
+
+    def test_extracts_diff_from_diff_key_with_embedded_triple_dash(self) -> None:
+        diff_text = "some header\n--- a/file.py\n+++ b/file.py"
+        result = _extract_diff_content("edit_file", {"diff": diff_text})
+        assert result is not None
+
+    def test_ignores_non_diff_string_in_diff_key(self) -> None:
+        result = _extract_diff_content("edit_file", {"diff": "just some random text"})
+        assert result is None
+
+    def test_extracts_diff_from_execute_output(self) -> None:
+        output = "diff --git a/file.py b/file.py\nindex 1234..5678\n--- a/file.py\n+++ b/file.py"
+        result = _extract_diff_content("execute", {"output": output})
+        assert result is not None
+        assert "diff --git" in result
+
+    def test_extracts_diff_from_execute_output_triple_dash(self) -> None:
+        output = "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new"
+        result = _extract_diff_content("execute", {"output": output})
+        assert result is not None
+
+    def test_ignores_non_diff_execute_output(self) -> None:
+        result = _extract_diff_content("execute", {"output": "Build succeeded."})
+        assert result is None
+
+    def test_ignores_empty_diff_key(self) -> None:
+        assert _extract_diff_content("edit_file", {"diff": ""}) is None
+        assert _extract_diff_content("edit_file", {"diff": "   "}) is None
+
+    def test_strips_whitespace(self) -> None:
+        diff_text = "  \n--- a/file.py\n+++ b/file.py\n  "
+        result = _extract_diff_content("edit_file", {"diff": diff_text})
+        assert result is not None
+        assert result.startswith("---")
+
+    def test_non_execute_tool_ignores_output_key(self) -> None:
+        """Only the 'execute' tool should check the 'output' key for diffs."""
+        result = _extract_diff_content("glob", {"output": "diff --git a/file.py b/file.py"})
+        assert result is None
+
+
+class TestDiffContentEmission:
+    """Test that diff_content UiUpdates are emitted from _emit_event_updates."""
+
+    def test_diff_content_emitted_for_edit_file_with_diff(self) -> None:
+        service = _service()
+        diff_text = "--- a/file.py\n+++ b/file.py\n@@ -1 +1 @@\n-old\n+new"
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "diff": diff_text},
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 1
+        assert "--- a/file.py" in (diff_updates[0].text or "")
+
+    def test_no_diff_content_for_response_without_diff(self) -> None:
+        service = _service()
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "glob",
+                        {"status": "success", "entries": [{"path": "/a.py"}]},
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 0
