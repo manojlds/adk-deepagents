@@ -424,6 +424,148 @@ Tool call: compact_conversation()
 
 ---
 
+## HTTP Tools
+
+Defined in `adk_deepagents.tools.http`. These tools provide web fetching capabilities with built-in SSRF (Server-Side Request Forgery) protection. They are included in the default tool set when creating an agent.
+
+All HTTP tools validate URLs through `is_url_safe()` (from `adk_deepagents.tools.ssrf`) before making requests. This blocks requests to:
+
+- Private IP ranges (10.x, 172.16-31.x, 192.168.x)
+- Loopback addresses (127.0.0.1, ::1)
+- Link-local, reserved, and multicast addresses
+- IPv4-mapped IPv6 addresses that resolve to blocked ranges
+
+### `fetch_url`
+
+Fetch a URL and return its content as Markdown. HTML responses are automatically converted to Markdown using `markdownify` (falls back to raw HTML if not installed).
+
+```python
+def fetch_url(
+    url: str,
+    tool_context: ToolContext,
+    timeout: int = 30,
+) -> dict:
+```
+
+**Arguments:**
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `url` | `str` | Yes | — | URL to fetch (must be `http://` or `https://`) |
+| `timeout` | `int` | No | `30` | Request timeout in seconds |
+
+**Returns:**
+
+```python
+# Success
+{
+    "status": "success",
+    "url": "https://example.com",
+    "content_type": "text/html; charset=utf-8",
+    "content": "# Example Domain\n\nThis domain is for use in illustrative examples...",
+}
+
+# Error (SSRF blocked)
+{"status": "error", "message": "URL blocked: URL resolves to blocked address 127.0.0.1 (private/reserved range)"}
+
+# Error (HTTP error)
+{"status": "error", "message": "HTTP 404: Not Found", "url": "https://example.com/missing"}
+
+# Error (timeout)
+{"status": "error", "message": "Request timed out after 30s", "url": "https://example.com/slow"}
+```
+
+Response content is truncated via `truncate_if_too_long()` to prevent oversized tool results.
+
+**Example usage by the LLM:**
+```
+Tool call: fetch_url(url="https://docs.python.org/3/library/json.html")
+Tool call: fetch_url(url="https://api.example.com/data", timeout=10)
+```
+
+---
+
+### `http_request`
+
+Make a general-purpose HTTP request supporting GET, POST, PUT, DELETE, PATCH, and HEAD methods. JSON responses are automatically parsed.
+
+```python
+def http_request(
+    url: str,
+    tool_context: ToolContext,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: str | None = None,
+    timeout: int = 30,
+) -> dict:
+```
+
+**Arguments:**
+
+| Argument | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `url` | `str` | Yes | — | URL to request (must be `http://` or `https://`) |
+| `method` | `str` | No | `"GET"` | HTTP method: GET, POST, PUT, DELETE, PATCH, HEAD |
+| `headers` | `dict[str, str] \| None` | No | `None` | Optional request headers |
+| `body` | `str \| None` | No | `None` | Optional request body (encoded as UTF-8) |
+| `timeout` | `int` | No | `30` | Request timeout in seconds |
+
+**Returns:**
+
+```python
+# Success
+{
+    "status": "success",
+    "url": "https://api.example.com/data",
+    "status_code": 200,
+    "content_type": "application/json",
+    "body": '{"key": "value"}',
+    "json": {"key": "value"},  # present only for JSON responses
+}
+
+# Error (unsupported method)
+{"status": "error", "message": "Unsupported HTTP method: TRACE"}
+
+# Error (HTTP error with body)
+{
+    "status": "error",
+    "message": "HTTP 401: Unauthorized",
+    "url": "https://api.example.com/protected",
+    "status_code": 401,
+    "body": '{"error": "Invalid token"}',
+}
+```
+
+**Example usage by the LLM:**
+```
+Tool call: http_request(url="https://api.github.com/repos/owner/repo", headers={"Authorization": "token ghp_..."})
+Tool call: http_request(url="https://api.example.com/items", method="POST", body='{"name": "test"}', headers={"Content-Type": "application/json"})
+```
+
+---
+
+## Multimodal Processing
+
+Defined in `adk_deepagents.tools.multimodal`. This module automatically detects image URLs in user messages and fetches them as inline base64 data for multimodal model support.
+
+Multimodal processing runs inside `before_model_callback` — it is not a tool the LLM calls directly. It scans the most recent user message for:
+
+- **Markdown image syntax:** `![alt text](https://example.com/image.png)`
+- **Bare image URLs:** `https://example.com/photo.jpg`
+
+Supported extensions: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`
+
+**Limits:**
+
+| Limit | Value |
+|-------|-------|
+| Max image size | 10 MB |
+| Fetch timeout | 15 seconds |
+
+Images are subject to the same SSRF protection as HTTP tools. A per-session cache avoids re-downloading the same image URL across turns.
+
+---
+
 ## Execution Tools
 
 Execution tools provide shell command capabilities. They are added to the agent when you set `execution="local"` or `execution="heimdall"` in `create_deep_agent()`.

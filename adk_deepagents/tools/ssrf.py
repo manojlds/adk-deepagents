@@ -24,6 +24,11 @@ def _is_private_or_reserved(addr: str) -> bool:
         # If we can't parse it, block it to be safe
         return True
 
+    # Check IPv4-mapped IPv6 addresses first — the IPv6 envelope may be
+    # flagged as reserved/private even when the inner IPv4 address is public.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        return _is_private_or_reserved(str(ip.ipv4_mapped))
+
     if ip.is_private:
         return True
     if ip.is_loopback:
@@ -32,14 +37,7 @@ def _is_private_or_reserved(addr: str) -> bool:
         return True
     if ip.is_reserved:
         return True
-    if ip.is_multicast:
-        return True
-
-    # Additional checks for IPv4-mapped IPv6 addresses
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-        return _is_private_or_reserved(str(ip.ipv4_mapped))
-
-    return False
+    return bool(ip.is_multicast)
 
 
 def is_url_safe(url: str) -> tuple[bool, str]:
