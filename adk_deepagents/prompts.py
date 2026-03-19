@@ -257,3 +257,17 @@ GREP_TOOL_DESCRIPTION = (
     "Search for a text pattern within files. "
     "Returns matching files, line numbers and content, or match counts."
 )
+
+# ---------------------------------------------------------------------------
+# HTTP tools prompt
+# ---------------------------------------------------------------------------
+
+HTTP_SYSTEM_PROMPT = """\
+## HTTP Tools `fetch_url`, `http_request`
+
+You have access to HTTP tools for fetching web content and making API requests.
+
+- fetch_url: fetch a URL and return content as Markdown (best for web pages)
+- http_request: make an HTTP request (GET, POST, PUT, DELETE) and return the response
+
+Both tools include SSRF protection — requests to private/internal networks are blocked."""

@@ -16,6 +16,7 @@ from google.adk.agents import LlmAgent
 
 from adk_deepagents.backends.protocol import Backend, BackendFactory
 from adk_deepagents.backends.state import StateBackend
+from adk_deepagents.callbacks.after_model import make_after_model_callback
 from adk_deepagents.callbacks.after_tool import make_after_tool_callback
 from adk_deepagents.callbacks.before_agent import make_before_agent_callback
 from adk_deepagents.callbacks.before_model import make_before_model_callback
@@ -122,6 +123,10 @@ def create_deep_agent(
     interrupt_on: dict[str, bool] | None = None,
     extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
+    error_handling: bool = True,
+    message_queue: bool = False,
+    multimodal: bool = False,
+    http_tools: bool = False,
 ) -> LlmAgent:
     """Create a deep agent with ADK primitives.
 
@@ -172,12 +177,24 @@ def create_deep_agent(
         Tool names that require human approval before execution.
     extra_callbacks:
         Optional dict with keys ``before_agent``, ``before_model``,
-        ``before_tool``, ``after_tool``.  Each value is a callback that
+        ``after_model``, ``before_tool``, ``after_tool``.  Each value is a callback that
         is composed **after** the built-in callback.  If the built-in
         callback short-circuits (returns a non-``None`` value), the
         extra callback is **not** called.
     name:
         Agent name (default ``"deep_agent"``).
+    error_handling:
+        Wrap tool functions with error handlers so exceptions return
+        structured error dicts to the LLM instead of crashing.
+    message_queue:
+        When ``True``, enable message queue support. External systems
+        can inject messages mid-run by writing to
+        ``state["_message_queue"]``.
+    multimodal:
+        When ``True``, scan user messages for image URLs and fetch them
+        as inline base64 data parts for multimodal model support.
+    http_tools:
+        Include ``fetch_url`` and ``http_request`` tools with SSRF protection.
 
     Returns
     -------
@@ -216,7 +233,13 @@ def create_deep_agent(
     if tools:
         core_tools.extend(tools)
 
-    # 2b. Conversation compaction tool (manual trigger for summarization)
+    # 2b. Wrap tools with error handler
+    if error_handling:
+        from adk_deepagents.tools.error_handler import wrap_tools_with_error_handler
+
+        core_tools = wrap_tools_with_error_handler(core_tools)
+
+    # 2c. Conversation compaction tool (manual trigger for summarization)
     if summarization is not None:
         core_tools.append(
             create_compact_conversation_tool(
@@ -270,6 +293,14 @@ def create_deep_agent(
                 "and pass them via the `tools` parameter.",
                 stacklevel=2,
             )
+
+    # 4c. HTTP tools
+    has_http_tools = False
+    if http_tools:
+        has_http_tools = True
+        from adk_deepagents.tools.http import fetch_url, http_request
+
+        core_tools.extend([fetch_url, http_request])
 
     # 5. Build sub-agent tools
     subagent_descriptions: list[dict[str, str]] = []
@@ -380,10 +411,13 @@ def create_deep_agent(
     before_model_cb = make_before_model_callback(
         memory_sources=memory,
         has_execution=has_execution,
+        has_http_tools=has_http_tools,
         subagent_descriptions=subagent_descriptions or None,
         dynamic_task_config=resolved_dynamic_task_config,
         summarization_config=summarization,
         backend_factory=backend_factory if summarization else None,
+        message_queue=message_queue,
+        multimodal=multimodal,
     )
 
     after_tool_cb = make_after_tool_callback(
@@ -394,10 +428,13 @@ def create_deep_agent(
         interrupt_on=interrupt_on,
     )
 
+    after_model_cb = make_after_model_callback()
+
     # 6b. Compose extra callbacks (if provided)
     if extra_callbacks:
         before_agent_cb = _compose_callbacks(before_agent_cb, extra_callbacks.get("before_agent"))
         before_model_cb = _compose_callbacks(before_model_cb, extra_callbacks.get("before_model"))
+        after_model_cb = _compose_callbacks(after_model_cb, extra_callbacks.get("after_model"))
         after_tool_cb = _compose_callbacks(after_tool_cb, extra_callbacks.get("after_tool"))
         before_tool_cb = _compose_callbacks(before_tool_cb, extra_callbacks.get("before_tool"))
 
@@ -423,6 +460,7 @@ def create_deep_agent(
         output_schema=output_schema,
         before_agent_callback=before_agent_cb,
         before_model_callback=before_model_cb,
+        after_model_callback=after_model_cb,
         after_tool_callback=after_tool_cb,
         before_tool_callback=before_tool_cb,
     )
@@ -454,6 +492,10 @@ async def create_deep_agent_async(
     interrupt_on: dict[str, bool] | None = None,
     extra_callbacks: dict[str, Callable] | None = None,
     name: str = "deep_agent",
+    error_handling: bool = True,
+    message_queue: bool = False,
+    multimodal: bool = False,
+    http_tools: bool = False,
 ) -> tuple[LlmAgent, Callable | None]:
     """Async variant of ``create_deep_agent()`` that resolves MCP tools.
 
@@ -538,6 +580,10 @@ async def create_deep_agent_async(
         interrupt_on=interrupt_on,
         extra_callbacks=extra_callbacks,
         name=name,
+        error_handling=error_handling,
+        message_queue=message_queue,
+        multimodal=multimodal,
+        http_tools=http_tools,
     )
 
     return agent, cleanup
