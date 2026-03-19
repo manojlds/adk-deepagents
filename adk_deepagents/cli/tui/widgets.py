@@ -4,14 +4,22 @@ from __future__ import annotations
 
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
-from textual.widgets import Button, Input, OptionList, Static
+from textual.widgets import Button, Input, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
+
+# ---------------------------------------------------------------------------
+# MessageDisplay – scrollable area for interleaved user/assistant messages
+# ---------------------------------------------------------------------------
 
 
 class MessageDisplay(VerticalScroll):
-    """Scrollable area showing interleaved user/assistant messages."""
+    """Scrollable area showing interleaved user/assistant messages.
+
+    Assistant text is rendered as Markdown for rich formatting.  Tool calls,
+    system messages, and thinking blocks remain as styled ``Static`` widgets.
+    """
 
     DEFAULT_CSS = """
     MessageDisplay {
@@ -24,8 +32,7 @@ class MessageDisplay(VerticalScroll):
         margin-bottom: 1;
     }
 
-    MessageDisplay .assistant-msg {
-        color: $text;
+    MessageDisplay .assistant-md {
         margin-bottom: 1;
     }
 
@@ -86,11 +93,14 @@ class MessageDisplay(VerticalScroll):
     }
     """
 
-    _current_assistant: Static | None = None
+    _current_assistant_md: Markdown | None = None
     _current_assistant_text: str = ""
     _current_thought: Static | None = None
     _current_thought_text: str = ""
     _in_thought: bool = False
+
+    # Whether tool call/result details are shown.
+    _show_tool_details: bool = True
 
     def add_user_message(self, text: str) -> None:
         """Append a user message bubble."""
@@ -100,24 +110,24 @@ class MessageDisplay(VerticalScroll):
         self.scroll_end(animate=False)
 
     def start_assistant_message(self) -> None:
-        """Begin a new assistant message for streaming deltas."""
+        """Begin a new assistant message for streaming deltas (markdown)."""
         self._end_thought()
-        if self._current_assistant is not None:
+        if self._current_assistant_md is not None:
             return
         self._current_assistant_text = ""
-        widget = Static("", classes="assistant-msg")
-        self._current_assistant = widget
+        widget = Markdown("", classes="assistant-md")
+        self._current_assistant_md = widget
         self.mount(widget)
 
     def append_assistant_delta(self, text: str) -> None:
-        """Append streaming text to the current assistant message."""
+        """Append streaming text to the current assistant markdown block."""
         if self._in_thought:
             self._end_thought()
-        if self._current_assistant is None:
+        if self._current_assistant_md is None:
             self.start_assistant_message()
-        assert self._current_assistant is not None
+        assert self._current_assistant_md is not None
         self._current_assistant_text += text
-        self._current_assistant.update(self._current_assistant_text)
+        self._current_assistant_md.update(self._current_assistant_text)
         self.scroll_end(animate=False)
 
     def start_thought_block(self) -> None:
@@ -150,13 +160,15 @@ class MessageDisplay(VerticalScroll):
         self._end_assistant()
         widget = Static(f"$ {tool_name}", classes="tool-msg")
         self.mount(widget)
-        if detail:
+        if detail and self._show_tool_details:
             self.mount(Static(f"  {detail}", classes="tool-detail-msg"))
         self.scroll_end(animate=False)
 
     def add_tool_result(self, tool_name: str, *, detail: str | None = None) -> None:
         """Show a concise tool result summary."""
         self._end_assistant()
+        if not self._show_tool_details:
+            return
         rendered = f"  -> {detail}" if detail else f"  -> {tool_name} completed"
         self.mount(Static(rendered, classes="tool-result-msg"))
         self.scroll_end(animate=False)
@@ -185,17 +197,27 @@ class MessageDisplay(VerticalScroll):
 
     def clear_transcript(self) -> None:
         """Remove all messages."""
-        self._current_assistant = None
+        self._current_assistant_md = None
         self._current_thought = None
         self._in_thought = False
         self.remove_children()
 
+    def toggle_tool_details(self) -> bool:
+        """Toggle tool detail visibility. Returns the new state."""
+        self._show_tool_details = not self._show_tool_details
+        return self._show_tool_details
+
     def _end_assistant(self) -> None:
-        self._current_assistant = None
+        self._current_assistant_md = None
 
     def _end_thought(self) -> None:
         self._current_thought = None
         self._in_thought = False
+
+
+# ---------------------------------------------------------------------------
+# ApprovalBox – inline approve / reject / always
+# ---------------------------------------------------------------------------
 
 
 class ApprovalBox(Static):
@@ -233,6 +255,10 @@ class ApprovalBox(Static):
         self.add_class("resolved")
 
 
+# ---------------------------------------------------------------------------
+# Slash command registry
+# ---------------------------------------------------------------------------
+
 SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "Show available commands"),
     ("/threads", "List recent threads"),
@@ -240,22 +266,98 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/clear", "Start a new thread"),
     ("/model", "Show the active model"),
     ("/model <name>", "Switch model (or 'default' to reset)"),
+    ("/details", "Toggle tool detail visibility"),
+    ("/compact", "Compact/summarize the session context"),
     ("/quit", "Exit the TUI"),
 ]
 
 
+# ---------------------------------------------------------------------------
+# SubmittableTextArea – TextArea that submits on Enter, newline on Shift+Enter
+# ---------------------------------------------------------------------------
+
+
+class SubmittableTextArea(TextArea):
+    """A ``TextArea`` where **Enter** submits and **Shift+Enter** inserts a newline.
+
+    Textual's stock ``TextArea._on_key`` intercepts the ``enter`` key and
+    inserts ``"\\n"`` *before* the event can bubble to the parent widget.
+    This subclass overrides that behaviour so that plain Enter fires a
+    ``Submitted`` message while Shift+Enter (or Ctrl+Enter) still inserts
+    a newline.
+    """
+
+    class Submitted(Message):
+        """Fired when the user presses Enter (without Shift/Ctrl)."""
+
+        def __init__(self, value: str) -> None:
+            super().__init__()
+            self.value = value
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key == "enter" and not self.read_only:
+            # Plain Enter → submit the text instead of inserting a newline.
+            event.stop()
+            event.prevent_default()
+            value = self.text.strip()
+            if value:
+                self.post_message(self.Submitted(value))
+                self.clear()
+            return
+
+        if event.key in {"shift+enter", "ctrl+enter"} and not self.read_only:
+            # Shift/Ctrl+Enter → insert a newline (mimic stock behaviour).
+            event.stop()
+            event.prevent_default()
+            start, end = self.selection
+            self._replace_via_keyboard("\n", start, end)
+            return
+
+        # Everything else → delegate to the stock handler.
+        await super()._on_key(event)
+
+
+# ---------------------------------------------------------------------------
+# PromptInput – multi-line TextArea with slash-command picker
+# ---------------------------------------------------------------------------
+
+
 class PromptInput(Static):
-    """Input box with slash-command picker and submit handling."""
+    """Multi-line input box with slash-command picker and submit handling.
+
+    * **Enter** submits the message.
+    * **Shift+Enter** (or **Ctrl+Enter**) inserts a newline.
+    * Typing ``/`` at the start of input opens the slash-command picker.
+    """
 
     DEFAULT_CSS = """
     PromptInput {
         height: auto;
         min-height: 3;
+        max-height: 12;
         padding: 0 1;
     }
 
-    PromptInput Input {
+    PromptInput SubmittableTextArea {
         width: 1fr;
+        min-height: 3;
+        max-height: 10;
+        border: tall $accent;
+    }
+
+    PromptInput SubmittableTextArea:focus {
+        border: tall $accent;
+    }
+
+    PromptInput .prompt-placeholder {
+        color: $text-muted;
+        text-opacity: 60%;
+        height: 1;
+        display: none;
+    }
+
+    PromptInput .prompt-placeholder.visible {
+        display: block;
     }
 
     PromptInput #command-picker {
@@ -277,7 +379,7 @@ class PromptInput(Static):
     """
 
     class Submitted(Message):
-        """Fired when the user presses Enter."""
+        """Fired when the user presses Enter (without modifier)."""
 
         def __init__(self, value: str) -> None:
             super().__init__()
@@ -285,18 +387,39 @@ class PromptInput(Static):
 
     def compose(self) -> ComposeResult:
         yield OptionList(id="command-picker")
-        yield Input(placeholder="Send a message or /help", id="prompt-input")
+        yield Static("Send a message or /help", classes="prompt-placeholder visible")
+        yield SubmittableTextArea(id="prompt-input", language=None)
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Show/hide and filter the command picker as the user types."""
-        value = event.value
+    def on_mount(self) -> None:
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
+        ta.show_line_numbers = False
+
+    def on_submittable_text_area_submitted(self, event: SubmittableTextArea.Submitted) -> None:
+        """Relay the submission from the TextArea as a PromptInput.Submitted."""
+        event.stop()
         picker = self.query_one("#command-picker", OptionList)
+        picker.remove_class("visible")
+        self.post_message(self.Submitted(event.value))
 
-        if not value.startswith("/"):
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Show/hide the slash-command picker and manage placeholder."""
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
+        text = ta.text
+        placeholder = self.query_one(".prompt-placeholder", Static)
+
+        # Placeholder visibility
+        if text:
+            placeholder.remove_class("visible")
+        else:
+            placeholder.add_class("visible")
+
+        # Slash-command picker
+        picker = self.query_one("#command-picker", OptionList)
+        if not text.startswith("/"):
             picker.remove_class("visible")
             return
 
-        prefix = value.lower()
+        prefix = text.lower().strip()
         picker.clear_options()
         for cmd, desc in SLASH_COMMANDS:
             if cmd.startswith(prefix) or prefix == "/":
@@ -308,14 +431,21 @@ class PromptInput(Static):
         else:
             picker.remove_class("visible")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        event.stop()
+    def on_key(self, event: events.Key) -> None:
+        """Forward arrow keys to the picker and handle Escape."""
         picker = self.query_one("#command-picker", OptionList)
-        picker.remove_class("visible")
-        value = event.value.strip()
-        if value:
-            self.post_message(self.Submitted(value))
-            event.input.clear()
+
+        # Close picker on Escape
+        if event.key == "escape" and picker.has_class("visible"):
+            picker.remove_class("visible")
+            event.prevent_default()
+            event.stop()
+            return
+
+        # Forward arrow keys to picker when visible
+        if picker.has_class("visible") and event.key in {"up", "down"}:
+            picker.focus()
+            return
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Fill the input with the selected slash command."""
@@ -324,45 +454,233 @@ class PromptInput(Static):
         picker.remove_class("visible")
 
         cmd_id = event.option_id or ""
-        inp = self.query_one("#prompt-input", Input)
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
 
-        if cmd_id in {"/help", "/clear", "/quit"}:
-            inp.clear()
+        # Commands with no arguments — submit immediately
+        if cmd_id in {"/help", "/clear", "/quit", "/details", "/compact"}:
+            ta.clear()
             self.post_message(self.Submitted(cmd_id))
         else:
-            inp.value = cmd_id + " " if "<" in cmd_id else cmd_id
-            # Strip the angle-bracket placeholder for commands that take args
-            if "<" in inp.value:
-                inp.value = cmd_id.split("<")[0].rstrip()
-                inp.value += " "
-            inp.focus()
-
-    def on_key(self, event: events.Key) -> None:
-        """Forward arrow keys from input to the picker when visible."""
-        picker = self.query_one("#command-picker", OptionList)
-        if not picker.has_class("visible"):
-            return
-
-        if event.key == "escape":
-            picker.remove_class("visible")
-            event.prevent_default()
-            event.stop()
-        elif event.key in {"up", "down"}:
-            picker.focus()
+            # Place command in the input and strip the placeholder args
+            if "<" in cmd_id:
+                text = cmd_id.split("<")[0].rstrip() + " "
+            else:
+                text = cmd_id + " " if " " not in cmd_id else cmd_id
+            ta.clear()
+            ta.insert(text)
+            ta.focus()
 
     def disable_input(self) -> None:
-        self.query_one("#prompt-input", Input).disabled = True
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
+        ta.read_only = True
         self.query_one("#command-picker", OptionList).remove_class("visible")
 
     def enable_input(self) -> None:
-        inp = self.query_one("#prompt-input", Input)
-        inp.disabled = False
-        inp.placeholder = "Send a message or /help"
-        inp.focus()
+        ta = self.query_one("#prompt-input", SubmittableTextArea)
+        ta.read_only = False
+        ta.focus()
+        placeholder = self.query_one(".prompt-placeholder", Static)
+        if not ta.text:
+            placeholder.add_class("visible")
+            placeholder.update("Send a message or /help")
 
     def set_activity_status(self, status: str | None) -> None:
-        inp = self.query_one("#prompt-input", Input)
+        placeholder = self.query_one(".prompt-placeholder", Static)
         if status:
-            inp.placeholder = status
+            placeholder.update(status)
+            placeholder.add_class("visible")
         else:
-            inp.placeholder = "Send a message or /help"
+            placeholder.update("Send a message or /help")
+            ta = self.query_one("#prompt-input", SubmittableTextArea)
+            if not ta.text:
+                placeholder.add_class("visible")
+            else:
+                placeholder.remove_class("visible")
+
+
+# ---------------------------------------------------------------------------
+# CommandPalette – searchable overlay listing available actions/commands
+# ---------------------------------------------------------------------------
+
+
+class CommandPaletteItem:
+    """An action that can appear in the command palette."""
+
+    def __init__(
+        self,
+        *,
+        action: str,
+        label: str,
+        description: str = "",
+        keybind: str = "",
+    ) -> None:
+        self.action = action
+        self.label = label
+        self.description = description
+        self.keybind = keybind
+
+
+# Default palette items (will be enriched by the app with resolved keybinds).
+DEFAULT_PALETTE_ITEMS: list[CommandPaletteItem] = [
+    CommandPaletteItem(
+        action="help", label="Help", description="Show help and commands", keybind=""
+    ),
+    CommandPaletteItem(
+        action="session_new",
+        label="New Session",
+        description="Start a new thread",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="session_list",
+        label="Sessions",
+        description="List and switch sessions",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="model_list",
+        label="Models",
+        description="Show or switch model",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="tool_details_toggle",
+        label="Toggle Details",
+        description="Show/hide tool call details",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="session_compact",
+        label="Compact",
+        description="Compact/summarize the session",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="session_interrupt",
+        label="Interrupt",
+        description="Cancel the running turn",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="app_quit",
+        label="Quit",
+        description="Exit the TUI",
+        keybind="",
+    ),
+]
+
+
+class CommandPalette(Vertical):
+    """Modal command palette overlay with fuzzy search.
+
+    Mount this widget, call :meth:`show`, and listen for
+    :class:`CommandPalette.ActionSelected` messages.
+    """
+
+    DEFAULT_CSS = """
+    CommandPalette {
+        display: none;
+        width: 60;
+        max-width: 80%;
+        height: auto;
+        max-height: 20;
+        background: $surface;
+        border: solid $accent;
+        padding: 0 1;
+        layer: overlay;
+        align-horizontal: center;
+        offset-y: 2;
+    }
+
+    CommandPalette.visible {
+        display: block;
+    }
+
+    CommandPalette Input {
+        width: 1fr;
+        margin-bottom: 1;
+    }
+
+    CommandPalette OptionList {
+        width: 1fr;
+        max-height: 14;
+    }
+    """
+
+    class ActionSelected(Message):
+        """Fired when the user selects an action from the palette."""
+
+        def __init__(self, action: str) -> None:
+            super().__init__()
+            self.action = action
+
+    def __init__(
+        self,
+        items: list[CommandPaletteItem] | None = None,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
+        self._items = items or list(DEFAULT_PALETTE_ITEMS)
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="Type to search actions...", id="palette-search")
+        yield OptionList(id="palette-list")
+
+    def show(self, items: list[CommandPaletteItem] | None = None) -> None:
+        """Open the palette with the given (or default) items."""
+        if items is not None:
+            self._items = items
+        self.add_class("visible")
+        self._populate_list("")
+        search_input = self.query_one("#palette-search", Input)
+        search_input.value = ""
+        search_input.focus()
+
+    def hide(self) -> None:
+        """Close the palette."""
+        self.remove_class("visible")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._populate_list(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Select the highlighted item on Enter."""
+        event.stop()
+        option_list = self.query_one("#palette-list", OptionList)
+        idx = option_list.highlighted
+        if idx is not None and 0 <= idx < option_list.option_count:
+            option = option_list.get_option_at_index(idx)
+            if option.id:
+                self.post_message(self.ActionSelected(option.id))
+        self.hide()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            self.post_message(self.ActionSelected(event.option_id))
+        self.hide()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.hide()
+            event.prevent_default()
+            event.stop()
+        elif event.key in {"up", "down"}:
+            self.query_one("#palette-list", OptionList).focus()
+
+    def _populate_list(self, query: str) -> None:
+        option_list = self.query_one("#palette-list", OptionList)
+        option_list.clear_options()
+        q = query.lower().strip()
+        for item in self._items:
+            text = f"{item.label}  — {item.description}"
+            if item.keybind:
+                text += f"  [{item.keybind}]"
+            if not q or q in item.label.lower() or q in item.description.lower():
+                option_list.add_option(Option(text, id=item.action))
+        if option_list.option_count > 0:
+            option_list.highlighted = 0

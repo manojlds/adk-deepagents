@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from adk_deepagents.types import DynamicTaskConfig
 
@@ -21,6 +22,7 @@ def run_tui(
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
+    keybinds_raw: dict[str, Any] | None = None,
 ) -> int:
     """Launch the Textual TUI and block until exit."""
     from adk_deepagents.cli.tui.app import DeepAgentTui, TuiConfig
@@ -37,6 +39,7 @@ def run_tui(
         memory_sources=list(memory_sources),
         memory_source_paths=dict(memory_source_paths) if memory_source_paths else {},
         skills_dirs=list(skills_dirs),
+        keybinds_raw=keybinds_raw,
     )
 
     app = DeepAgentTui(config)

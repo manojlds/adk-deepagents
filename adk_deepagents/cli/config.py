@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 CLI_HOME_ENV_VAR = "ADK_DEEPAGENTS_HOME"
 CLI_HOME_DIRNAME = ".adk-deepagents"
@@ -40,6 +40,7 @@ class CliDefaults:
     dynamic_task_max_parallel: int | None = None
     dynamic_task_concurrency_policy: Literal["error", "wait"] | None = None
     dynamic_task_queue_timeout_seconds: float | None = None
+    tui_keybinds: dict[str, Any] | None = field(default=None)
 
 
 def resolve_cli_paths(home_dir: Path | None = None) -> CliPaths:
@@ -136,12 +137,24 @@ def load_cli_defaults(paths: CliPaths) -> CliDefaults:
                 raise ValueError("config.toml dynamic_task.queue_timeout_seconds must be >= 0.")
             dynamic_task_queue_timeout_seconds = queue_timeout
 
+    tui_keybinds: dict[str, Any] | None = None
+    tui_raw = config_data.get("tui")
+    if tui_raw is not None:
+        if not isinstance(tui_raw, dict):
+            raise ValueError("config.toml [tui] must be a table.")
+        keybinds_raw = tui_raw.get("keybinds")
+        if keybinds_raw is not None:
+            if not isinstance(keybinds_raw, dict):
+                raise ValueError("config.toml [tui.keybinds] must be a table.")
+            tui_keybinds = keybinds_raw
+
     return CliDefaults(
         default_agent=default_agent,
         default_model=default_model,
         dynamic_task_max_parallel=dynamic_task_max_parallel,
         dynamic_task_concurrency_policy=dynamic_task_concurrency_policy,
         dynamic_task_queue_timeout_seconds=dynamic_task_queue_timeout_seconds,
+        tui_keybinds=tui_keybinds,
     )
 
 
@@ -172,6 +185,12 @@ def save_cli_defaults(paths: CliPaths, defaults: CliDefaults) -> None:
             )
         if defaults.dynamic_task_queue_timeout_seconds is not None:
             lines.append(f"queue_timeout_seconds = {defaults.dynamic_task_queue_timeout_seconds}")
+
+    if defaults.tui_keybinds:
+        lines.append("")
+        lines.append("[tui.keybinds]")
+        for action, combo in sorted(defaults.tui_keybinds.items()):
+            lines.append(f'{action} = "{_toml_escape(str(combo))}"')
 
     _atomic_write_text(paths.config_path, "\n".join(lines) + "\n")
 

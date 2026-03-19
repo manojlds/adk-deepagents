@@ -504,6 +504,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             memory_sources=resources.memory_sources,
             memory_source_paths=resources.memory_source_paths,
             skills_dirs=resources.skills_dirs,
+            keybinds_raw=defaults.tui_keybinds,
         )
 
     return run_interactive(

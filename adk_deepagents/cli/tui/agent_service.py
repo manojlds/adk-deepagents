@@ -305,6 +305,7 @@ class AgentService:
     _busy: bool = field(default=False, init=False, repr=False)
     _activity_phase: ActivityPhase = field(default="working", init=False, repr=False)
     _activity_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
+    _turn_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _pending_approval: asyncio.Future[tuple[bool, bool]] | None = field(
         default=None, init=False, repr=False
     )
@@ -358,12 +359,23 @@ class AgentService:
 
         await self.updates.put(UiUpdate(kind="user_message", text=text))
         self._busy = True
-        asyncio.create_task(self._run_turn(text))
+        self._turn_task = asyncio.create_task(self._run_turn(text))
 
     def resolve_approval(self, approved: bool, always: bool = False) -> None:
         """Resolve a pending tool approval from the TUI."""
         if self._pending_approval and not self._pending_approval.done():
             self._pending_approval.set_result((approved, always))
+
+    def cancel_turn(self) -> bool:
+        """Cancel the currently running agent turn.
+
+        Returns ``True`` if a turn was actually cancelled, ``False`` if
+        nothing was running.
+        """
+        if not self._busy or self._turn_task is None:
+            return False
+        self._turn_task.cancel()
+        return True
 
     def _set_activity_phase(self, phase: ActivityPhase) -> None:
         self._activity_phase = phase
@@ -469,10 +481,13 @@ class AgentService:
                             approved=approved,
                         )
                     )
+        except asyncio.CancelledError:
+            await self.updates.put(UiUpdate(kind="system", text="Generation interrupted."))
         except Exception as exc:  # noqa: BLE001
             await self.updates.put(UiUpdate(kind="error", text=str(exc)))
         finally:
             self._busy = False
+            self._turn_task = None
             activity_task = self._activity_task
             self._activity_task = None
             if activity_task is not None:
