@@ -693,18 +693,6 @@ class AgentService:
         if result == "exit":
             await self.updates.put(UiUpdate(kind="exit"))
 
-    async def _flush_queued_messages(self) -> None:
-        """Clear the local queued messages buffer.
-
-        The actual injection is handled by the shared in-process
-        ``_SharedMessageQueue`` — the ``before_model_callback`` calls
-        ``drain()`` directly on every LLM invocation.  This method now
-        only clears the local ``_queued_messages`` list (used for UI
-        tracking) since the shared queue was already populated by
-        ``queue_message()``.
-        """
-        self._queued_messages.clear()
-
     async def _run_turn(self, prompt: str) -> None:
         assert self._thread_context is not None
         assert self._approval_context is not None
@@ -722,10 +710,9 @@ class AgentService:
                 pending_confirmations: list[_ToolConfirmationRequest] = []
                 seen_confirmation_ids: set[str] = set()
 
-                # Flush any queued messages into session state so the
-                # before_model_callback can inject them into the next
-                # LLM call.
-                await self._flush_queued_messages()
+                # Clear the local UI-tracking list; the shared queue is
+                # drained directly by the before_model_callback.
+                self._queued_messages.clear()
 
                 async for event in self._runner.run_async(
                     user_id=self._thread_context.user_id,
@@ -766,6 +753,22 @@ class AgentService:
                     await activity_task
             await self.updates.put(UiUpdate(kind="activity", text=None))
             await self.updates.put(UiUpdate(kind="turn_finished"))
+
+        # After the turn completes, check whether any messages were
+        # queued while the agent was busy.  If so, combine them into a
+        # single follow-up prompt and start a new turn automatically.
+        # This handles the common case where the user sends a message
+        # during a simple single-LLM-call turn that finishes before the
+        # before_model_callback gets a chance to drain the queue.
+        remaining = self._shared_queue.drain()
+        if remaining:
+            combined = "\n\n---\n\n".join(
+                m["text"] for m in remaining if isinstance(m, dict) and m.get("text")
+            )
+            if combined.strip():
+                await self.updates.put(UiUpdate(kind="user_message", text=combined.strip()))
+                self._busy = True
+                self._turn_task = asyncio.create_task(self._run_turn(combined.strip()))
 
     async def _emit_event_updates(self, event: Any) -> None:
         """Parse an ADK event and enqueue ordered UI updates."""

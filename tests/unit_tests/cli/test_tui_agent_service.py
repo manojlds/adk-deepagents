@@ -6,6 +6,10 @@ import asyncio
 from contextlib import suppress
 from pathlib import Path
 
+from adk_deepagents.cli.interactive import (
+    _InteractiveApprovalContext,
+    _ThreadCommandContext,
+)
 from adk_deepagents.cli.tui.agent_service import (
     AgentService,
     UiUpdate,
@@ -816,20 +820,89 @@ class TestHandleInputWhenBusy:
         assert service._queued_messages == []
 
 
-class TestFlushQueuedMessages:
-    """Test the _flush_queued_messages() helper."""
+class TestPostTurnQueueDrain:
+    """Test that _run_turn auto-starts a follow-up turn for queued messages."""
 
-    def test_noop_when_no_messages(self) -> None:
+    def test_queued_messages_trigger_follow_up_turn(self) -> None:
+        """Messages left in _shared_queue after a turn should start a new turn."""
         service = _service()
-        asyncio.run(service._flush_queued_messages())
-        assert service._queued_messages == []
+        service._thread_context = _ThreadCommandContext(
+            db_path=service.db_path,
+            user_id=service.user_id,
+            agent_name=service.agent_name,
+            model=service.model,
+            active_session_id=service.session_id,
+        )
+        service._approval_context = _InteractiveApprovalContext(auto_approve=True)
 
-    def test_clears_local_buffer(self) -> None:
+        # Simulate a runner that completes immediately (no events).
+        async def _empty_run(**_kwargs: object) -> None:  # type: ignore[override]
+            # Yield nothing — turn ends immediately.
+            return
+            yield  # make it an async generator  # noqa: RET504
+
+        class _FakeRunner:
+            def run_async(self, **kwargs: object) -> object:
+                return _empty_run(**kwargs)
+
+        service._runner = _FakeRunner()
+
+        # Push a message into the shared queue *before* the turn runs.
+        # This simulates a message queued during the turn that wasn't
+        # drained by before_model_callback.
+        service._shared_queue.push("follow-up instruction")
+
+        asyncio.run(service._run_turn("initial prompt"))
+
+        # Collect all updates.
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        # Should have two turn_started / turn_finished pairs:
+        # one for the initial turn, one for the follow-up.
+        turn_started = [u for u in updates if u.kind == "turn_started"]
+        turn_finished = [u for u in updates if u.kind == "turn_finished"]
+        assert len(turn_started) >= 2, f"Expected 2+ turn_started, got {len(turn_started)}"
+        assert len(turn_finished) >= 2, f"Expected 2+ turn_finished, got {len(turn_finished)}"
+
+        # The follow-up prompt should appear as a user_message.
+        user_messages = [u for u in updates if u.kind == "user_message"]
+        assert any("follow-up instruction" in (u.text or "") for u in user_messages)
+
+    def test_no_follow_up_when_queue_empty(self) -> None:
+        """No extra turn should start when the shared queue is empty."""
         service = _service()
-        service._queued_messages = ["msg1", "msg2"]
-        asyncio.run(service._flush_queued_messages())
-        # The simplified flush just clears the local list.
-        assert service._queued_messages == []
+        service._thread_context = _ThreadCommandContext(
+            db_path=service.db_path,
+            user_id=service.user_id,
+            agent_name=service.agent_name,
+            model=service.model,
+            active_session_id=service.session_id,
+        )
+        service._approval_context = _InteractiveApprovalContext(auto_approve=True)
+
+        async def _empty_run(**_kwargs: object) -> None:  # type: ignore[override]
+            return
+            yield  # noqa: RET504
+
+        class _FakeRunner:
+            def run_async(self, **kwargs: object) -> object:
+                return _empty_run(**kwargs)
+
+        service._runner = _FakeRunner()
+
+        asyncio.run(service._run_turn("hello"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        # Only one turn cycle.
+        turn_started = [u for u in updates if u.kind == "turn_started"]
+        turn_finished = [u for u in updates if u.kind == "turn_finished"]
+        assert len(turn_started) == 1
+        assert len(turn_finished) == 1
 
 
 class TestSharedMessageQueue:
