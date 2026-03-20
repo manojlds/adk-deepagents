@@ -534,10 +534,13 @@ class SubmittableTextArea(TextArea):
 
     async def _on_key(self, event: events.Key) -> None:
         if event.key in {"tab", "shift+tab"}:
-            # Let Tab/Shift+Tab bubble to the app for agent cycling
-            # instead of being consumed by the TextArea for indentation
-            # or focus cycling.
+            # Stop the event completely so Textual's Screen-level focus_next
+            # binding doesn't consume it, then manually dispatch the agent
+            # cycle action to the app.
+            event.stop()
             event.prevent_default()
+            action = "agent_cycle" if event.key == "tab" else "agent_cycle_reverse"
+            self.app.action_app_action(action)
             return
 
         if event.key == "enter" and not self.read_only:
