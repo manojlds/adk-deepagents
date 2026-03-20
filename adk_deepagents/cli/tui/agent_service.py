@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,6 +41,31 @@ _FILE_REF_MAX_SIZE = 100_000  # Skip files larger than 100KB.
 _FILE_REF_PATTERN = re.compile(r"(?<!\w)@([\w./\-~][\w./\-~]*)")
 
 ActivityPhase = Literal["working", "thinking", "tool", "responding", "approval"]
+
+
+class _SharedMessageQueue:
+    """Thread-safe in-process message buffer for TUI ↔ callback communication.
+
+    The TUI's ``queue_message()`` appends messages here.  The
+    ``before_model_callback`` calls ``drain()`` on every LLM invocation
+    to retrieve and clear queued messages — no session state needed.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._messages: list[dict[str, Any]] = []
+
+    def push(self, text: str) -> None:
+        with self._lock:
+            self._messages.append({"text": text})
+
+    def drain(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if not self._messages:
+                return []
+            messages = list(self._messages)
+            self._messages.clear()
+            return messages
 
 
 def _expand_file_references(text: str) -> tuple[str, list[tuple[str, str]]]:
@@ -423,6 +449,9 @@ class AgentService:
         default_factory=dict, init=False, repr=False
     )
     _queued_messages: list[str] = field(default_factory=list, init=False, repr=False)
+    _shared_queue: _SharedMessageQueue = field(
+        default_factory=_SharedMessageQueue, init=False, repr=False
+    )
 
     def initialize(self) -> None:
         """Build the runner and internal contexts. Must be called once."""
@@ -434,6 +463,7 @@ class AgentService:
             memory_sources=self.memory_sources,
             memory_source_paths=self.memory_source_paths or {},
             skills_dirs=self.skills_dirs,
+            message_queue_provider=self._shared_queue.drain,
         )
         self._thread_context = _ThreadCommandContext(
             db_path=self.db_path,
@@ -453,6 +483,7 @@ class AgentService:
                 memory_sources=self.memory_sources,
                 memory_source_paths=self.memory_source_paths or {},
                 skills_dirs=self.skills_dirs,
+                message_queue_provider=self._shared_queue.drain,
             )
 
         self._model_context = _ModelCommandContext(model=self.model, switch_model=_switch_model)
@@ -460,12 +491,14 @@ class AgentService:
     async def queue_message(self, text: str) -> None:
         """Buffer a message for injection into the next LLM call.
 
-        The message is stored locally and will be flushed into the ADK
-        session's ``state["_message_queue"]`` at the start of the next
-        ``run_async()`` iteration.  A ``queued_message`` UI update is
-        emitted so the TUI can display the message immediately.
+        The message is pushed into a shared in-process buffer that the
+        ``before_model_callback`` drains on every LLM invocation.  This
+        means mid-turn steering works immediately — no session state
+        round-trip is needed.  A ``queued_message`` UI update is emitted
+        so the TUI can display the message right away.
         """
         self._queued_messages.append(text)
+        self._shared_queue.push(text)
         await self.updates.put(UiUpdate(kind="queued_message", text=text))
 
     async def handle_input(self, text: str) -> None:
@@ -661,40 +694,16 @@ class AgentService:
             await self.updates.put(UiUpdate(kind="exit"))
 
     async def _flush_queued_messages(self) -> None:
-        """Write buffered queued messages into the ADK session state.
+        """Clear the local queued messages buffer.
 
-        The ``before_model_callback`` will consume
-        ``state["_message_queue"]`` before the next LLM call and inject
-        them into the conversation.  Messages are drained from the
-        local buffer so they aren't sent twice.
+        The actual injection is handled by the shared in-process
+        ``_SharedMessageQueue`` — the ``before_model_callback`` calls
+        ``drain()`` directly on every LLM invocation.  This method now
+        only clears the local ``_queued_messages`` list (used for UI
+        tracking) since the shared queue was already populated by
+        ``queue_message()``.
         """
-        if not self._queued_messages:
-            return
-
-        assert self._thread_context is not None
-
-        messages = list(self._queued_messages)
         self._queued_messages.clear()
-
-        thread_ctx = self._thread_context
-        try:
-            session = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: self._runner.session_service.get_session(
-                    app_name=self._runner.app_name,
-                    user_id=thread_ctx.user_id,
-                    session_id=thread_ctx.active_session_id,
-                ),
-            )
-            if session is not None:
-                # Merge with any existing queued messages in state.
-                existing = session.state.get("_message_queue")
-                queue = list(existing) if isinstance(existing, list) else []
-                queue.extend({"text": m} for m in messages)
-                session.state["_message_queue"] = queue
-        except Exception:  # noqa: BLE001
-            # If session write fails, re-buffer so the messages aren't lost.
-            self._queued_messages.extend(messages)
 
     async def _run_turn(self, prompt: str) -> None:
         assert self._thread_context is not None

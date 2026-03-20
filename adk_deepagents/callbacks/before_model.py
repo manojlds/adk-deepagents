@@ -245,6 +245,7 @@ def make_before_model_callback(
     summarization_config: SummarizationConfig | None = None,
     backend_factory: BackendFactory | None = None,
     message_queue: bool = False,
+    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
     multimodal: bool = False,
 ) -> Callable:
     """Create a ``before_model_callback`` that injects dynamic system prompts.
@@ -270,6 +271,12 @@ def make_before_model_callback(
     message_queue:
         When ``True``, check ``state["_message_queue"]`` for externally
         injected messages and append them to the LLM request contents.
+    message_queue_provider:
+        Optional callable that drains and returns queued messages from
+        a shared in-process buffer.  Each message is a dict with at
+        least a ``"text"`` key.  When provided, this is checked
+        **in addition to** ``state["_message_queue"]`` (allowing both
+        in-process and state-based queuing to coexist).
     multimodal:
         When ``True``, scan user messages for image URLs and fetch them
         as inline base64 data parts for multimodal model support.
@@ -298,6 +305,12 @@ def make_before_model_callback(
             if queued and isinstance(queued, list):
                 _clear_state_key(state, "_message_queue")
                 _inject_queued_messages(llm_request, queued)
+
+        # 0c. Process in-process message queue provider (TUI steering)
+        if message_queue_provider is not None and llm_request.contents is not None:
+            provider_messages = message_queue_provider()
+            if provider_messages:
+                _inject_queued_messages(llm_request, provider_messages)
 
         additions: list[str] = []
 

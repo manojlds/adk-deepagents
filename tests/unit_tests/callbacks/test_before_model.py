@@ -304,3 +304,67 @@ def test_resolve_context_window_none_defaults():
     """Default SummarizationConfig (no context_window) uses dynamic model lookup."""
     config = SummarizationConfig()  # model defaults to "gemini-2.5-flash"
     assert _resolve_context_window(config) == resolve_context_window("gemini-2.5-flash")
+
+
+# ---------------------------------------------------------------------------
+# Message queue provider tests
+# ---------------------------------------------------------------------------
+
+
+async def test_message_queue_provider_injects_messages():
+    """message_queue_provider callable should inject messages into the LLM request."""
+    messages = [{"text": "steer left"}, {"text": "also do X"}]
+
+    def provider():
+        result = list(messages)
+        messages.clear()
+        return result
+
+    cb = make_before_model_callback(message_queue_provider=provider)
+    ctx = MagicMock()
+    ctx.state = {}
+    request = _make_llm_request()
+    # Add a user message so contents is non-empty.
+    request.contents = [types.Content(role="user", parts=[types.Part(text="hello")])]
+
+    await cb(ctx, request)
+
+    # Should have the original user message plus the injected one.
+    assert len(request.contents) == 2
+    injected = request.contents[-1]
+    assert injected.role == "user"
+    assert "[Injected message]" in injected.parts[0].text
+    assert "steer left" in injected.parts[0].text
+    assert "also do X" in injected.parts[0].text
+
+
+async def test_message_queue_provider_empty_noop():
+    """When provider returns empty list, no injection occurs."""
+    cb = make_before_model_callback(message_queue_provider=lambda: [])
+    ctx = MagicMock()
+    ctx.state = {}
+    request = _make_llm_request()
+    request.contents = [types.Content(role="user", parts=[types.Part(text="hello")])]
+
+    await cb(ctx, request)
+    assert len(request.contents) == 1
+
+
+async def test_message_queue_provider_works_with_state_queue():
+    """Provider and state-based queue should both work (both inject)."""
+    cb = make_before_model_callback(
+        message_queue=True,
+        message_queue_provider=lambda: [{"text": "from provider"}],
+    )
+    ctx = MagicMock()
+    ctx.state = {"_message_queue": [{"text": "from state"}]}
+    request = _make_llm_request()
+    request.contents = [types.Content(role="user", parts=[types.Part(text="hello")])]
+
+    await cb(ctx, request)
+
+    # Should have original + state injection + provider injection = 3
+    assert len(request.contents) == 3
+    texts = [c.parts[0].text for c in request.contents]
+    assert any("from state" in t for t in texts)
+    assert any("from provider" in t for t in texts)

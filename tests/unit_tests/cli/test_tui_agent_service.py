@@ -17,6 +17,7 @@ from adk_deepagents.cli.tui.agent_service import (
     _format_tool_call_detail,
     _format_tool_response_detail,
     _generate_unified_diff,
+    _SharedMessageQueue,
 )
 
 
@@ -763,6 +764,24 @@ class TestQueueMessage:
         assert updates[0].text == "first"
         assert updates[1].text == "second"
 
+    def test_queue_message_pushes_to_shared_queue(self) -> None:
+        service = _service()
+        asyncio.run(service.queue_message("shared"))
+        drained = service._shared_queue.drain()
+        assert len(drained) == 1
+        assert drained[0] == {"text": "shared"}
+
+    def test_queue_message_shared_queue_multiple(self) -> None:
+        service = _service()
+        asyncio.run(service.queue_message("a"))
+        asyncio.run(service.queue_message("b"))
+        drained = service._shared_queue.drain()
+        assert len(drained) == 2
+        assert drained[0] == {"text": "a"}
+        assert drained[1] == {"text": "b"}
+        # Drain again should be empty.
+        assert service._shared_queue.drain() == []
+
 
 class TestHandleInputWhenBusy:
     """Test that handle_input() queues messages when a turn is running."""
@@ -802,20 +821,68 @@ class TestFlushQueuedMessages:
 
     def test_noop_when_no_messages(self) -> None:
         service = _service()
-        # Should not raise even without a runner.
         asyncio.run(service._flush_queued_messages())
         assert service._queued_messages == []
 
-    def test_clears_buffer_after_flush_attempt(self) -> None:
+    def test_clears_local_buffer(self) -> None:
         service = _service()
         service._queued_messages = ["msg1", "msg2"]
-        # Without a real runner/session, it will fail and re-buffer.
-        # We just verify the method doesn't crash.
-        with suppress(Exception):
-            asyncio.run(service._flush_queued_messages())
-        # After an exception, messages should be re-buffered (not lost).
-        # OR if it succeeded somehow, they should be cleared.
-        # Either way, no crash.
+        asyncio.run(service._flush_queued_messages())
+        # The simplified flush just clears the local list.
+        assert service._queued_messages == []
+
+
+class TestSharedMessageQueue:
+    """Test the _SharedMessageQueue thread-safe buffer."""
+
+    def test_push_and_drain(self) -> None:
+        q = _SharedMessageQueue()
+        q.push("hello")
+        result = q.drain()
+        assert result == [{"text": "hello"}]
+
+    def test_drain_clears(self) -> None:
+        q = _SharedMessageQueue()
+        q.push("a")
+        q.drain()
+        assert q.drain() == []
+
+    def test_multiple_push(self) -> None:
+        q = _SharedMessageQueue()
+        q.push("x")
+        q.push("y")
+        q.push("z")
+        result = q.drain()
+        assert len(result) == 3
+        assert result[0] == {"text": "x"}
+        assert result[1] == {"text": "y"}
+        assert result[2] == {"text": "z"}
+
+    def test_drain_empty(self) -> None:
+        q = _SharedMessageQueue()
+        assert q.drain() == []
+
+    def test_thread_safety(self) -> None:
+        """Push from multiple threads, drain should get all messages."""
+        import threading
+
+        q = _SharedMessageQueue()
+        barrier = threading.Barrier(4)
+
+        def pusher(prefix: str) -> None:
+            barrier.wait()
+            for i in range(10):
+                q.push(f"{prefix}-{i}")
+
+        threads = [threading.Thread(target=pusher, args=(f"t{i}",)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        result = q.drain()
+        assert len(result) == 40
+        assert q.drain() == []
 
 
 # ---------------------------------------------------------------------------
