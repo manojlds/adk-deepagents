@@ -124,7 +124,7 @@ class DeepAgentTui(App[None]):
     """Full-screen TUI for interacting with adk-deepagents."""
 
     TITLE = "adk-deepagents"
-    SUB_TITLE = "agent"
+    SUB_TITLE = "build"
 
     CSS = """
     Screen {
@@ -443,15 +443,18 @@ class DeepAgentTui(App[None]):
         await self._service.export_conversation()
 
     def _update_sidebar_info(self) -> None:
-        """Refresh sidebar labels with current agent/model/session info."""
+        """Refresh sidebar labels and header subtitle with current agent/model/session info."""
         sidebar = self.query_one(Sidebar)
         profile = self._service.active_agent_profile
+        agent_name = profile.name if profile else self._service.active_agent_name
         if profile:
             sidebar.update_agent_info(profile.name, profile.description)
         else:
-            sidebar.update_agent_info(self._service.active_agent_name)
+            sidebar.update_agent_info(agent_name)
         model_name = self._config.model or "default"
         sidebar.update_model_info(model_name)
+        # Update header subtitle so the active agent is always visible.
+        self.sub_title = f"{agent_name} | {model_name}"
         if self._service._thread_context is not None:
             sidebar.update_session_info(self._service._thread_context.active_session_id)
         else:
