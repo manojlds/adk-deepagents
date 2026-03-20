@@ -125,6 +125,7 @@ def create_deep_agent(
     name: str = "deep_agent",
     error_handling: bool = True,
     message_queue: bool = False,
+    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
     multimodal: bool = False,
     http_tools: bool = False,
 ) -> LlmAgent:
@@ -417,6 +418,7 @@ def create_deep_agent(
         summarization_config=summarization,
         backend_factory=backend_factory if summarization else None,
         message_queue=message_queue,
+        message_queue_provider=message_queue_provider,
         multimodal=multimodal,
     )
 
@@ -494,6 +496,7 @@ async def create_deep_agent_async(
     name: str = "deep_agent",
     error_handling: bool = True,
     message_queue: bool = False,
+    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
     multimodal: bool = False,
     http_tools: bool = False,
 ) -> tuple[LlmAgent, Callable | None]:
@@ -582,6 +585,7 @@ async def create_deep_agent_async(
         name=name,
         error_handling=error_handling,
         message_queue=message_queue,
+        message_queue_provider=message_queue_provider,
         multimodal=multimodal,
         http_tools=http_tools,
     )

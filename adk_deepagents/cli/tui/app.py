@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,8 @@ from adk_deepagents.cli.tui.widgets import (
     ThemePicker,
 )
 from adk_deepagents.types import DynamicTaskConfig
+
+log = logging.getLogger("adk_deepagents.tui.app")
 
 
 @dataclass
@@ -196,7 +199,7 @@ class DeepAgentTui(App[None]):
         self._apply_theme(self._active_theme)
 
         self._service.initialize()
-        self.run_worker(self._pump_updates(), exclusive=False)
+        self.run_worker(self._pump_updates(), exclusive=False, exit_on_error=False)
 
         messages = self.query_one(MessageDisplay)
         messages.add_system_message(f"Thread {self._config.session_id} — type /help for commands")
@@ -381,7 +384,11 @@ class DeepAgentTui(App[None]):
         """Consume UI updates from the agent service forever."""
         while True:
             update = await self._service.updates.get()
-            self._apply_update(update)
+            log.debug("[_pump_updates] received update kind=%s", update.kind)
+            try:
+                self._apply_update(update)
+            except Exception:
+                log.exception("[_pump_updates] error applying update kind=%s", update.kind)
 
     def _apply_update(self, update: UiUpdate) -> None:
         messages = self.query_one(MessageDisplay)
@@ -450,6 +457,7 @@ class DeepAgentTui(App[None]):
             messages.clear_transcript()
 
         elif update.kind == "queued_message":
+            log.debug("[_apply_update] rendering queued_message: %r", update.text)
             messages.end_assistant_message()
             messages.add_queued_message(update.text or "")
 
@@ -463,6 +471,7 @@ class DeepAgentTui(App[None]):
     async def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         """Handle user input submission."""
         value = event.value.strip()
+        log.debug("[on_prompt_input_submitted] value=%r", value)
         if value == "/details":
             self._do_toggle_details()
             return

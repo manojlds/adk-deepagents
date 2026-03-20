@@ -6,9 +6,11 @@ import asyncio
 import difflib
 import io
 import json
+import logging
 import os
 import re
 import subprocess
+import threading
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,8 @@ from adk_deepagents.cli.interactive import (
 )
 from adk_deepagents.types import DynamicTaskConfig
 
+log = logging.getLogger("adk_deepagents.tui.service")
+
 REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 
 _DETAIL_VALUE_PREVIEW_LIMIT = 80
@@ -40,6 +44,31 @@ _FILE_REF_MAX_SIZE = 100_000  # Skip files larger than 100KB.
 _FILE_REF_PATTERN = re.compile(r"(?<!\w)@([\w./\-~][\w./\-~]*)")
 
 ActivityPhase = Literal["working", "thinking", "tool", "responding", "approval"]
+
+
+class _SharedMessageQueue:
+    """Thread-safe in-process message buffer for TUI ↔ callback communication.
+
+    The TUI's ``queue_message()`` appends messages here.  The
+    ``before_model_callback`` calls ``drain()`` on every LLM invocation
+    to retrieve and clear queued messages — no session state needed.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._messages: list[dict[str, Any]] = []
+
+    def push(self, text: str) -> None:
+        with self._lock:
+            self._messages.append({"text": text})
+
+    def drain(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if not self._messages:
+                return []
+            messages = list(self._messages)
+            self._messages.clear()
+            return messages
 
 
 def _expand_file_references(text: str) -> tuple[str, list[tuple[str, str]]]:
@@ -423,6 +452,9 @@ class AgentService:
         default_factory=dict, init=False, repr=False
     )
     _queued_messages: list[str] = field(default_factory=list, init=False, repr=False)
+    _shared_queue: _SharedMessageQueue = field(
+        default_factory=_SharedMessageQueue, init=False, repr=False
+    )
 
     def initialize(self) -> None:
         """Build the runner and internal contexts. Must be called once."""
@@ -434,6 +466,7 @@ class AgentService:
             memory_sources=self.memory_sources,
             memory_source_paths=self.memory_source_paths or {},
             skills_dirs=self.skills_dirs,
+            message_queue_provider=self._shared_queue.drain,
         )
         self._thread_context = _ThreadCommandContext(
             db_path=self.db_path,
@@ -453,6 +486,7 @@ class AgentService:
                 memory_sources=self.memory_sources,
                 memory_source_paths=self.memory_source_paths or {},
                 skills_dirs=self.skills_dirs,
+                message_queue_provider=self._shared_queue.drain,
             )
 
         self._model_context = _ModelCommandContext(model=self.model, switch_model=_switch_model)
@@ -460,19 +494,25 @@ class AgentService:
     async def queue_message(self, text: str) -> None:
         """Buffer a message for injection into the next LLM call.
 
-        The message is stored locally and will be flushed into the ADK
-        session's ``state["_message_queue"]`` at the start of the next
-        ``run_async()`` iteration.  A ``queued_message`` UI update is
-        emitted so the TUI can display the message immediately.
+        The message is pushed into a shared in-process buffer that the
+        ``before_model_callback`` drains on every LLM invocation.  This
+        means mid-turn steering works immediately — no session state
+        round-trip is needed.  A ``queued_message`` UI update is emitted
+        so the TUI can display the message right away.
         """
+        log.debug("[queue_message] text=%r", text)
         self._queued_messages.append(text)
+        self._shared_queue.push(text)
         await self.updates.put(UiUpdate(kind="queued_message", text=text))
+        log.debug("[queue_message] UI update enqueued")
 
     async def handle_input(self, text: str) -> None:
         """Process user input — slash command, bash shortcut, or normal prompt."""
         text = text.strip()
         if not text:
             return
+
+        log.debug("[handle_input] text=%r busy=%s", text, self._busy)
 
         if text.startswith("/"):
             await self._handle_slash_command(text)
@@ -483,6 +523,7 @@ class AgentService:
             return
 
         if self._busy:
+            log.debug("[handle_input] agent is busy — queuing message")
             await self.queue_message(text)
             return
 
@@ -660,42 +701,6 @@ class AgentService:
         if result == "exit":
             await self.updates.put(UiUpdate(kind="exit"))
 
-    async def _flush_queued_messages(self) -> None:
-        """Write buffered queued messages into the ADK session state.
-
-        The ``before_model_callback`` will consume
-        ``state["_message_queue"]`` before the next LLM call and inject
-        them into the conversation.  Messages are drained from the
-        local buffer so they aren't sent twice.
-        """
-        if not self._queued_messages:
-            return
-
-        assert self._thread_context is not None
-
-        messages = list(self._queued_messages)
-        self._queued_messages.clear()
-
-        thread_ctx = self._thread_context
-        try:
-            session = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: self._runner.session_service.get_session(
-                    app_name=self._runner.app_name,
-                    user_id=thread_ctx.user_id,
-                    session_id=thread_ctx.active_session_id,
-                ),
-            )
-            if session is not None:
-                # Merge with any existing queued messages in state.
-                existing = session.state.get("_message_queue")
-                queue = list(existing) if isinstance(existing, list) else []
-                queue.extend({"text": m} for m in messages)
-                session.state["_message_queue"] = queue
-        except Exception:  # noqa: BLE001
-            # If session write fails, re-buffer so the messages aren't lost.
-            self._queued_messages.extend(messages)
-
     async def _run_turn(self, prompt: str) -> None:
         assert self._thread_context is not None
         assert self._approval_context is not None
@@ -713,10 +718,9 @@ class AgentService:
                 pending_confirmations: list[_ToolConfirmationRequest] = []
                 seen_confirmation_ids: set[str] = set()
 
-                # Flush any queued messages into session state so the
-                # before_model_callback can inject them into the next
-                # LLM call.
-                await self._flush_queued_messages()
+                # Clear the local UI-tracking list; the shared queue is
+                # drained directly by the before_model_callback.
+                self._queued_messages.clear()
 
                 async for event in self._runner.run_async(
                     user_id=self._thread_context.user_id,
@@ -757,6 +761,22 @@ class AgentService:
                     await activity_task
             await self.updates.put(UiUpdate(kind="activity", text=None))
             await self.updates.put(UiUpdate(kind="turn_finished"))
+
+        # After the turn completes, check whether any messages were
+        # queued while the agent was busy.  If so, combine them into a
+        # single follow-up prompt and start a new turn automatically.
+        # This handles the common case where the user sends a message
+        # during a simple single-LLM-call turn that finishes before the
+        # before_model_callback gets a chance to drain the queue.
+        remaining = self._shared_queue.drain()
+        if remaining:
+            combined = "\n\n---\n\n".join(
+                m["text"] for m in remaining if isinstance(m, dict) and m.get("text")
+            )
+            if combined.strip():
+                await self.updates.put(UiUpdate(kind="user_message", text=combined.strip()))
+                self._busy = True
+                self._turn_task = asyncio.create_task(self._run_turn(combined.strip()))
 
     async def _emit_event_updates(self, event: Any) -> None:
         """Parse an ADK event and enqueue ordered UI updates."""

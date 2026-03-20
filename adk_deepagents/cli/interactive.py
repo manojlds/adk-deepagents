@@ -153,6 +153,7 @@ def _build_cli_agent(
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
+    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
 ):
     backend = MemoryMappedFilesystemBackend(
         root_dir=cwd,
@@ -168,6 +169,8 @@ def _build_cli_agent(
         "interrupt_on": INTERACTIVE_INTERRUPT_ON,
         "message_queue": True,
     }
+    if message_queue_provider is not None:
+        agent_kwargs["message_queue_provider"] = message_queue_provider
     if model is not None:
         agent_kwargs["model"] = model
     if memory_sources:
@@ -192,6 +195,7 @@ def _build_runner(
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
+    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> Runner:
     agent = _build_cli_agent(
         agent_name=agent_name,
@@ -201,6 +205,7 @@ def _build_runner(
         memory_sources=memory_sources,
         memory_source_paths=memory_source_paths,
         skills_dirs=skills_dirs,
+        message_queue_provider=message_queue_provider,
     )
     session_service = SqliteSessionService(str(db_path))
     return Runner(

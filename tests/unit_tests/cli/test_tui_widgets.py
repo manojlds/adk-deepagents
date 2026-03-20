@@ -8,7 +8,15 @@ for integration test suites.
 
 from __future__ import annotations
 
+import os
+import tempfile
+
+import pytest
+from textual.app import App, ComposeResult
+
 from adk_deepagents.cli.tui.widgets import (
+    _FILE_PICKER_MAX_SHOWN,
+    _IGNORE_DIRS,
     DEFAULT_PALETTE_ITEMS,
     SLASH_COMMANDS,
     ApprovalBox,
@@ -18,6 +26,9 @@ from adk_deepagents.cli.tui.widgets import (
     PromptInput,
     SubmittableTextArea,
     ThemePicker,
+    _extract_at_query,
+    _scan_project_files,
+    invalidate_file_cache,
 )
 
 
@@ -250,3 +261,235 @@ class TestThemePickerClass:
         from textual.containers import Vertical
 
         assert issubclass(ThemePicker, Vertical)
+
+
+# ---------------------------------------------------------------------------
+# File picker utility tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractAtQuery:
+    """Test _extract_at_query() helper for detecting @-tokens at cursor."""
+
+    def test_simple_at_query(self):
+        assert _extract_at_query("@foo", cursor_col=4, cursor_row=0) == "foo"
+
+    def test_at_with_empty_query(self):
+        assert _extract_at_query("@", cursor_col=1, cursor_row=0) == ""
+
+    def test_at_mid_line(self):
+        text = "check @src/main"
+        assert _extract_at_query(text, cursor_col=15, cursor_row=0) == "src/main"
+
+    def test_at_after_space(self):
+        text = "look at @widgets.py please"
+        assert _extract_at_query(text, cursor_col=19, cursor_row=0) == "widgets.py"
+
+    def test_no_at_returns_none(self):
+        assert _extract_at_query("hello world", cursor_col=5, cursor_row=0) is None
+
+    def test_email_ignored(self):
+        """An @ preceded by a word character (email) should return None."""
+        assert _extract_at_query("user@example.com", cursor_col=16, cursor_row=0) is None
+
+    def test_multiline_second_row(self):
+        text = "line one\n@myfile"
+        assert _extract_at_query(text, cursor_col=7, cursor_row=1) == "myfile"
+
+    def test_cursor_at_start_no_at(self):
+        assert _extract_at_query("@foo", cursor_col=0, cursor_row=0) is None
+
+    def test_cursor_right_after_at(self):
+        assert _extract_at_query("@", cursor_col=1, cursor_row=0) == ""
+
+    def test_at_with_path_separators(self):
+        text = "@src/cli/tui/wid"
+        assert _extract_at_query(text, cursor_col=16, cursor_row=0) == "src/cli/tui/wid"
+
+    def test_invalid_row(self):
+        assert _extract_at_query("@foo", cursor_col=4, cursor_row=5) is None
+
+    def test_tab_separated(self):
+        text = "hello\t@bar"
+        assert _extract_at_query(text, cursor_col=10, cursor_row=0) == "bar"
+
+
+class TestScanProjectFiles:
+    """Test _scan_project_files() with a temporary directory tree."""
+
+    def test_basic_scan(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create some files.
+            open(os.path.join(tmpdir, "main.py"), "w").close()
+            open(os.path.join(tmpdir, "README.md"), "w").close()
+            os.makedirs(os.path.join(tmpdir, "src"))
+            open(os.path.join(tmpdir, "src", "app.py"), "w").close()
+
+            result = _scan_project_files(tmpdir)
+            assert "main.py" in result
+            assert "README.md" in result
+            assert os.path.join("src", "app.py") in result
+
+    def test_ignores_git_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, ".git", "objects"))
+            open(os.path.join(tmpdir, ".git", "objects", "pack"), "w").close()
+            open(os.path.join(tmpdir, "main.py"), "w").close()
+
+            result = _scan_project_files(tmpdir)
+            assert "main.py" in result
+            assert not any(".git" in p for p in result)
+
+    def test_ignores_pycache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "__pycache__"))
+            open(os.path.join(tmpdir, "__pycache__", "foo.pyc"), "w").close()
+            open(os.path.join(tmpdir, "main.py"), "w").close()
+
+            result = _scan_project_files(tmpdir)
+            assert "main.py" in result
+            assert not any("__pycache__" in p for p in result)
+
+    def test_ignores_node_modules(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, "node_modules", "express"))
+            open(os.path.join(tmpdir, "node_modules", "express", "index.js"), "w").close()
+            open(os.path.join(tmpdir, "app.js"), "w").close()
+
+            result = _scan_project_files(tmpdir)
+            assert "app.js" in result
+            assert not any("node_modules" in p for p in result)
+
+    def test_ignores_venv(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.makedirs(os.path.join(tmpdir, ".venv", "lib"))
+            open(os.path.join(tmpdir, ".venv", "lib", "site.py"), "w").close()
+            open(os.path.join(tmpdir, "main.py"), "w").close()
+
+            result = _scan_project_files(tmpdir)
+            assert "main.py" in result
+            assert not any(".venv" in p for p in result)
+
+    def test_results_sorted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            open(os.path.join(tmpdir, "z.py"), "w").close()
+            open(os.path.join(tmpdir, "a.py"), "w").close()
+            open(os.path.join(tmpdir, "m.py"), "w").close()
+
+            result = _scan_project_files(tmpdir)
+            assert result == sorted(result)
+
+    def test_empty_directory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = _scan_project_files(tmpdir)
+            assert result == []
+
+    def test_nonexistent_root_returns_empty(self):
+        result = _scan_project_files("/nonexistent/path/that/does/not/exist")
+        assert result == []
+
+
+class TestIgnoreDirs:
+    """Test that _IGNORE_DIRS contains expected entries."""
+
+    def test_git_in_ignore(self):
+        assert ".git" in _IGNORE_DIRS
+
+    def test_pycache_in_ignore(self):
+        assert "__pycache__" in _IGNORE_DIRS
+
+    def test_venv_in_ignore(self):
+        assert ".venv" in _IGNORE_DIRS
+
+    def test_node_modules_in_ignore(self):
+        assert "node_modules" in _IGNORE_DIRS
+
+
+class TestFilePickerConstants:
+    """Test file picker configuration constants."""
+
+    def test_max_shown_is_reasonable(self):
+        assert _FILE_PICKER_MAX_SHOWN > 0
+        assert _FILE_PICKER_MAX_SHOWN <= 100
+
+    def test_invalidate_cache(self):
+        """invalidate_file_cache should reset the cache globals."""
+        invalidate_file_cache()
+        # After invalidation, the module-level cache should be None.
+        from adk_deepagents.cli.tui import widgets
+
+        assert widgets._cached_project_files is None
+        assert widgets._cached_project_root is None
+
+
+class TestPromptInputFilePicker:
+    """Test PromptInput class structure includes file picker CSS."""
+
+    def test_file_picker_css_present(self):
+        assert "#file-picker" in PromptInput.DEFAULT_CSS
+
+    def test_file_picker_visible_css_present(self):
+        assert "#file-picker.visible" in PromptInput.DEFAULT_CSS
+
+
+# ---------------------------------------------------------------------------
+# Textual pilot test: PromptInput submission event chain
+# ---------------------------------------------------------------------------
+
+
+class _SubmitTestApp(App):
+    """Minimal app to test PromptInput submission chain."""
+
+    submitted_values: list[str]
+
+    def compose(self) -> ComposeResult:
+        yield PromptInput()
+
+    def on_mount(self) -> None:
+        self.submitted_values = []
+
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        self.submitted_values.append(event.value)
+
+
+class TestPromptInputSubmissionPilot:
+    """Use Textual's pilot to test that Enter fires PromptInput.Submitted."""
+
+    @pytest.mark.asyncio
+    async def test_enter_fires_submitted(self) -> None:
+        """Type text and press Enter; verify Submitted event reaches the app."""
+        app = _SubmitTestApp()
+        async with app.run_test() as pilot:
+            ta = app.query_one("#prompt-input", SubmittableTextArea)
+            ta.focus()
+            # Type some text
+            await pilot.press("h", "e", "l", "l", "o")
+            await pilot.pause()
+            assert ta.text == "hello"
+            # Press Enter to submit
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.submitted_values == ["hello"]
+            # TextArea should be cleared after submission
+            assert ta.text == ""
+
+    @pytest.mark.asyncio
+    async def test_multiple_submits(self) -> None:
+        """Two rapid submissions should both fire Submitted events."""
+        app = _SubmitTestApp()
+        async with app.run_test() as pilot:
+            ta = app.query_one("#prompt-input", SubmittableTextArea)
+            ta.focus()
+            # First message
+            await pilot.press("f", "i", "r", "s", "t")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(app.submitted_values) == 1
+            assert app.submitted_values[0] == "first"
+
+            # Second message
+            await pilot.press("s", "e", "c", "o", "n", "d")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(app.submitted_values) == 2
+            assert app.submitted_values[1] == "second"

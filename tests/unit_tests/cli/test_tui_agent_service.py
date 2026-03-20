@@ -6,6 +6,10 @@ import asyncio
 from contextlib import suppress
 from pathlib import Path
 
+from adk_deepagents.cli.interactive import (
+    _InteractiveApprovalContext,
+    _ThreadCommandContext,
+)
 from adk_deepagents.cli.tui.agent_service import (
     AgentService,
     UiUpdate,
@@ -17,6 +21,7 @@ from adk_deepagents.cli.tui.agent_service import (
     _format_tool_call_detail,
     _format_tool_response_detail,
     _generate_unified_diff,
+    _SharedMessageQueue,
 )
 
 
@@ -763,6 +768,24 @@ class TestQueueMessage:
         assert updates[0].text == "first"
         assert updates[1].text == "second"
 
+    def test_queue_message_pushes_to_shared_queue(self) -> None:
+        service = _service()
+        asyncio.run(service.queue_message("shared"))
+        drained = service._shared_queue.drain()
+        assert len(drained) == 1
+        assert drained[0] == {"text": "shared"}
+
+    def test_queue_message_shared_queue_multiple(self) -> None:
+        service = _service()
+        asyncio.run(service.queue_message("a"))
+        asyncio.run(service.queue_message("b"))
+        drained = service._shared_queue.drain()
+        assert len(drained) == 2
+        assert drained[0] == {"text": "a"}
+        assert drained[1] == {"text": "b"}
+        # Drain again should be empty.
+        assert service._shared_queue.drain() == []
+
 
 class TestHandleInputWhenBusy:
     """Test that handle_input() queues messages when a turn is running."""
@@ -797,25 +820,142 @@ class TestHandleInputWhenBusy:
         assert service._queued_messages == []
 
 
-class TestFlushQueuedMessages:
-    """Test the _flush_queued_messages() helper."""
+class TestPostTurnQueueDrain:
+    """Test that _run_turn auto-starts a follow-up turn for queued messages."""
 
-    def test_noop_when_no_messages(self) -> None:
+    def test_queued_messages_trigger_follow_up_turn(self) -> None:
+        """Messages left in _shared_queue after a turn should start a new turn."""
         service = _service()
-        # Should not raise even without a runner.
-        asyncio.run(service._flush_queued_messages())
-        assert service._queued_messages == []
+        service._thread_context = _ThreadCommandContext(
+            db_path=service.db_path,
+            user_id=service.user_id,
+            agent_name=service.agent_name,
+            model=service.model,
+            active_session_id=service.session_id,
+        )
+        service._approval_context = _InteractiveApprovalContext(auto_approve=True)
 
-    def test_clears_buffer_after_flush_attempt(self) -> None:
+        # Simulate a runner that completes immediately (no events).
+        async def _empty_run(**_kwargs: object) -> None:  # type: ignore[override]
+            # Yield nothing — turn ends immediately.
+            return
+            yield  # make it an async generator  # noqa: RET504
+
+        class _FakeRunner:
+            def run_async(self, **kwargs: object) -> object:
+                return _empty_run(**kwargs)
+
+        service._runner = _FakeRunner()
+
+        # Push a message into the shared queue *before* the turn runs.
+        # This simulates a message queued during the turn that wasn't
+        # drained by before_model_callback.
+        service._shared_queue.push("follow-up instruction")
+
+        asyncio.run(service._run_turn("initial prompt"))
+
+        # Collect all updates.
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        # Should have two turn_started / turn_finished pairs:
+        # one for the initial turn, one for the follow-up.
+        turn_started = [u for u in updates if u.kind == "turn_started"]
+        turn_finished = [u for u in updates if u.kind == "turn_finished"]
+        assert len(turn_started) >= 2, f"Expected 2+ turn_started, got {len(turn_started)}"
+        assert len(turn_finished) >= 2, f"Expected 2+ turn_finished, got {len(turn_finished)}"
+
+        # The follow-up prompt should appear as a user_message.
+        user_messages = [u for u in updates if u.kind == "user_message"]
+        assert any("follow-up instruction" in (u.text or "") for u in user_messages)
+
+    def test_no_follow_up_when_queue_empty(self) -> None:
+        """No extra turn should start when the shared queue is empty."""
         service = _service()
-        service._queued_messages = ["msg1", "msg2"]
-        # Without a real runner/session, it will fail and re-buffer.
-        # We just verify the method doesn't crash.
-        with suppress(Exception):
-            asyncio.run(service._flush_queued_messages())
-        # After an exception, messages should be re-buffered (not lost).
-        # OR if it succeeded somehow, they should be cleared.
-        # Either way, no crash.
+        service._thread_context = _ThreadCommandContext(
+            db_path=service.db_path,
+            user_id=service.user_id,
+            agent_name=service.agent_name,
+            model=service.model,
+            active_session_id=service.session_id,
+        )
+        service._approval_context = _InteractiveApprovalContext(auto_approve=True)
+
+        async def _empty_run(**_kwargs: object) -> None:  # type: ignore[override]
+            return
+            yield  # noqa: RET504
+
+        class _FakeRunner:
+            def run_async(self, **kwargs: object) -> object:
+                return _empty_run(**kwargs)
+
+        service._runner = _FakeRunner()
+
+        asyncio.run(service._run_turn("hello"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        # Only one turn cycle.
+        turn_started = [u for u in updates if u.kind == "turn_started"]
+        turn_finished = [u for u in updates if u.kind == "turn_finished"]
+        assert len(turn_started) == 1
+        assert len(turn_finished) == 1
+
+
+class TestSharedMessageQueue:
+    """Test the _SharedMessageQueue thread-safe buffer."""
+
+    def test_push_and_drain(self) -> None:
+        q = _SharedMessageQueue()
+        q.push("hello")
+        result = q.drain()
+        assert result == [{"text": "hello"}]
+
+    def test_drain_clears(self) -> None:
+        q = _SharedMessageQueue()
+        q.push("a")
+        q.drain()
+        assert q.drain() == []
+
+    def test_multiple_push(self) -> None:
+        q = _SharedMessageQueue()
+        q.push("x")
+        q.push("y")
+        q.push("z")
+        result = q.drain()
+        assert len(result) == 3
+        assert result[0] == {"text": "x"}
+        assert result[1] == {"text": "y"}
+        assert result[2] == {"text": "z"}
+
+    def test_drain_empty(self) -> None:
+        q = _SharedMessageQueue()
+        assert q.drain() == []
+
+    def test_thread_safety(self) -> None:
+        """Push from multiple threads, drain should get all messages."""
+        import threading
+
+        q = _SharedMessageQueue()
+        barrier = threading.Barrier(4)
+
+        def pusher(prefix: str) -> None:
+            barrier.wait()
+            for i in range(10):
+                q.push(f"{prefix}-{i}")
+
+        threads = [threading.Thread(target=pusher, args=(f"t{i}",)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        result = q.drain()
+        assert len(result) == 40
+        assert q.drain() == []
 
 
 # ---------------------------------------------------------------------------
@@ -928,6 +1068,83 @@ class TestHandleBashShortcut:
         assert service._queued_messages == []
         # Should have produced output updates.
         assert not service.updates.empty()
+
+
+# ---------------------------------------------------------------------------
+# Concurrent handle_input during active turn
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentHandleInputDuringTurn:
+    """Test that handle_input correctly queues messages while a turn runs."""
+
+    def test_message_queued_during_slow_turn(self) -> None:
+        """Simulate: first prompt starts a slow turn; second prompt while busy
+        should be queued and produce a queued_message UI update."""
+        service = _service()
+        service._thread_context = _ThreadCommandContext(
+            db_path=service.db_path,
+            user_id=service.user_id,
+            agent_name=service.agent_name,
+            model=service.model,
+            active_session_id=service.session_id,
+        )
+        service._approval_context = _InteractiveApprovalContext(auto_approve=True)
+
+        # A runner that blocks until we tell it to finish.
+        turn_event = asyncio.Event()
+
+        async def _slow_run(**_kwargs: object):
+            await turn_event.wait()
+            return
+            yield  # make it an async generator  # noqa: RET504
+
+        class _SlowRunner:
+            def run_async(self, **kwargs: object) -> object:
+                return _slow_run(**kwargs)
+
+        service._runner = _SlowRunner()
+
+        async def _scenario() -> list[UiUpdate]:
+            # First message — starts a slow turn
+            await service.handle_input("first prompt")
+            assert service._busy is True
+
+            # Give the event loop a chance to start _run_turn
+            await asyncio.sleep(0.01)
+
+            # Second message — should be queued
+            await service.handle_input("second prompt while busy")
+
+            # Collect updates so far
+            updates: list[UiUpdate] = []
+            while not service.updates.empty():
+                updates.append(service.updates.get_nowait())
+
+            # Let the turn finish
+            turn_event.set()
+            # Allow the turn task to complete
+            if service._turn_task:
+                with suppress(Exception):
+                    await asyncio.wait_for(service._turn_task, timeout=2.0)
+
+            # Collect remaining updates
+            while not service.updates.empty():
+                updates.append(service.updates.get_nowait())
+
+            return updates
+
+        updates = asyncio.run(_scenario())
+        kinds = [u.kind for u in updates]
+
+        # The first prompt should produce a user_message
+        user_messages = [u for u in updates if u.kind == "user_message"]
+        assert any("first prompt" in (u.text or "") for u in user_messages)
+
+        # The second prompt should produce a queued_message
+        queued = [u for u in updates if u.kind == "queued_message"]
+        assert len(queued) >= 1, f"Expected queued_message, got kinds: {kinds}"
+        assert "second prompt while busy" in (queued[0].text or "")
 
 
 # ---------------------------------------------------------------------------
