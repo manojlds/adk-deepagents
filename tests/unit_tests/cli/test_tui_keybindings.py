@@ -154,3 +154,70 @@ class TestLoadKeybindConfig:
         config = load_keybind_config({"leader": "ctrl+a"})
         combos = config.keys_for("theme_picker")
         assert combos[0] == "ctrl+a k"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Agent & session management keybindings
+# ---------------------------------------------------------------------------
+
+
+class TestPhase4Keybinds:
+    """Test Phase 4 default keybindings exist and expand correctly."""
+
+    def test_agent_cycle_default(self):
+        assert "agent_cycle" in DEFAULT_KEYBINDS
+
+    def test_agent_cycle_reverse_default(self):
+        assert "agent_cycle_reverse" in DEFAULT_KEYBINDS
+
+    def test_agent_list_default(self):
+        assert "agent_list" in DEFAULT_KEYBINDS
+
+    def test_sidebar_toggle_default(self):
+        assert "sidebar_toggle" in DEFAULT_KEYBINDS
+
+    def test_session_export_default(self):
+        assert "session_export" in DEFAULT_KEYBINDS
+
+    def test_agent_cycle_binding_is_tab(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("agent_cycle")
+        assert "tab" in combos
+
+    def test_agent_cycle_reverse_binding_is_shift_tab(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("agent_cycle_reverse")
+        assert "shift+tab" in combos
+
+    def test_agent_list_binding_uses_leader(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("agent_list")
+        assert len(combos) > 0
+        assert combos[0] == "ctrl+x a"
+
+    def test_sidebar_toggle_binding_uses_leader(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("sidebar_toggle")
+        assert len(combos) > 0
+        assert combos[0] == "ctrl+x b"
+
+    def test_session_export_binding_uses_leader(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("session_export")
+        assert len(combos) > 0
+        assert combos[0] == "ctrl+x x"
+
+    def test_agent_list_custom_leader(self):
+        config = load_keybind_config({"leader": "ctrl+a"})
+        combos = config.keys_for("agent_list")
+        assert combos[0] == "ctrl+a a"
+
+    def test_sidebar_toggle_custom_leader(self):
+        config = load_keybind_config({"leader": "ctrl+a"})
+        combos = config.keys_for("sidebar_toggle")
+        assert combos[0] == "ctrl+a b"
+
+    def test_session_export_custom_leader(self):
+        config = load_keybind_config({"leader": "ctrl+a"})
+        combos = config.keys_for("session_export")
+        assert combos[0] == "ctrl+a x"

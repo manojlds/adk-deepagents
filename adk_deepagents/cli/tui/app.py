@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.widgets import Footer, Header
 
 from adk_deepagents.cli.tui.agent_service import AgentService, UiUpdate
@@ -22,11 +24,13 @@ from adk_deepagents.cli.tui.themes import (
 )
 from adk_deepagents.cli.tui.widgets import (
     DEFAULT_PALETTE_ITEMS,
+    AgentPicker,
     ApprovalBox,
     CommandPalette,
     CommandPaletteItem,
     MessageDisplay,
     PromptInput,
+    Sidebar,
     ThemePicker,
 )
 from adk_deepagents.types import DynamicTaskConfig
@@ -68,12 +72,17 @@ def _build_bindings(kb: KeybindConfig) -> list[Binding]:
         "session_new": ("New Session", False),
         "session_list": ("Sessions", False),
         "model_list": ("Models", False),
+        "agent_cycle": ("Next Agent", False),
+        "agent_cycle_reverse": ("Prev Agent", False),
+        "agent_list": ("Agents", False),
         "session_compact": ("Compact", False),
         "help": ("Help", False),
         "tool_details_toggle": ("Toggle Details", False),
         "thinking_toggle": ("Toggle Thinking", False),
         "theme_picker": ("Theme", False),
         "editor_open": ("Editor", False),
+        "sidebar_toggle": ("Sidebar", False),
+        "session_export": ("Export", False),
         "messages_half_page_up": ("Half Page Up", False),
         "messages_half_page_down": ("Half Page Down", False),
         "messages_page_up": ("Page Up", False),
@@ -115,7 +124,7 @@ class DeepAgentTui(App[None]):
     """Full-screen TUI for interacting with adk-deepagents."""
 
     TITLE = "adk-deepagents"
-    SUB_TITLE = "agent"
+    SUB_TITLE = "build"
 
     CSS = """
     Screen {
@@ -124,8 +133,14 @@ class DeepAgentTui(App[None]):
         layers: default overlay;
     }
 
+    #main-area {
+        height: 1fr;
+        layout: horizontal;
+    }
+
     #messages {
         height: 1fr;
+        width: 1fr;
     }
 
     #composer {
@@ -139,6 +154,11 @@ class DeepAgentTui(App[None]):
     }
 
     #theme-picker {
+        dock: top;
+        margin: 2 4;
+    }
+
+    #agent-picker {
         dock: top;
         margin: 2 4;
     }
@@ -188,10 +208,13 @@ class DeepAgentTui(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield MessageDisplay(id="messages")
+        with Horizontal(id="main-area"):
+            yield Sidebar(id="sidebar")
+            yield MessageDisplay(id="messages")
         yield PromptInput(id="composer")
         yield CommandPalette(items=self._palette_items, id="command-palette")
         yield ThemePicker(id="theme-picker")
+        yield AgentPicker(id="agent-picker")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -203,6 +226,12 @@ class DeepAgentTui(App[None]):
 
         messages = self.query_one(MessageDisplay)
         messages.add_system_message(f"Thread {self._config.session_id} — type /help for commands")
+
+        # Initialize sidebar with agent/model/session info.
+        self._update_sidebar_info()
+
+        # Wire agent names to the prompt input for @agent autocomplete.
+        self._sync_agent_names()
 
         if self._config.first_prompt:
             await self._service.handle_input(self._config.first_prompt)
@@ -332,6 +361,16 @@ class DeepAgentTui(App[None]):
             self._open_theme_picker()
         elif action == "editor_open":
             self.run_worker(self._do_open_editor())
+        elif action == "agent_cycle":
+            self.run_worker(self._do_agent_cycle(reverse=False))
+        elif action == "agent_cycle_reverse":
+            self.run_worker(self._do_agent_cycle(reverse=True))
+        elif action == "agent_list":
+            self._open_agent_picker()
+        elif action == "sidebar_toggle":
+            self._do_toggle_sidebar()
+        elif action == "session_export":
+            self.run_worker(self._do_export())
         elif action == "messages_half_page_up":
             self.query_one(MessageDisplay).scroll_up(animate=False)
         elif action == "messages_half_page_down":
@@ -375,6 +414,58 @@ class DeepAgentTui(App[None]):
         text = await self._service.open_editor()
         if text:
             await self._service.handle_input(text)
+
+    async def _do_agent_cycle(self, *, reverse: bool = False) -> None:
+        """Cycle to the next (or previous) primary agent."""
+        registry = self._service.agent_registry
+        current = self._service.active_agent_name
+        nxt = registry.cycle_prev(current) if reverse else registry.cycle_next(current)
+        if nxt is not None:
+            await self._service.switch_agent(nxt)
+            self._update_sidebar_info()
+
+    def _open_agent_picker(self) -> None:
+        """Show the agent picker overlay."""
+        registry = self._service.agent_registry
+        entries = [(p.name, p.description, p.mode) for p in registry.all_visible()]
+        picker = self.query_one(AgentPicker)
+        picker.show(agent_entries=entries, current_agent=self._service.active_agent_name)
+
+    def _do_toggle_sidebar(self) -> None:
+        """Toggle the sidebar panel."""
+        sidebar = self.query_one(Sidebar)
+        visible = sidebar.toggle()
+        if visible:
+            self._update_sidebar_info()
+
+    async def _do_export(self) -> None:
+        """Export the conversation to Markdown."""
+        await self._service.export_conversation()
+
+    def _update_sidebar_info(self) -> None:
+        """Refresh sidebar labels and header subtitle with current agent/model/session info."""
+        sidebar = self.query_one(Sidebar)
+        profile = self._service.active_agent_profile
+        agent_name = profile.name if profile else self._service.active_agent_name
+        if profile:
+            sidebar.update_agent_info(profile.name, profile.description)
+        else:
+            sidebar.update_agent_info(agent_name)
+        model_name = self._config.model or "default"
+        sidebar.update_model_info(model_name)
+        # Update header subtitle so the active agent is always visible.
+        self.sub_title = f"{agent_name} | {model_name}"
+        if self._service._thread_context is not None:
+            sidebar.update_session_info(self._service._thread_context.active_session_id)
+        else:
+            sidebar.update_session_info(self._config.session_id)
+
+    def _sync_agent_names(self) -> None:
+        """Push the current agent names to the prompt input for @mention autocomplete."""
+        registry = self._service.agent_registry
+        names = [(p.name, p.description) for p in registry.all_visible()]
+        composer = self.query_one(PromptInput)
+        composer.set_agent_names(names)
 
     # -----------------------------------------------------------------
     # UI update pump
@@ -484,7 +575,29 @@ class DeepAgentTui(App[None]):
         if value == "/editor":
             self.run_worker(self._do_open_editor())
             return
-        await self._service.handle_input(value)
+        if value == "/export":
+            self.run_worker(self._do_export())
+            return
+        if value == "/agent":
+            # Show current agent info.
+            profile = self._service.active_agent_profile
+            name = self._service.active_agent_name
+            desc = profile.description if profile else ""
+            msg = f"Agent: {name}"
+            if desc:
+                msg += f" — {desc}"
+            messages = self.query_one(MessageDisplay)
+            messages.add_system_message(msg)
+            return
+        if value.startswith("/agent "):
+            # Switch to named agent.
+            agent_name = value[len("/agent ") :].strip()
+            await self._do_switch_agent_by_name(agent_name)
+            return
+        # Check for @agent_name mention at the start of the message.
+        routed = await self._maybe_route_agent_mention(value)
+        if not routed:
+            await self._service.handle_input(value)
 
     def on_approval_box_resolved(self, event: ApprovalBox.Resolved) -> None:
         self._service.resolve_approval(event.approved, event.always)
@@ -502,3 +615,68 @@ class DeepAgentTui(App[None]):
             self._apply_theme(theme)
             messages = self.query_one(MessageDisplay)
             messages.add_system_message(f"Theme: {theme.label}")
+
+    async def on_agent_picker_agent_selected(self, event: AgentPicker.AgentSelected) -> None:
+        """Handle agent selection from the agent picker overlay."""
+        await self._do_switch_agent_by_name(event.agent_name)
+
+    async def on_sidebar_session_selected(self, event: Sidebar.SessionSelected) -> None:
+        """Handle session selection from the sidebar."""
+        await self._service.handle_input(f"/threads {event.session_id}")
+        self._update_sidebar_info()
+
+    async def _do_switch_agent_by_name(self, agent_name: str) -> None:
+        """Switch to the agent with the given name."""
+        profile = self._service.agent_registry.get(agent_name)
+        if profile is None:
+            messages = self.query_one(MessageDisplay)
+            available = ", ".join(p.name for p in self._service.agent_registry.all_visible())
+            messages.add_system_message(f"Unknown agent '{agent_name}'. Available: {available}")
+            return
+        await self._service.switch_agent(profile)
+        self._update_sidebar_info()
+
+    # Pattern: @agent_name at the start of a message, followed by whitespace and text.
+    _AGENT_MENTION_RE = re.compile(r"^@(\w[\w-]*)\s+(.*)", re.DOTALL)
+
+    async def _maybe_route_agent_mention(self, value: str) -> bool:
+        """If *value* starts with ``@agent_name ...``, route to that agent.
+
+        Temporarily switches to the mentioned agent, sends the remaining
+        text, then switches back to the original agent.  Returns ``True``
+        if the message was routed, ``False`` otherwise (caller should
+        handle normally).
+        """
+        m = self._AGENT_MENTION_RE.match(value)
+        if m is None:
+            return False
+
+        target_name = m.group(1)
+        body = m.group(2).strip()
+        if not body:
+            return False
+
+        registry = self._service.agent_registry
+        target_profile = registry.get(target_name)
+        if target_profile is None:
+            # Not a known agent name — treat as normal message.
+            return False
+
+        original_name = self._service.active_agent_name
+        if target_name == original_name:
+            # Already on this agent — just send the body without the prefix.
+            await self._service.handle_input(body)
+            return True
+
+        # Switch to target agent, send, then switch back.
+        await self._service.switch_agent(target_profile)
+        self._update_sidebar_info()
+        await self._service.handle_input(body)
+
+        # Switch back to the original agent after the turn completes.
+        original_profile = registry.get(original_name)
+        if original_profile is not None and original_name != self._service.active_agent_name:
+            await self._service.switch_agent(original_profile)
+            self._update_sidebar_info()
+
+        return True

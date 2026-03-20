@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import suppress
 from pathlib import Path
 
 from textual import events
@@ -477,6 +478,9 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/clear", "Start a new thread"),
     ("/model", "Show the active model"),
     ("/model <name>", "Switch model (or 'default' to reset)"),
+    ("/agent", "Show the active agent"),
+    ("/agent <name>", "Switch to a named agent profile"),
+    ("/export", "Export conversation to markdown"),
     ("/details", "Toggle tool detail visibility"),
     ("/thinking", "Toggle thinking block visibility"),
     ("/theme", "Switch TUI color theme"),
@@ -529,6 +533,16 @@ class SubmittableTextArea(TextArea):
         self._draft = ""
 
     async def _on_key(self, event: events.Key) -> None:
+        if event.key in {"tab", "shift+tab"}:
+            # Stop the event completely so Textual's Screen-level focus_next
+            # binding doesn't consume it, then manually dispatch the agent
+            # cycle action to the app.
+            event.stop()
+            event.prevent_default()
+            action = "agent_cycle" if event.key == "tab" else "agent_cycle_reverse"
+            self.app.action_app_action(action)
+            return
+
         if event.key == "enter" and not self.read_only:
             # Plain Enter → submit the text instead of inserting a newline.
             event.stop()
@@ -667,6 +681,23 @@ class PromptInput(Static):
     PromptInput #file-picker > .option-list--option {
         padding: 0 1;
     }
+
+    PromptInput #agent-mention-picker {
+        display: none;
+        max-height: 8;
+        width: 1fr;
+        margin-bottom: 1;
+        border: round $accent;
+        background: $surface;
+    }
+
+    PromptInput #agent-mention-picker.visible {
+        display: block;
+    }
+
+    PromptInput #agent-mention-picker > .option-list--option {
+        padding: 0 1;
+    }
     """
 
     class Submitted(Message):
@@ -676,11 +707,25 @@ class PromptInput(Static):
             super().__init__()
             self.value = value
 
+    _agent_names: list[tuple[str, str]]  # (name, description)
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._agent_names = []
+
     def compose(self) -> ComposeResult:
         yield OptionList(id="command-picker")
         yield OptionList(id="file-picker")
+        yield OptionList(id="agent-mention-picker")
         yield Static("Send a message or /help", classes="prompt-placeholder visible")
         yield SubmittableTextArea(id="prompt-input", language=None)
+
+    def set_agent_names(self, names: list[tuple[str, str]]) -> None:
+        """Set the list of agent names available for @mention completion.
+
+        *names* are ``(name, description)`` tuples.
+        """
+        self._agent_names = list(names)
 
     def on_mount(self) -> None:
         ta = self.query_one("#prompt-input", SubmittableTextArea)
@@ -692,10 +737,11 @@ class PromptInput(Static):
         event.stop()
         self.query_one("#command-picker", OptionList).remove_class("visible")
         self.query_one("#file-picker", OptionList).remove_class("visible")
+        self.query_one("#agent-mention-picker", OptionList).remove_class("visible")
         self.post_message(self.Submitted(event.value))
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Show/hide the slash-command picker, file picker, and manage placeholder."""
+        """Show/hide the slash-command picker, file/agent picker, and manage placeholder."""
         ta = self.query_one("#prompt-input", SubmittableTextArea)
         text = ta.text
         placeholder = self.query_one(".prompt-placeholder", Static)
@@ -708,10 +754,12 @@ class PromptInput(Static):
 
         cmd_picker = self.query_one("#command-picker", OptionList)
         file_picker = self.query_one("#file-picker", OptionList)
+        agent_picker = self.query_one("#agent-mention-picker", OptionList)
 
         # --- Slash-command picker (only when text starts with '/') ---
         if text.startswith("/"):
             file_picker.remove_class("visible")
+            agent_picker.remove_class("visible")
             prefix = text.lower().strip()
             cmd_picker.clear_options()
             for cmd, desc in SLASH_COMMANDS:
@@ -727,14 +775,32 @@ class PromptInput(Static):
 
         cmd_picker.remove_class("visible")
 
-        # --- File picker (when '@' is typed) ---
+        # --- @ picker: check agent names first, then fall back to files ---
         cursor_row, cursor_col = ta.selection.end
         at_query = _extract_at_query(text, cursor_col, cursor_row)
         if at_query is None:
             file_picker.remove_class("visible")
+            agent_picker.remove_class("visible")
             return
 
         query = at_query.lower()
+
+        # Check if query matches any agent name (agent mentions take priority).
+        if self._agent_names:
+            agent_picker.clear_options()
+            for agent_name, agent_desc in self._agent_names:
+                if query and query not in agent_name.lower():
+                    continue
+                label = f"@{agent_name}  — {agent_desc}" if agent_desc else f"@{agent_name}"
+                agent_picker.add_option(Option(label, id=agent_name))
+            if agent_picker.option_count > 0:
+                agent_picker.add_class("visible")
+                agent_picker.highlighted = 0
+                file_picker.remove_class("visible")
+                return
+            agent_picker.remove_class("visible")
+
+        # Fall through to file picker.
         project_files = _get_project_files()
         file_picker.clear_options()
         count = 0
@@ -756,11 +822,14 @@ class PromptInput(Static):
         """Forward arrow keys to the active picker and handle Escape."""
         cmd_picker = self.query_one("#command-picker", OptionList)
         file_picker = self.query_one("#file-picker", OptionList)
+        agent_picker = self.query_one("#agent-mention-picker", OptionList)
 
         # Determine which picker is currently visible (at most one).
         active_picker: OptionList | None = None
         if cmd_picker.has_class("visible"):
             active_picker = cmd_picker
+        elif agent_picker.has_class("visible"):
+            active_picker = agent_picker
         elif file_picker.has_class("visible"):
             active_picker = file_picker
 
@@ -777,10 +846,38 @@ class PromptInput(Static):
             return
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Handle selection from either the command picker or the file picker."""
+        """Handle selection from the command picker, file picker, or agent picker."""
         event.stop()
         cmd_picker = self.query_one("#command-picker", OptionList)
         file_picker = self.query_one("#file-picker", OptionList)
+        agent_picker = self.query_one("#agent-mention-picker", OptionList)
+
+        # --- Agent mention picker selection ---
+        if agent_picker.has_class("visible"):
+            agent_picker.remove_class("visible")
+            selected_name = event.option_id or ""
+            if not selected_name:
+                return
+            ta = self.query_one("#prompt-input", SubmittableTextArea)
+            text = ta.text
+            cursor_row, cursor_col = ta.selection.end
+            lines = text.split("\n")
+            if 0 <= cursor_row < len(lines):
+                line = lines[cursor_row]
+                col = min(cursor_col, len(line))
+                # Find the '@' that started this query.
+                i = col - 1
+                while i >= 0 and line[i] not in (" ", "\t", "@"):
+                    i -= 1
+                if i >= 0 and line[i] == "@":
+                    # Replace @query with @agent_name followed by a space.
+                    new_line = line[:i] + "@" + selected_name + " " + line[col:]
+                    lines[cursor_row] = new_line
+                    new_text = "\n".join(lines)
+                    ta.clear()
+                    ta.insert(new_text)
+            ta.focus()
+            return
 
         # --- File picker selection ---
         if file_picker.has_class("visible"):
@@ -825,6 +922,7 @@ class PromptInput(Static):
             "/thinking",
             "/theme",
             "/editor",
+            "/export",
         }:
             ta.clear()
             self.post_message(self.Submitted(cmd_id))
@@ -843,6 +941,7 @@ class PromptInput(Static):
         ta.read_only = True
         self.query_one("#command-picker", OptionList).remove_class("visible")
         self.query_one("#file-picker", OptionList).remove_class("visible")
+        self.query_one("#agent-mention-picker", OptionList).remove_class("visible")
 
     def enable_input(self) -> None:
         ta = self.query_one("#prompt-input", SubmittableTextArea)
@@ -910,6 +1009,30 @@ DEFAULT_PALETTE_ITEMS: list[CommandPaletteItem] = [
         action="model_list",
         label="Models",
         description="Show or switch model",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="agent_list",
+        label="Agents",
+        description="List and switch agent profiles",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="agent_cycle",
+        label="Next Agent",
+        description="Cycle to next primary agent",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="session_export",
+        label="Export",
+        description="Export conversation to markdown",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="sidebar_toggle",
+        label="Sidebar",
+        description="Toggle the session sidebar",
         keybind="",
     ),
     CommandPaletteItem(
@@ -1197,3 +1320,250 @@ class ThemePicker(Vertical):
                 option_list.add_option(Option(text, id=theme_name))
         if option_list.option_count > 0:
             option_list.highlighted = 0
+
+
+# ---------------------------------------------------------------------------
+# AgentPicker – overlay for switching agent profiles
+# ---------------------------------------------------------------------------
+
+
+class AgentPicker(Vertical):
+    """Modal overlay for choosing an agent profile.
+
+    Shows all visible agents in an ``OptionList``.  Fires
+    :class:`AgentPicker.AgentSelected` when the user picks one.
+    """
+
+    DEFAULT_CSS = """
+    AgentPicker {
+        display: none;
+        width: 55;
+        max-width: 75%;
+        height: auto;
+        max-height: 20;
+        background: $surface;
+        border: solid $accent;
+        padding: 0 1;
+        layer: overlay;
+        align-horizontal: center;
+        offset-y: 2;
+    }
+
+    AgentPicker.visible {
+        display: block;
+    }
+
+    AgentPicker Input {
+        width: 1fr;
+        margin-bottom: 1;
+    }
+
+    AgentPicker OptionList {
+        width: 1fr;
+        max-height: 14;
+    }
+    """
+
+    class AgentSelected(Message):
+        """Fired when the user selects an agent."""
+
+        def __init__(self, agent_name: str) -> None:
+            super().__init__()
+            self.agent_name = agent_name
+
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
+        self._agent_entries: list[tuple[str, str, str]] = []  # (name, desc, mode)
+        self._current_agent: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="Type to filter agents...", id="agent-search")
+        yield OptionList(id="agent-list")
+
+    def show(
+        self,
+        agent_entries: list[tuple[str, str, str]],
+        current_agent: str = "",
+    ) -> None:
+        """Open the picker.
+
+        *agent_entries* are ``(name, description, mode)`` tuples.
+        """
+        self._agent_entries = agent_entries
+        self._current_agent = current_agent
+        self.add_class("visible")
+        self._populate_list("")
+        search_input = self.query_one("#agent-search", Input)
+        search_input.value = ""
+        search_input.focus()
+
+    def hide(self) -> None:
+        self.remove_class("visible")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._populate_list(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        option_list = self.query_one("#agent-list", OptionList)
+        idx = option_list.highlighted
+        if idx is not None and 0 <= idx < option_list.option_count:
+            option = option_list.get_option_at_index(idx)
+            if option.id:
+                self.post_message(self.AgentSelected(option.id))
+        self.hide()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            self.post_message(self.AgentSelected(event.option_id))
+        self.hide()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.hide()
+            event.prevent_default()
+            event.stop()
+        elif event.key in {"up", "down"}:
+            self.query_one("#agent-list", OptionList).focus()
+
+    def _populate_list(self, query: str) -> None:
+        option_list = self.query_one("#agent-list", OptionList)
+        option_list.clear_options()
+        q = query.lower().strip()
+        for agent_name, desc, mode in self._agent_entries:
+            marker = " *" if agent_name == self._current_agent else ""
+            mode_tag = f"[{mode}]" if mode else ""
+            text = f"{agent_name}{marker}  — {desc} {mode_tag}"
+            if not q or q in agent_name.lower() or q in desc.lower():
+                option_list.add_option(Option(text, id=agent_name))
+        if option_list.option_count > 0:
+            option_list.highlighted = 0
+
+
+# ---------------------------------------------------------------------------
+# Sidebar – toggleable left panel showing session/agent info
+# ---------------------------------------------------------------------------
+
+
+class Sidebar(Vertical):
+    """Toggleable left sidebar showing agent info and session list.
+
+    The sidebar is hidden by default and toggled via a keybinding.
+    It displays the current agent, session info, and a list of recent
+    sessions.
+    """
+
+    DEFAULT_CSS = """
+    Sidebar {
+        width: 30;
+        min-width: 20;
+        max-width: 40;
+        height: 1fr;
+        display: none;
+        border-right: solid $border;
+        background: $surface;
+        padding: 1;
+    }
+
+    Sidebar.visible {
+        display: block;
+    }
+
+    Sidebar .sidebar-header {
+        text-style: bold;
+        margin-bottom: 1;
+        color: $primary;
+    }
+
+    Sidebar .sidebar-section {
+        margin-bottom: 1;
+        color: $text;
+    }
+
+    Sidebar .sidebar-label {
+        color: $text-muted;
+        text-opacity: 70%;
+    }
+
+    Sidebar .sidebar-value {
+        color: $accent;
+    }
+
+    Sidebar OptionList {
+        height: auto;
+        max-height: 1fr;
+        background: $surface;
+    }
+    """
+
+    class SessionSelected(Message):
+        """Fired when the user clicks a session in the sidebar."""
+
+        def __init__(self, session_id: str) -> None:
+            super().__init__()
+            self.session_id = session_id
+
+    def compose(self) -> ComposeResult:
+        yield Static("adk-deepagents", classes="sidebar-header")
+        yield Static("Agent: —", id="sidebar-agent-info", classes="sidebar-section")
+        yield Static("Model: —", id="sidebar-model-info", classes="sidebar-section")
+        yield Static("Session: —", id="sidebar-session-info", classes="sidebar-section")
+        yield Static("Sessions", classes="sidebar-label")
+        yield OptionList(id="sidebar-sessions")
+
+    def toggle(self) -> bool:
+        """Toggle visibility. Returns new state (True = visible)."""
+        if self.has_class("visible"):
+            self.remove_class("visible")
+            return False
+        self.add_class("visible")
+        return True
+
+    def update_agent_info(self, agent_name: str, description: str = "") -> None:
+        label = f"Agent: {agent_name}"
+        if description:
+            label += f"\n  {description}"
+        with suppress(Exception):
+            self.query_one("#sidebar-agent-info", Static).update(label)
+
+    def update_model_info(self, model_name: str) -> None:
+        with suppress(Exception):
+            self.query_one("#sidebar-model-info", Static).update(f"Model: {model_name}")
+
+    def update_session_info(self, session_id: str) -> None:
+        try:
+            display_id = session_id[:12] + "..." if len(session_id) > 15 else session_id
+            self.query_one("#sidebar-session-info", Static).update(f"Session: {display_id}")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def update_sessions(
+        self,
+        sessions: list[tuple[str, str]],
+        active_session_id: str = "",
+    ) -> None:
+        """Update the session list.
+
+        *sessions* are ``(session_id, display_label)`` tuples.
+        """
+        try:
+            option_list = self.query_one("#sidebar-sessions", OptionList)
+            option_list.clear_options()
+            for sid, label in sessions:
+                marker = " *" if sid == active_session_id else ""
+                option_list.add_option(Option(f"{label}{marker}", id=sid))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            self.post_message(self.SessionSelected(event.option_id))

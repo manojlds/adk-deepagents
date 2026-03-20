@@ -19,11 +19,13 @@ from adk_deepagents.cli.tui.widgets import (
     _IGNORE_DIRS,
     DEFAULT_PALETTE_ITEMS,
     SLASH_COMMANDS,
+    AgentPicker,
     ApprovalBox,
     CommandPalette,
     CommandPaletteItem,
     MessageDisplay,
     PromptInput,
+    Sidebar,
     SubmittableTextArea,
     ThemePicker,
     _extract_at_query,
@@ -493,3 +495,110 @@ class TestPromptInputSubmissionPilot:
             await pilot.pause()
             assert len(app.submitted_values) == 2
             assert app.submitted_values[1] == "second"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: AgentPicker tests
+# ---------------------------------------------------------------------------
+
+
+class TestAgentPickerClass:
+    """Test AgentPicker class structure (no Textual app required)."""
+
+    def test_has_agent_selected_message(self):
+        assert hasattr(AgentPicker, "AgentSelected")
+
+    def test_agent_selected_message(self):
+        msg = AgentPicker.AgentSelected(agent_name="build")
+        assert msg.agent_name == "build"
+
+    def test_default_css_exists(self):
+        assert AgentPicker.DEFAULT_CSS is not None
+        assert isinstance(AgentPicker.DEFAULT_CSS, str)
+
+    def test_is_vertical_subclass(self):
+        from textual.containers import Vertical
+
+        assert issubclass(AgentPicker, Vertical)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Sidebar tests
+# ---------------------------------------------------------------------------
+
+
+class TestSidebarClass:
+    """Test Sidebar class structure (no Textual app required)."""
+
+    def test_has_session_selected_message(self):
+        assert hasattr(Sidebar, "SessionSelected")
+
+    def test_session_selected_message(self):
+        msg = Sidebar.SessionSelected(session_id="s123")
+        assert msg.session_id == "s123"
+
+    def test_default_css_exists(self):
+        assert Sidebar.DEFAULT_CSS is not None
+        assert isinstance(Sidebar.DEFAULT_CSS, str)
+
+    def test_is_vertical_subclass(self):
+        from textual.containers import Vertical
+
+        assert issubclass(Sidebar, Vertical)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Slash commands for agent/export
+# ---------------------------------------------------------------------------
+
+
+class TestPhase4SlashCommands:
+    def test_agent_command_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/agent" in cmd_names
+
+    def test_export_command_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/export" in cmd_names
+
+    def test_agent_with_name_command_present(self):
+        """The agent command should have a variant with <name> arg."""
+        assert any(cmd.startswith("/agent <") for cmd, _ in SLASH_COMMANDS)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Palette items for agent/export/sidebar
+# ---------------------------------------------------------------------------
+
+
+class TestPhase4PaletteItems:
+    def test_agent_list_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "agent_list" in actions
+
+    def test_agent_cycle_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "agent_cycle" in actions
+
+    def test_session_export_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "session_export" in actions
+
+    def test_sidebar_toggle_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "sidebar_toggle" in actions
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: PromptInput agent mention picker CSS
+# ---------------------------------------------------------------------------
+
+
+class TestPromptInputAgentMentionPicker:
+    """Test PromptInput class structure includes agent-mention-picker CSS."""
+
+    def test_agent_mention_picker_css_present(self):
+        assert "#agent-mention-picker" in PromptInput.DEFAULT_CSS
+
+    def test_agent_mention_picker_visible_css_present(self):
+        assert "#agent-mention-picker.visible" in PromptInput.DEFAULT_CSS
