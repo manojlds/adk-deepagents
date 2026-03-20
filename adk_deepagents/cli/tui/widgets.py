@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Button, Input, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
+
+log = logging.getLogger("adk_deepagents.tui.widgets")
 
 # ---------------------------------------------------------------------------
 # File scanning for @ file picker
@@ -531,6 +534,7 @@ class SubmittableTextArea(TextArea):
             event.stop()
             event.prevent_default()
             value = self.text.strip()
+            log.debug("[_on_key] enter pressed, read_only=%s, value=%r", self.read_only, value)
             if value:
                 self._push_history(value)
                 self.post_message(self.Submitted(value))
@@ -684,6 +688,7 @@ class PromptInput(Static):
 
     def on_submittable_text_area_submitted(self, event: SubmittableTextArea.Submitted) -> None:
         """Relay the submission from the TextArea as a PromptInput.Submitted."""
+        log.debug("[on_submittable_text_area_submitted] relaying value=%r", event.value)
         event.stop()
         self.query_one("#command-picker", OptionList).remove_class("visible")
         self.query_one("#file-picker", OptionList).remove_class("visible")

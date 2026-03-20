@@ -1071,6 +1071,83 @@ class TestHandleBashShortcut:
 
 
 # ---------------------------------------------------------------------------
+# Concurrent handle_input during active turn
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentHandleInputDuringTurn:
+    """Test that handle_input correctly queues messages while a turn runs."""
+
+    def test_message_queued_during_slow_turn(self) -> None:
+        """Simulate: first prompt starts a slow turn; second prompt while busy
+        should be queued and produce a queued_message UI update."""
+        service = _service()
+        service._thread_context = _ThreadCommandContext(
+            db_path=service.db_path,
+            user_id=service.user_id,
+            agent_name=service.agent_name,
+            model=service.model,
+            active_session_id=service.session_id,
+        )
+        service._approval_context = _InteractiveApprovalContext(auto_approve=True)
+
+        # A runner that blocks until we tell it to finish.
+        turn_event = asyncio.Event()
+
+        async def _slow_run(**_kwargs: object):
+            await turn_event.wait()
+            return
+            yield  # make it an async generator  # noqa: RET504
+
+        class _SlowRunner:
+            def run_async(self, **kwargs: object) -> object:
+                return _slow_run(**kwargs)
+
+        service._runner = _SlowRunner()
+
+        async def _scenario() -> list[UiUpdate]:
+            # First message — starts a slow turn
+            await service.handle_input("first prompt")
+            assert service._busy is True
+
+            # Give the event loop a chance to start _run_turn
+            await asyncio.sleep(0.01)
+
+            # Second message — should be queued
+            await service.handle_input("second prompt while busy")
+
+            # Collect updates so far
+            updates: list[UiUpdate] = []
+            while not service.updates.empty():
+                updates.append(service.updates.get_nowait())
+
+            # Let the turn finish
+            turn_event.set()
+            # Allow the turn task to complete
+            if service._turn_task:
+                with suppress(Exception):
+                    await asyncio.wait_for(service._turn_task, timeout=2.0)
+
+            # Collect remaining updates
+            while not service.updates.empty():
+                updates.append(service.updates.get_nowait())
+
+            return updates
+
+        updates = asyncio.run(_scenario())
+        kinds = [u.kind for u in updates]
+
+        # The first prompt should produce a user_message
+        user_messages = [u for u in updates if u.kind == "user_message"]
+        assert any("first prompt" in (u.text or "") for u in user_messages)
+
+        # The second prompt should produce a queued_message
+        queued = [u for u in updates if u.kind == "queued_message"]
+        assert len(queued) >= 1, f"Expected queued_message, got kinds: {kinds}"
+        assert "second prompt while busy" in (queued[0].text or "")
+
+
+# ---------------------------------------------------------------------------
 # Open editor tests
 # ---------------------------------------------------------------------------
 

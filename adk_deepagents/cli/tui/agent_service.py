@@ -6,6 +6,7 @@ import asyncio
 import difflib
 import io
 import json
+import logging
 import os
 import re
 import subprocess
@@ -30,6 +31,8 @@ from adk_deepagents.cli.interactive import (
     handle_slash_command,
 )
 from adk_deepagents.types import DynamicTaskConfig
+
+log = logging.getLogger("adk_deepagents.tui.service")
 
 REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 
@@ -497,15 +500,19 @@ class AgentService:
         round-trip is needed.  A ``queued_message`` UI update is emitted
         so the TUI can display the message right away.
         """
+        log.debug("[queue_message] text=%r", text)
         self._queued_messages.append(text)
         self._shared_queue.push(text)
         await self.updates.put(UiUpdate(kind="queued_message", text=text))
+        log.debug("[queue_message] UI update enqueued")
 
     async def handle_input(self, text: str) -> None:
         """Process user input — slash command, bash shortcut, or normal prompt."""
         text = text.strip()
         if not text:
             return
+
+        log.debug("[handle_input] text=%r busy=%s", text, self._busy)
 
         if text.startswith("/"):
             await self._handle_slash_command(text)
@@ -516,6 +523,7 @@ class AgentService:
             return
 
         if self._busy:
+            log.debug("[handle_input] agent is busy — queuing message")
             await self.queue_message(text)
             return
 

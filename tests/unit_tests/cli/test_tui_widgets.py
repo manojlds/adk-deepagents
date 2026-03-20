@@ -11,6 +11,9 @@ from __future__ import annotations
 import os
 import tempfile
 
+import pytest
+from textual.app import App, ComposeResult
+
 from adk_deepagents.cli.tui.widgets import (
     _FILE_PICKER_MAX_SHOWN,
     _IGNORE_DIRS,
@@ -427,3 +430,66 @@ class TestPromptInputFilePicker:
 
     def test_file_picker_visible_css_present(self):
         assert "#file-picker.visible" in PromptInput.DEFAULT_CSS
+
+
+# ---------------------------------------------------------------------------
+# Textual pilot test: PromptInput submission event chain
+# ---------------------------------------------------------------------------
+
+
+class _SubmitTestApp(App):
+    """Minimal app to test PromptInput submission chain."""
+
+    submitted_values: list[str]
+
+    def compose(self) -> ComposeResult:
+        yield PromptInput()
+
+    def on_mount(self) -> None:
+        self.submitted_values = []
+
+    def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
+        self.submitted_values.append(event.value)
+
+
+class TestPromptInputSubmissionPilot:
+    """Use Textual's pilot to test that Enter fires PromptInput.Submitted."""
+
+    @pytest.mark.asyncio
+    async def test_enter_fires_submitted(self) -> None:
+        """Type text and press Enter; verify Submitted event reaches the app."""
+        app = _SubmitTestApp()
+        async with app.run_test() as pilot:
+            ta = app.query_one("#prompt-input", SubmittableTextArea)
+            ta.focus()
+            # Type some text
+            await pilot.press("h", "e", "l", "l", "o")
+            await pilot.pause()
+            assert ta.text == "hello"
+            # Press Enter to submit
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.submitted_values == ["hello"]
+            # TextArea should be cleared after submission
+            assert ta.text == ""
+
+    @pytest.mark.asyncio
+    async def test_multiple_submits(self) -> None:
+        """Two rapid submissions should both fire Submitted events."""
+        app = _SubmitTestApp()
+        async with app.run_test() as pilot:
+            ta = app.query_one("#prompt-input", SubmittableTextArea)
+            ta.focus()
+            # First message
+            await pilot.press("f", "i", "r", "s", "t")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(app.submitted_values) == 1
+            assert app.submitted_values[0] == "first"
+
+            # Second message
+            await pilot.press("s", "e", "c", "o", "n", "d")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(app.submitted_values) == 2
+            assert app.submitted_values[1] == "second"

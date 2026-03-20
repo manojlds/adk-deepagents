@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from adk_deepagents.types import DynamicTaskConfig
+
+_TUI_LOG_FILE = Path.home() / ".adk-deepagents-tui-debug.log"
 
 
 def run_tui(
@@ -26,6 +29,13 @@ def run_tui(
     theme_name: str | None = None,
 ) -> int:
     """Launch the Textual TUI and block until exit."""
+    # Enable debug logging to a file for TUI diagnostics.
+    handler = logging.FileHandler(_TUI_LOG_FILE, mode="w")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+    tui_logger = logging.getLogger("adk_deepagents.tui")
+    tui_logger.setLevel(logging.DEBUG)
+    tui_logger.addHandler(handler)
+
     from adk_deepagents.cli.tui.app import DeepAgentTui, TuiConfig
 
     config = TuiConfig(
