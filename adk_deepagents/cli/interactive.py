@@ -154,6 +154,7 @@ def _build_cli_agent(
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
     message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
+    instruction: str | None = None,
 ):
     backend = MemoryMappedFilesystemBackend(
         root_dir=cwd,
@@ -177,6 +178,8 @@ def _build_cli_agent(
         agent_kwargs["memory"] = list(memory_sources)
     if skills_dirs:
         agent_kwargs["skills"] = list(skills_dirs)
+    if instruction:
+        agent_kwargs["instruction"] = instruction
 
     try:
         return create_deep_agent(**agent_kwargs)
@@ -196,6 +199,7 @@ def _build_runner(
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
     message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
+    instruction: str | None = None,
 ) -> Runner:
     agent = _build_cli_agent(
         agent_name=agent_name,
@@ -206,6 +210,7 @@ def _build_runner(
         memory_source_paths=memory_source_paths,
         skills_dirs=skills_dirs,
         message_queue_provider=message_queue_provider,
+        instruction=instruction,
     )
     session_service = SqliteSessionService(str(db_path))
     return Runner(

@@ -1183,10 +1183,13 @@ class TestAgentRegistry:
         # The active agent name matches the agent_name passed at construction.
         assert service.active_agent_name == "demo"
 
-    def test_active_agent_profile_returns_none_for_unknown(self) -> None:
+    def test_active_agent_profile_auto_registered(self) -> None:
         service = _service()
-        # "demo" isn't in the builtin registry, so profile is None.
-        assert service.active_agent_profile is None
+        # "demo" isn't a builtin but is auto-registered as a primary profile.
+        profile = service.active_agent_profile
+        assert profile is not None
+        assert profile.name == "demo"
+        assert profile.mode == "primary"
 
     def test_registry_has_builtins(self) -> None:
         service = _service()

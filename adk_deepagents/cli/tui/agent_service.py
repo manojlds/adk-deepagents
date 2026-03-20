@@ -472,6 +472,12 @@ class AgentService:
     def __post_init__(self) -> None:
         # Eagerly set active agent name so the property is usable before initialize().
         self._active_agent_name = self.agent_name
+        # Ensure the startup agent is registered as a profile so Tab cycling
+        # works even when the CLI --agent value isn't one of the builtins.
+        if self._agent_registry.get(self.agent_name) is None:
+            self._agent_registry.add(
+                AgentProfile(name=self.agent_name, description="Default agent", mode="primary")
+            )
 
     def initialize(self) -> None:
         """Build the runner and internal contexts. Must be called once."""
@@ -660,6 +666,7 @@ class AgentService:
             memory_source_paths=self.memory_source_paths or {},
             skills_dirs=self.skills_dirs,
             message_queue_provider=self._shared_queue.drain,
+            instruction=profile.prompt,
         )
 
         if self._thread_context is not None:
