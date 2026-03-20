@@ -533,6 +533,13 @@ class SubmittableTextArea(TextArea):
         self._draft = ""
 
     async def _on_key(self, event: events.Key) -> None:
+        if event.key in {"tab", "shift+tab"}:
+            # Let Tab/Shift+Tab bubble to the app for agent cycling
+            # instead of being consumed by the TextArea for indentation
+            # or focus cycling.
+            event.prevent_default()
+            return
+
         if event.key == "enter" and not self.read_only:
             # Plain Enter → submit the text instead of inserting a newline.
             event.stop()
