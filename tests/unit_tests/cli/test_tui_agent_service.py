@@ -18,15 +18,17 @@ from adk_deepagents.cli.tui.agent_service import (
 
 
 class _FakeFunctionCall:
-    def __init__(self, name: str, args: object) -> None:
+    def __init__(self, name: str, args: object, id: str | None = None) -> None:
         self.name = name
         self.args = args
+        self.id = id
 
 
 class _FakeFunctionResponse:
-    def __init__(self, name: str, response: object) -> None:
+    def __init__(self, name: str, response: object, id: str | None = None) -> None:
         self.name = name
         self.response = response
+        self.id = id
 
 
 class _FakePart:
@@ -486,3 +488,239 @@ class TestDiffContentEmission:
 
         diff_updates = [u for u in updates if u.kind == "diff_content"]
         assert len(diff_updates) == 0
+
+
+class TestCrossEventDiffRendering:
+    """Test that diffs are emitted when call and response arrive in separate events."""
+
+    def test_diff_emitted_when_call_and_response_in_separate_events(self) -> None:
+        """Simulates the real-world ADK flow: function_call and function_response
+        arrive in separate events."""
+        service = _service()
+
+        call_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "edit_file",
+                        {
+                            "file_path": "readme.md",
+                            "old_string": "Hello",
+                            "new_string": "Goodbye",
+                        },
+                        id="call_abc",
+                    )
+                ),
+            ]
+        )
+        response_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "path": "readme.md", "occurrences": 1},
+                        id="call_abc",
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(call_event))
+        asyncio.run(service._emit_event_updates(response_event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 1
+        assert "-Hello" in (diff_updates[0].text or "")
+        assert "+Goodbye" in (diff_updates[0].text or "")
+
+    def test_diff_emitted_with_approval_event_between_call_and_response(self) -> None:
+        """Simulates the HITL approval flow: function_call, then approval event,
+        then function_response in separate events."""
+        service = _service()
+
+        call_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "edit_file",
+                        {
+                            "file_path": "app.py",
+                            "old_string": "debug = True",
+                            "new_string": "debug = False",
+                        },
+                        id="call_71f2",
+                    )
+                ),
+            ]
+        )
+        # Intermediate approval event (function_response with awaiting_approval).
+        approval_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "awaiting_approval", "path": "app.py"},
+                        id="call_71f2",
+                    )
+                ),
+            ]
+        )
+        # adk_request_confirmation call (should be skipped).
+        confirmation_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "adk_request_confirmation",
+                        {"tool_name": "edit_file"},
+                        id="call_conf",
+                    )
+                ),
+            ]
+        )
+        # Final success response.
+        success_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "path": "app.py", "occurrences": 1},
+                        id="call_71f2",
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(call_event))
+        asyncio.run(service._emit_event_updates(approval_event))
+        asyncio.run(service._emit_event_updates(confirmation_event))
+        asyncio.run(service._emit_event_updates(success_event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 1
+        assert "-debug = True" in (diff_updates[0].text or "")
+        assert "+debug = False" in (diff_updates[0].text or "")
+
+    def test_diff_emitted_with_fallback_when_ids_dont_match(self) -> None:
+        """When function_response has no id or a different id, the fallback
+        logic should still match against the single pending entry."""
+        service = _service()
+
+        call_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "edit_file",
+                        {
+                            "file_path": "f.py",
+                            "old_string": "old",
+                            "new_string": "new",
+                        },
+                        id="call_x",
+                    )
+                ),
+            ]
+        )
+        response_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "path": "f.py", "occurrences": 1},
+                        # No id — fallback should kick in.
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(call_event))
+        asyncio.run(service._emit_event_updates(response_event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 1
+        assert "-old" in (diff_updates[0].text or "")
+        assert "+new" in (diff_updates[0].text or "")
+
+    def test_pending_edit_args_cleared_after_consumption(self) -> None:
+        """After the diff is emitted, the pending args should be removed."""
+        service = _service()
+
+        call_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "edit_file",
+                        {
+                            "file_path": "f.py",
+                            "old_string": "a",
+                            "new_string": "b",
+                        },
+                        id="call_1",
+                    )
+                ),
+            ]
+        )
+        response_event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "path": "f.py", "occurrences": 1},
+                        id="call_1",
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(call_event))
+        asyncio.run(service._emit_event_updates(response_event))
+
+        assert len(service._pending_edit_args) == 0
+
+    def test_same_event_call_and_response_still_works(self) -> None:
+        """Existing same-event pattern should still work with the new code."""
+        service = _service()
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_call=_FakeFunctionCall(
+                        "edit_file",
+                        {
+                            "file_path": "readme.md",
+                            "old_string": "Hello",
+                            "new_string": "Goodbye",
+                        },
+                        id="call_same",
+                    )
+                ),
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "edit_file",
+                        {"status": "success", "path": "readme.md", "occurrences": 1},
+                        id="call_same",
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        diff_updates = [u for u in updates if u.kind == "diff_content"]
+        assert len(diff_updates) == 1
+        assert "-Hello" in (diff_updates[0].text or "")
+        assert "+Goodbye" in (diff_updates[0].text or "")

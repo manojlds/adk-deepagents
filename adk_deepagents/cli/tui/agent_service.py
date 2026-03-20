@@ -382,6 +382,9 @@ class AgentService:
     _pending_approval: asyncio.Future[tuple[bool, bool]] | None = field(
         default=None, init=False, repr=False
     )
+    _pending_edit_args: dict[str, dict[str, Any]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def initialize(self) -> None:
         """Build the runner and internal contexts. Must be called once."""
@@ -561,6 +564,7 @@ class AgentService:
         finally:
             self._busy = False
             self._turn_task = None
+            self._pending_edit_args.clear()
             activity_task = self._activity_task
             self._activity_task = None
             if activity_task is not None:
@@ -572,6 +576,7 @@ class AgentService:
 
     async def _emit_event_updates(self, event: Any) -> None:
         """Parse an ADK event and enqueue ordered UI updates."""
+
         error_message = getattr(event, "error_message", None)
         if isinstance(error_message, str) and error_message.strip():
             await self.updates.put(UiUpdate(kind="error", text=error_message.strip()))
@@ -580,10 +585,6 @@ class AgentService:
         parts = getattr(content, "parts", None) if content is not None else None
         if not parts:
             return
-
-        # Collect edit_file call args so we can generate diffs when the
-        # response arrives (both may appear in the same event).
-        pending_edit_args: dict[str, Any] | None = None
 
         for part in parts:
             text = getattr(part, "text", None)
@@ -605,9 +606,12 @@ class AgentService:
                     await self.updates.put(
                         UiUpdate(kind="tool_call", tool_name=tool_name, tool_detail=detail)
                     )
-                    # Stash args for edit_file so we can generate a diff later.
+                    # Stash args for edit_file keyed by call ID so we can
+                    # generate a diff when the response arrives — which may
+                    # come in a later event (e.g. after HITL approval).
                     if tool_name == "edit_file":
-                        pending_edit_args = args_dict
+                        call_id = getattr(function_call, "id", None) or ""
+                        self._pending_edit_args[call_id] = args_dict
 
             function_response = getattr(part, "function_response", None)
             if function_response is not None:
@@ -625,12 +629,33 @@ class AgentService:
                         )
 
                     # Emit diff content for syntax-highlighted rendering.
-                    call_args = pending_edit_args if tool_name == "edit_file" else None
+                    # Look up stashed call args by the response's call ID,
+                    # falling back to any single pending entry.
+                    call_args: dict[str, Any] | None = None
+                    if tool_name == "edit_file":
+                        resp_id = getattr(function_response, "id", None) or ""
+                        resp_status = response.get("status")
+                        # Only consume pending args on terminal statuses;
+                        # intermediate statuses like "awaiting_approval"
+                        # should leave them for the final response.
+                        is_terminal = resp_status in {"success", "error", None}
+                        if is_terminal:
+                            call_args = self._pending_edit_args.pop(resp_id, None)
+                            if call_args is None and len(self._pending_edit_args) == 1:
+                                # Fallback: if there's exactly one pending
+                                # entry (common case), use it regardless of
+                                # ID mismatch.
+                                call_args = self._pending_edit_args.pop(
+                                    next(iter(self._pending_edit_args))
+                                )
+                        else:
+                            call_args = self._pending_edit_args.get(resp_id)
+                            if call_args is None and len(self._pending_edit_args) == 1:
+                                call_args = next(iter(self._pending_edit_args.values()))
+
                     diff_text = _extract_diff_content(tool_name, response, call_args=call_args)
                     if diff_text is not None:
                         await self.updates.put(UiUpdate(kind="diff_content", text=diff_text))
-                    if tool_name == "edit_file":
-                        pending_edit_args = None
 
                     for key in ("error", "stderr"):
                         value = response.get(key)

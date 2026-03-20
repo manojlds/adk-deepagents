@@ -104,11 +104,6 @@ class MessageDisplay(VerticalScroll):
         margin-right: 1;
     }
 
-    MessageDisplay .diff-block {
-        margin-bottom: 1;
-        padding: 0;
-    }
-
     MessageDisplay .diff-line-added {
         color: #a6e3a1;
         margin: 0;
@@ -229,17 +224,15 @@ class MessageDisplay(VerticalScroll):
     def add_diff_block(self, diff_text: str) -> None:
         """Render a unified diff with per-line coloring."""
         self._end_assistant()
-        container = Vertical(classes="diff-block")
-        self.mount(container)
         for line in diff_text.splitlines():
             if line.startswith("@@"):
-                container.mount(Static(line, classes="diff-line-hunk"))
+                self.mount(Static(line, classes="diff-line-hunk"))
             elif line.startswith("+"):
-                container.mount(Static(line, classes="diff-line-added"))
+                self.mount(Static(line, classes="diff-line-added"))
             elif line.startswith("-"):
-                container.mount(Static(line, classes="diff-line-removed"))
+                self.mount(Static(line, classes="diff-line-removed"))
             else:
-                container.mount(Static(line, classes="diff-line-context"))
+                self.mount(Static(line, classes="diff-line-context"))
         self.scroll_end(animate=False)
 
     def add_approval_prompt(
