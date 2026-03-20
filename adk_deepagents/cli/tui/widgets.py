@@ -2,12 +2,131 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.widgets import Button, Input, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
+
+# ---------------------------------------------------------------------------
+# File scanning for @ file picker
+# ---------------------------------------------------------------------------
+
+_IGNORE_DIRS: frozenset[str] = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".env",
+        "node_modules",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".pytest_cache",
+        ".tox",
+        "dist",
+        "build",
+        ".eggs",
+        "*.egg-info",
+    }
+)
+
+_FILE_PICKER_MAX_FILES = 5000
+_FILE_PICKER_MAX_DEPTH = 8
+_FILE_PICKER_MAX_SHOWN = 30
+
+
+def _scan_project_files(root: str | Path | None = None) -> list[str]:
+    """Scan project files returning relative paths, respecting ignore patterns.
+
+    Returns up to ``_FILE_PICKER_MAX_FILES`` relative paths sorted
+    alphabetically.  Directories in ``_IGNORE_DIRS`` are pruned.
+    """
+    root = Path.cwd() if root is None else Path(root)
+
+    results: list[str] = []
+
+    def _walk(directory: Path, depth: int) -> None:
+        if depth > _FILE_PICKER_MAX_DEPTH:
+            return
+        if len(results) >= _FILE_PICKER_MAX_FILES:
+            return
+        try:
+            entries = sorted(os.scandir(directory), key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in entries:
+            if len(results) >= _FILE_PICKER_MAX_FILES:
+                return
+            name = entry.name
+            if entry.is_dir(follow_symlinks=False):
+                if name in _IGNORE_DIRS or name.endswith(".egg-info"):
+                    continue
+                _walk(Path(entry.path), depth + 1)
+            elif entry.is_file(follow_symlinks=False):
+                try:
+                    rel = Path(entry.path).relative_to(root)
+                    results.append(str(rel))
+                except ValueError:
+                    pass
+
+    _walk(root, 0)
+    results.sort()
+    return results
+
+
+# Cached file list (invalidated per-session — good enough for interactive use).
+_cached_project_files: list[str] | None = None
+_cached_project_root: str | None = None
+
+
+def _get_project_files(root: str | Path | None = None) -> list[str]:
+    """Return cached project file list, rescanning if root changes."""
+    global _cached_project_files, _cached_project_root
+    resolved = str(Path(root) if root else Path.cwd())
+    if _cached_project_files is None or _cached_project_root != resolved:
+        _cached_project_files = _scan_project_files(resolved)
+        _cached_project_root = resolved
+    return _cached_project_files
+
+
+def invalidate_file_cache() -> None:
+    """Force rescan on next ``_get_project_files()`` call."""
+    global _cached_project_files, _cached_project_root
+    _cached_project_files = None
+    _cached_project_root = None
+
+
+def _extract_at_query(text: str, cursor_col: int, cursor_row: int) -> str | None:
+    """Extract the ``@query`` token at the cursor position, or *None*.
+
+    Scans backward from the cursor to find an ``@`` character that is not
+    preceded by a word character (to avoid matching email addresses).
+    Returns the substring after ``@`` up to the cursor position.
+    """
+    lines = text.split("\n")
+    if cursor_row < 0 or cursor_row >= len(lines):
+        return None
+    line = lines[cursor_row]
+    col = min(cursor_col, len(line))
+
+    # Walk backward from cursor to find '@'.
+    i = col - 1
+    while i >= 0 and line[i] not in (" ", "\t", "@"):
+        i -= 1
+    if i < 0 or line[i] != "@":
+        return None
+    # '@' must not be preceded by a word character (skip emails).
+    if i > 0 and line[i - 1].isalnum():
+        return None
+    return line[i + 1 : col]
+
 
 # ---------------------------------------------------------------------------
 # MessageDisplay – scrollable area for interleaved user/assistant messages
@@ -527,6 +646,23 @@ class PromptInput(Static):
     PromptInput #command-picker > .option-list--option {
         padding: 0 1;
     }
+
+    PromptInput #file-picker {
+        display: none;
+        max-height: 12;
+        width: 1fr;
+        margin-bottom: 1;
+        border: round $accent;
+        background: $surface;
+    }
+
+    PromptInput #file-picker.visible {
+        display: block;
+    }
+
+    PromptInput #file-picker > .option-list--option {
+        padding: 0 1;
+    }
     """
 
     class Submitted(Message):
@@ -538,6 +674,7 @@ class PromptInput(Static):
 
     def compose(self) -> ComposeResult:
         yield OptionList(id="command-picker")
+        yield OptionList(id="file-picker")
         yield Static("Send a message or /help", classes="prompt-placeholder visible")
         yield SubmittableTextArea(id="prompt-input", language=None)
 
@@ -548,12 +685,12 @@ class PromptInput(Static):
     def on_submittable_text_area_submitted(self, event: SubmittableTextArea.Submitted) -> None:
         """Relay the submission from the TextArea as a PromptInput.Submitted."""
         event.stop()
-        picker = self.query_one("#command-picker", OptionList)
-        picker.remove_class("visible")
+        self.query_one("#command-picker", OptionList).remove_class("visible")
+        self.query_one("#file-picker", OptionList).remove_class("visible")
         self.post_message(self.Submitted(event.value))
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Show/hide the slash-command picker and manage placeholder."""
+        """Show/hide the slash-command picker, file picker, and manage placeholder."""
         ta = self.query_one("#prompt-input", SubmittableTextArea)
         text = ta.text
         placeholder = self.query_one(".prompt-placeholder", Static)
@@ -564,45 +701,111 @@ class PromptInput(Static):
         else:
             placeholder.add_class("visible")
 
-        # Slash-command picker
-        picker = self.query_one("#command-picker", OptionList)
-        if not text.startswith("/"):
-            picker.remove_class("visible")
+        cmd_picker = self.query_one("#command-picker", OptionList)
+        file_picker = self.query_one("#file-picker", OptionList)
+
+        # --- Slash-command picker (only when text starts with '/') ---
+        if text.startswith("/"):
+            file_picker.remove_class("visible")
+            prefix = text.lower().strip()
+            cmd_picker.clear_options()
+            for cmd, desc in SLASH_COMMANDS:
+                if cmd.startswith(prefix) or prefix == "/":
+                    cmd_picker.add_option(Option(f"{cmd}  — {desc}", id=cmd))
+
+            if cmd_picker.option_count > 0:
+                cmd_picker.add_class("visible")
+                cmd_picker.highlighted = 0
+            else:
+                cmd_picker.remove_class("visible")
             return
 
-        prefix = text.lower().strip()
-        picker.clear_options()
-        for cmd, desc in SLASH_COMMANDS:
-            if cmd.startswith(prefix) or prefix == "/":
-                picker.add_option(Option(f"{cmd}  — {desc}", id=cmd))
+        cmd_picker.remove_class("visible")
 
-        if picker.option_count > 0:
-            picker.add_class("visible")
-            picker.highlighted = 0
+        # --- File picker (when '@' is typed) ---
+        cursor_row, cursor_col = ta.selection.end
+        at_query = _extract_at_query(text, cursor_col, cursor_row)
+        if at_query is None:
+            file_picker.remove_class("visible")
+            return
+
+        query = at_query.lower()
+        project_files = _get_project_files()
+        file_picker.clear_options()
+        count = 0
+        for fpath in project_files:
+            if count >= _FILE_PICKER_MAX_SHOWN:
+                break
+            if query and query not in fpath.lower():
+                continue
+            file_picker.add_option(Option(fpath, id=fpath))
+            count += 1
+
+        if file_picker.option_count > 0:
+            file_picker.add_class("visible")
+            file_picker.highlighted = 0
         else:
-            picker.remove_class("visible")
+            file_picker.remove_class("visible")
 
     def on_key(self, event: events.Key) -> None:
-        """Forward arrow keys to the picker and handle Escape."""
-        picker = self.query_one("#command-picker", OptionList)
+        """Forward arrow keys to the active picker and handle Escape."""
+        cmd_picker = self.query_one("#command-picker", OptionList)
+        file_picker = self.query_one("#file-picker", OptionList)
+
+        # Determine which picker is currently visible (at most one).
+        active_picker: OptionList | None = None
+        if cmd_picker.has_class("visible"):
+            active_picker = cmd_picker
+        elif file_picker.has_class("visible"):
+            active_picker = file_picker
 
         # Close picker on Escape
-        if event.key == "escape" and picker.has_class("visible"):
-            picker.remove_class("visible")
+        if event.key == "escape" and active_picker is not None:
+            active_picker.remove_class("visible")
             event.prevent_default()
             event.stop()
             return
 
         # Forward arrow keys to picker when visible
-        if picker.has_class("visible") and event.key in {"up", "down"}:
-            picker.focus()
+        if active_picker is not None and event.key in {"up", "down"}:
+            active_picker.focus()
             return
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        """Fill the input with the selected slash command."""
+        """Handle selection from either the command picker or the file picker."""
         event.stop()
-        picker = self.query_one("#command-picker", OptionList)
-        picker.remove_class("visible")
+        cmd_picker = self.query_one("#command-picker", OptionList)
+        file_picker = self.query_one("#file-picker", OptionList)
+
+        # --- File picker selection ---
+        if file_picker.has_class("visible"):
+            file_picker.remove_class("visible")
+            selected_path = event.option_id or ""
+            if not selected_path:
+                return
+            ta = self.query_one("#prompt-input", SubmittableTextArea)
+            text = ta.text
+            cursor_row, cursor_col = ta.selection.end
+            lines = text.split("\n")
+            if 0 <= cursor_row < len(lines):
+                line = lines[cursor_row]
+                col = min(cursor_col, len(line))
+                # Find the '@' that started this query.
+                i = col - 1
+                while i >= 0 and line[i] not in (" ", "\t", "@"):
+                    i -= 1
+                if i >= 0 and line[i] == "@":
+                    # Replace @query with @selected_path
+                    new_line = line[:i] + "@" + selected_path + line[col:]
+                    lines[cursor_row] = new_line
+                    new_text = "\n".join(lines)
+                    ta.clear()
+                    ta.insert(new_text)
+            ta.focus()
+            return
+
+        # --- Command picker selection ---
+        cmd_picker.remove_class("visible")
 
         cmd_id = event.option_id or ""
         ta = self.query_one("#prompt-input", SubmittableTextArea)
@@ -634,6 +837,7 @@ class PromptInput(Static):
         ta = self.query_one("#prompt-input", SubmittableTextArea)
         ta.read_only = True
         self.query_one("#command-picker", OptionList).remove_class("visible")
+        self.query_one("#file-picker", OptionList).remove_class("visible")
 
     def enable_input(self) -> None:
         ta = self.query_one("#prompt-input", SubmittableTextArea)
