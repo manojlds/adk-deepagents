@@ -12,6 +12,7 @@ from adk_deepagents.cli.tui.agent_service import (
     _activity_label_for_phase,
     _chunk_stream_text,
     _coerce_payload_dict,
+    _expand_file_references,
     _extract_diff_content,
     _format_tool_call_detail,
     _format_tool_response_detail,
@@ -815,3 +816,134 @@ class TestFlushQueuedMessages:
         # After an exception, messages should be re-buffered (not lost).
         # OR if it succeeded somehow, they should be cleared.
         # Either way, no crash.
+
+
+# ---------------------------------------------------------------------------
+# File reference expansion tests
+# ---------------------------------------------------------------------------
+
+
+class TestExpandFileReferences:
+    """Test the _expand_file_references helper function."""
+
+    def test_no_references(self) -> None:
+        text, refs = _expand_file_references("hello world")
+        assert text == "hello world"
+        assert refs == []
+
+    def test_nonexistent_file_skipped(self) -> None:
+        text, refs = _expand_file_references("check @nonexistent_xyz_file.txt please")
+        assert refs == []
+
+    def test_existing_file_expanded(self, tmp_path: Path) -> None:
+        f = tmp_path / "sample.txt"
+        f.write_text("file content here")
+        text, refs = _expand_file_references(f"look at @{f}")
+        assert len(refs) == 1
+        assert refs[0][1] == "file content here"
+
+    def test_multiple_references(self, tmp_path: Path) -> None:
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("content A")
+        f2.write_text("content B")
+        text, refs = _expand_file_references(f"compare @{f1} and @{f2}")
+        assert len(refs) == 2
+
+    def test_duplicate_reference_deduplicated(self, tmp_path: Path) -> None:
+        f = tmp_path / "dup.txt"
+        f.write_text("only once")
+        text, refs = _expand_file_references(f"@{f} and @{f}")
+        assert len(refs) == 1
+
+    def test_email_not_matched(self) -> None:
+        """Email addresses should not be treated as file references."""
+        text, refs = _expand_file_references("contact user@example.com")
+        assert refs == []
+
+    def test_relative_path_expanded(self, tmp_path: Path, monkeypatch: object) -> None:
+        f = tmp_path / "rel.txt"
+        f.write_text("relative content")
+
+        monkeypatch.setattr(Path, "cwd", lambda: tmp_path)  # type: ignore[attr-defined]
+        text, refs = _expand_file_references("check @rel.txt")
+        assert len(refs) == 1
+        assert refs[0][1] == "relative content"
+
+
+# ---------------------------------------------------------------------------
+# Bash shortcut tests
+# ---------------------------------------------------------------------------
+
+
+class TestHandleBashShortcut:
+    """Test the _handle_bash_shortcut method."""
+
+    def test_empty_command_shows_error(self) -> None:
+        service = _service()
+        asyncio.run(service._handle_bash_shortcut("!"))
+        update = service.updates.get_nowait()
+        assert update.kind == "error"
+        assert "Usage" in (update.text or "")
+
+    def test_whitespace_only_command_shows_error(self) -> None:
+        service = _service()
+        asyncio.run(service._handle_bash_shortcut("!  "))
+        update = service.updates.get_nowait()
+        assert update.kind == "error"
+
+    def test_successful_command_produces_output(self) -> None:
+        service = _service()
+        asyncio.run(service._handle_bash_shortcut("!echo hello"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        kinds = [u.kind for u in updates]
+        assert "user_message" in kinds
+        assert "system" in kinds
+        # Should have the command echo and the output.
+        system_texts = [u.text for u in updates if u.kind == "system"]
+        assert any("$ echo hello" in (t or "") for t in system_texts)
+        assert any("hello" in (t or "") for t in system_texts)
+
+    def test_failed_command_shows_exit_code(self) -> None:
+        service = _service()
+        asyncio.run(service._handle_bash_shortcut("!false"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        system_texts = [u.text for u in updates if u.kind == "system"]
+        assert any("Exit code" in (t or "") for t in system_texts)
+
+    def test_bash_shortcut_not_routed_to_queue(self) -> None:
+        """Bash shortcuts should work even when the agent is busy."""
+        service = _service()
+        service._busy = True
+        asyncio.run(service.handle_input("!echo test"))
+        # Should NOT be queued.
+        assert service._queued_messages == []
+        # Should have produced output updates.
+        assert not service.updates.empty()
+
+
+# ---------------------------------------------------------------------------
+# Open editor tests
+# ---------------------------------------------------------------------------
+
+
+class TestOpenEditor:
+    """Test the open_editor method."""
+
+    def test_no_editor_env_shows_error(self, monkeypatch: object) -> None:
+        monkeypatch.setenv("EDITOR", "")  # type: ignore[attr-defined]
+        monkeypatch.delenv("VISUAL", raising=False)  # type: ignore[attr-defined]
+        service = _service()
+        result = asyncio.run(service.open_editor())
+        assert result is None
+        update = service.updates.get_nowait()
+        assert update.kind == "error"
+        assert "EDITOR" in (update.text or "")

@@ -50,6 +50,10 @@ class TestSlashCommands:
         assert "/thinking" in cmd_names
         assert "/theme" in cmd_names
 
+    def test_phase3_commands_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/editor" in cmd_names
+
     def test_descriptions_are_nonempty(self):
         for cmd, desc in SLASH_COMMANDS:
             assert desc.strip(), f"Empty description for {cmd}"
@@ -171,6 +175,10 @@ class TestDefaultPaletteItems:
         assert "thinking_toggle" in actions
         assert "theme_picker" in actions
 
+    def test_phase3_actions_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "editor_open" in actions
+
     def test_all_have_label_and_description(self):
         for item in DEFAULT_PALETTE_ITEMS:
             assert item.label.strip(), f"Empty label for {item.action}"
@@ -206,6 +214,17 @@ class TestSubmittableTextArea:
         from textual.widgets import TextArea
 
         assert issubclass(SubmittableTextArea, TextArea)
+
+    def test_history_attributes_exist(self):
+        """SubmittableTextArea should have input history attributes."""
+        # Can't instantiate outside a Textual app, so check class annotations.
+        annotations = SubmittableTextArea.__annotations__
+        assert "_history" in annotations
+        assert "_history_index" in annotations
+        assert "_draft" in annotations
+
+    def test_push_history_method_exists(self):
+        assert hasattr(SubmittableTextArea, "_push_history")
 
 
 # ---------------------------------------------------------------------------

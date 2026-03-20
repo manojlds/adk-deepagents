@@ -6,6 +6,9 @@ import asyncio
 import difflib
 import io
 import json
+import os
+import re
+import subprocess
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,8 +36,41 @@ _DETAIL_VALUE_PREVIEW_LIMIT = 80
 _DETAIL_TEXT_PREVIEW_LIMIT = 180
 _STREAM_CHUNK_SIZE = 28
 _ACTIVITY_FRAMES: tuple[str, ...] = ("|", "/", "-", "\\")
+_FILE_REF_MAX_SIZE = 100_000  # Skip files larger than 100KB.
+_FILE_REF_PATTERN = re.compile(r"(?<!\w)@([\w./\-~][\w./\-~]*)")
 
 ActivityPhase = Literal["working", "thinking", "tool", "responding", "approval"]
+
+
+def _expand_file_references(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Expand ``@path/to/file`` references in user input.
+
+    Returns the original text (unchanged) and a list of ``(path, content)``
+    pairs for every successfully read file.  Non-existent or unreadable
+    paths are silently skipped.
+    """
+    refs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _FILE_REF_PATTERN.finditer(text):
+        raw_path = match.group(1)
+        resolved = Path(raw_path).expanduser()
+        if not resolved.is_absolute():
+            resolved = Path.cwd() / resolved
+        resolved = resolved.resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not resolved.is_file():
+            continue
+        try:
+            if resolved.stat().st_size > _FILE_REF_MAX_SIZE:
+                continue
+            content = resolved.read_text(errors="replace")
+            refs.append((raw_path, content))
+        except OSError:
+            continue
+    return text, refs
 
 
 def _activity_label_for_phase(phase: ActivityPhase) -> str:
@@ -433,7 +469,7 @@ class AgentService:
         await self.updates.put(UiUpdate(kind="queued_message", text=text))
 
     async def handle_input(self, text: str) -> None:
-        """Process user input — slash command or normal prompt."""
+        """Process user input — slash command, bash shortcut, or normal prompt."""
         text = text.strip()
         if not text:
             return
@@ -442,18 +478,112 @@ class AgentService:
             await self._handle_slash_command(text)
             return
 
+        if text.startswith("!"):
+            await self._handle_bash_shortcut(text)
+            return
+
         if self._busy:
             await self.queue_message(text)
             return
 
+        # Expand @file references — append file contents as context.
+        prompt, file_refs = _expand_file_references(text)
+        if file_refs:
+            parts = [prompt]
+            for ref_path, ref_content in file_refs:
+                parts.append(f"\n\n--- @{ref_path} ---\n{ref_content}")
+            prompt = "".join(parts)
+            # Show the user which files were attached.
+            ref_names = ", ".join(f"@{p}" for p, _ in file_refs)
+            await self.updates.put(UiUpdate(kind="system", text=f"Attached: {ref_names}"))
+
         await self.updates.put(UiUpdate(kind="user_message", text=text))
         self._busy = True
-        self._turn_task = asyncio.create_task(self._run_turn(text))
+        self._turn_task = asyncio.create_task(self._run_turn(prompt))
 
     def resolve_approval(self, approved: bool, always: bool = False) -> None:
         """Resolve a pending tool approval from the TUI."""
         if self._pending_approval and not self._pending_approval.done():
             self._pending_approval.set_result((approved, always))
+
+    async def open_editor(self) -> str | None:
+        """Open the user's ``$EDITOR`` and return the composed text.
+
+        Returns ``None`` if the editor is not configured, the user saves
+        an empty file, or the process fails.
+        """
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+        if not editor:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text="No $EDITOR set. Export EDITOR=vim (or your preferred editor).",
+                )
+            )
+            return None
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".md", delete=False, mode="w") as tmp:
+            tmp_path = tmp.name
+
+        try:
+            # Run the editor in a thread so the event loop isn't blocked.
+            loop = asyncio.get_running_loop()
+            returncode = await loop.run_in_executor(
+                None,
+                lambda: subprocess.call(editor.split() + [tmp_path]),  # noqa: S603
+            )
+            if returncode != 0:
+                await self.updates.put(
+                    UiUpdate(kind="error", text=f"Editor exited with code {returncode}.")
+                )
+                return None
+
+            content = Path(tmp_path).read_text().strip()
+            return content if content else None
+        except Exception as exc:  # noqa: BLE001
+            await self.updates.put(UiUpdate(kind="error", text=f"Editor error: {exc}"))
+            return None
+        finally:
+            with suppress(OSError):
+                os.unlink(tmp_path)
+
+    async def _handle_bash_shortcut(self, text: str) -> None:
+        """Execute a shell command (``!cmd``) and display the output."""
+        command = text[1:].strip()
+        if not command:
+            await self.updates.put(UiUpdate(kind="error", text="Usage: !<command>"))
+            return
+
+        await self.updates.put(UiUpdate(kind="user_message", text=text))
+        await self.updates.put(UiUpdate(kind="system", text=f"$ {command}"))
+
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(  # noqa: S603
+                    command,
+                    shell=True,  # noqa: S602
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=os.getcwd(),
+                ),
+            )
+            if result.stdout.strip():
+                await self.updates.put(UiUpdate(kind="system", text=result.stdout.rstrip()))
+            if result.stderr.strip():
+                await self.updates.put(UiUpdate(kind="error", text=result.stderr.rstrip()))
+            if result.returncode != 0:
+                await self.updates.put(
+                    UiUpdate(kind="system", text=f"Exit code: {result.returncode}")
+                )
+        except subprocess.TimeoutExpired:
+            await self.updates.put(UiUpdate(kind="error", text="Command timed out (30s limit)."))
+        except Exception as exc:  # noqa: BLE001
+            await self.updates.put(UiUpdate(kind="error", text=f"Command failed: {exc}"))
 
     def cancel_turn(self) -> bool:
         """Cancel the currently running agent turn.

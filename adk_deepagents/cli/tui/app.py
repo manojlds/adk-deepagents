@@ -327,6 +327,8 @@ class DeepAgentTui(App[None]):
             self._do_toggle_thinking()
         elif action == "theme_picker":
             self._open_theme_picker()
+        elif action == "editor_open":
+            self.run_worker(self._do_open_editor())
         elif action == "messages_half_page_up":
             self.query_one(MessageDisplay).scroll_up(animate=False)
         elif action == "messages_half_page_down":
@@ -364,6 +366,12 @@ class DeepAgentTui(App[None]):
         new_state = messages.toggle_thinking()
         label = "shown" if new_state else "hidden"
         messages.add_system_message(f"Thinking blocks: {label}")
+
+    async def _do_open_editor(self) -> None:
+        """Open $EDITOR to compose a message, then submit it."""
+        text = await self._service.open_editor()
+        if text:
+            await self._service.handle_input(text)
 
     # -----------------------------------------------------------------
     # UI update pump
@@ -463,6 +471,9 @@ class DeepAgentTui(App[None]):
             return
         if value == "/theme":
             self._open_theme_picker()
+            return
+        if value == "/editor":
+            self.run_worker(self._do_open_editor())
             return
         await self._service.handle_input(value)
 

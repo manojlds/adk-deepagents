@@ -358,6 +358,7 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/details", "Toggle tool detail visibility"),
     ("/thinking", "Toggle thinking block visibility"),
     ("/theme", "Switch TUI color theme"),
+    ("/editor", "Open external editor to compose a message"),
     ("/compact", "Compact/summarize the session context"),
     ("/quit", "Exit the TUI"),
 ]
@@ -376,7 +377,14 @@ class SubmittableTextArea(TextArea):
     This subclass overrides that behaviour so that plain Enter fires a
     ``Submitted`` message while Shift+Enter (or Ctrl+Enter) still inserts
     a newline.
+
+    Supports **input history**: Up/Down arrows recall previous submissions
+    when the cursor is at the first/last line of the input.
     """
+
+    _history: list[str]
+    _history_index: int
+    _draft: str
 
     class Submitted(Message):
         """Fired when the user presses Enter (without Shift/Ctrl)."""
@@ -385,6 +393,19 @@ class SubmittableTextArea(TextArea):
             super().__init__()
             self.value = value
 
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self._history = []
+        self._history_index = -1
+        self._draft = ""
+
+    def _push_history(self, text: str) -> None:
+        """Record a submitted message in history (deduplicating consecutive)."""
+        if text and (not self._history or self._history[-1] != text):
+            self._history.append(text)
+        self._history_index = -1
+        self._draft = ""
+
     async def _on_key(self, event: events.Key) -> None:
         if event.key == "enter" and not self.read_only:
             # Plain Enter → submit the text instead of inserting a newline.
@@ -392,6 +413,7 @@ class SubmittableTextArea(TextArea):
             event.prevent_default()
             value = self.text.strip()
             if value:
+                self._push_history(value)
                 self.post_message(self.Submitted(value))
                 self.clear()
             return
@@ -403,6 +425,44 @@ class SubmittableTextArea(TextArea):
             start, end = self.selection
             self._replace_via_keyboard("\n", start, end)
             return
+
+        if event.key == "up" and not self.read_only and self._history:
+            # Navigate backward through history when cursor is on the first line.
+            cursor_row = self.selection.end[0]
+            if cursor_row == 0:
+                event.stop()
+                event.prevent_default()
+                if self._history_index == -1:
+                    # Save current text as draft before navigating.
+                    self._draft = self.text
+                    self._history_index = len(self._history) - 1
+                elif self._history_index > 0:
+                    self._history_index -= 1
+                else:
+                    return  # Already at oldest entry.
+                self.clear()
+                self.insert(self._history[self._history_index])
+                return
+
+        if event.key == "down" and not self.read_only and self._history:
+            # Navigate forward through history when cursor is on the last line.
+            cursor_row = self.selection.end[0]
+            last_row = self.document.line_count - 1
+            if cursor_row == last_row and self._history_index != -1:
+                event.stop()
+                event.prevent_default()
+                if self._history_index < len(self._history) - 1:
+                    self._history_index += 1
+                    self.clear()
+                    self.insert(self._history[self._history_index])
+                else:
+                    # Past the newest entry → restore draft.
+                    self._history_index = -1
+                    self.clear()
+                    if self._draft:
+                        self.insert(self._draft)
+                    self._draft = ""
+                return
 
         # Everything else → delegate to the stock handler.
         await super()._on_key(event)
@@ -548,7 +608,16 @@ class PromptInput(Static):
         ta = self.query_one("#prompt-input", SubmittableTextArea)
 
         # Commands with no arguments — submit immediately
-        if cmd_id in {"/help", "/clear", "/quit", "/details", "/compact", "/thinking", "/theme"}:
+        if cmd_id in {
+            "/help",
+            "/clear",
+            "/quit",
+            "/details",
+            "/compact",
+            "/thinking",
+            "/theme",
+            "/editor",
+        }:
             ta.clear()
             self.post_message(self.Submitted(cmd_id))
         else:
@@ -656,6 +725,12 @@ DEFAULT_PALETTE_ITEMS: list[CommandPaletteItem] = [
         action="session_compact",
         label="Compact",
         description="Compact/summarize the session",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="editor_open",
+        label="Editor",
+        description="Open external editor to compose a message",
         keybind="",
     ),
     CommandPaletteItem(
