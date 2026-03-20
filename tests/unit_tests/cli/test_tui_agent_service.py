@@ -1164,3 +1164,132 @@ class TestOpenEditor:
         update = service.updates.get_nowait()
         assert update.kind == "error"
         assert "EDITOR" in (update.text or "")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Agent registry & switching
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRegistry:
+    """Test the agent registry on AgentService."""
+
+    def test_service_has_registry(self) -> None:
+        service = _service()
+        assert service.agent_registry is not None
+
+    def test_default_active_agent_is_build(self) -> None:
+        service = _service()
+        # The active agent name matches the agent_name passed at construction.
+        assert service.active_agent_name == "demo"
+
+    def test_active_agent_profile_returns_none_for_unknown(self) -> None:
+        service = _service()
+        # "demo" isn't in the builtin registry, so profile is None.
+        assert service.active_agent_profile is None
+
+    def test_registry_has_builtins(self) -> None:
+        service = _service()
+        assert service.agent_registry.get("build") is not None
+        assert service.agent_registry.get("plan") is not None
+
+
+class TestAgentSwitching:
+    """Test agent switching via the service."""
+
+    def test_switch_same_agent_shows_message(self) -> None:
+        service = _service()
+        service._active_agent_name = "build"
+        profile = service.agent_registry.get("build")
+        assert profile is not None
+
+        asyncio.run(service.switch_agent(profile))
+
+        update = service.updates.get_nowait()
+        assert update.kind == "system"
+        assert "Already using" in (update.text or "")
+
+    def test_switch_while_busy_shows_error(self) -> None:
+        service = _service()
+        service._busy = True
+        profile = service.agent_registry.get("plan")
+        assert profile is not None
+
+        asyncio.run(service.switch_agent(profile))
+
+        update = service.updates.get_nowait()
+        assert update.kind == "error"
+        assert "Cannot switch" in (update.text or "")
+
+    def test_switch_updates_active_agent(self) -> None:
+        service = _service()
+        service._active_agent_name = "build"
+        profile = service.agent_registry.get("plan")
+        assert profile is not None
+
+        asyncio.run(service.switch_agent(profile))
+
+        assert service.active_agent_name == "plan"
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        system_texts = [u.text for u in updates if u.kind == "system"]
+        assert any("plan" in (t or "").lower() for t in system_texts)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Conversation log & export
+# ---------------------------------------------------------------------------
+
+
+class TestConversationLog:
+    """Test conversation logging on AgentService."""
+
+    def test_service_has_conversation_log(self) -> None:
+        service = _service()
+        assert service.conversation_log is not None
+        assert len(service.conversation_log.records) == 0
+
+    def test_log_record_appends(self) -> None:
+        from adk_deepagents.cli.tui.models import MessageRecord
+
+        service = _service()
+        service._log_record(MessageRecord(role="user", text="hello"))
+        assert len(service.conversation_log.records) == 1
+        assert service.conversation_log.records[0].text == "hello"
+
+
+class TestExportConversation:
+    """Test the export_conversation method."""
+
+    def test_empty_export_shows_message(self) -> None:
+        service = _service()
+        result = asyncio.run(service.export_conversation())
+        assert result is None
+        update = service.updates.get_nowait()
+        assert update.kind == "system"
+        assert "Nothing to export" in (update.text or "")
+
+    def test_export_without_editor_emits_markdown(self, monkeypatch: object) -> None:
+        from adk_deepagents.cli.tui.models import MessageRecord
+
+        monkeypatch.setenv("EDITOR", "")  # type: ignore[attr-defined]
+        monkeypatch.delenv("VISUAL", raising=False)  # type: ignore[attr-defined]
+
+        service = _service()
+        service._log_record(MessageRecord(role="user", text="test question"))
+        service._log_record(MessageRecord(role="assistant", text="test answer"))
+
+        result = asyncio.run(service.export_conversation())
+        assert result is not None
+        assert "**User:** test question" in result
+        assert "**Assistant:** test answer" in result
+
+        # Should have emitted system updates with the markdown.
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+        texts = " ".join(u.text or "" for u in updates)
+        assert "test question" in texts

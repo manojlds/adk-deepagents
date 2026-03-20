@@ -25,6 +25,10 @@ DEFAULT_KEYBINDS: dict[str, str] = {
     "session_list": "<leader> l",
     # Model management
     "model_list": "<leader> m",
+    # Agent management
+    "agent_cycle": "tab",
+    "agent_cycle_reverse": "shift+tab",
+    "agent_list": "<leader> a",
     # Conversation management
     "session_compact": "<leader> c",
     "session_interrupt": "escape",
@@ -39,6 +43,10 @@ DEFAULT_KEYBINDS: dict[str, str] = {
     "theme_picker": "<leader> k",
     # Editor
     "editor_open": "<leader> e",
+    # Sidebar
+    "sidebar_toggle": "<leader> b",
+    # Export
+    "session_export": "<leader> x",
     # Scroll (vim-style)
     "messages_half_page_up": "ctrl+u",
     "messages_half_page_down": "ctrl+d",

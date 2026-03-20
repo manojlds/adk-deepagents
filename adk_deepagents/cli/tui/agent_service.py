@@ -30,6 +30,12 @@ from adk_deepagents.cli.interactive import (
     _ToolConfirmationRequest,
     handle_slash_command,
 )
+from adk_deepagents.cli.tui.models import (
+    AgentProfile,
+    AgentRegistry,
+    ConversationLog,
+    MessageRecord,
+)
 from adk_deepagents.types import DynamicTaskConfig
 
 log = logging.getLogger("adk_deepagents.tui.service")
@@ -442,6 +448,13 @@ class AgentService:
         default=None, init=False, repr=False
     )
     _busy: bool = field(default=False, init=False, repr=False)
+    _conversation_log: ConversationLog = field(
+        default_factory=ConversationLog, init=False, repr=False
+    )
+    _agent_registry: AgentRegistry = field(default_factory=AgentRegistry, init=False, repr=False)
+    _active_agent_name: str = field(default="", init=False, repr=False)
+    # Accumulated assistant text for the current streaming message.
+    _current_assistant_text: str = field(default="", init=False, repr=False)
     _activity_phase: ActivityPhase = field(default="working", init=False, repr=False)
     _activity_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _turn_task: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
@@ -456,8 +469,13 @@ class AgentService:
         default_factory=_SharedMessageQueue, init=False, repr=False
     )
 
+    def __post_init__(self) -> None:
+        # Eagerly set active agent name so the property is usable before initialize().
+        self._active_agent_name = self.agent_name
+
     def initialize(self) -> None:
         """Build the runner and internal contexts. Must be called once."""
+        self._active_agent_name = self.agent_name
         self._runner = _build_runner(
             agent_name=self.agent_name,
             model=self.model,
@@ -479,7 +497,7 @@ class AgentService:
 
         def _switch_model(new_model: str | None) -> None:
             self._runner = _build_runner(
-                agent_name=self.agent_name,
+                agent_name=self._active_agent_name,
                 model=new_model,
                 db_path=self.db_path,
                 dynamic_task_config=self.dynamic_task_config,
@@ -504,6 +522,7 @@ class AgentService:
         self._queued_messages.append(text)
         self._shared_queue.push(text)
         await self.updates.put(UiUpdate(kind="queued_message", text=text))
+        self._log_record(MessageRecord(role="queued", text=text))
         log.debug("[queue_message] UI update enqueued")
 
     async def handle_input(self, text: str) -> None:
@@ -539,6 +558,7 @@ class AgentService:
             await self.updates.put(UiUpdate(kind="system", text=f"Attached: {ref_names}"))
 
         await self.updates.put(UiUpdate(kind="user_message", text=text))
+        self._log_record(MessageRecord(role="user", text=text))
         self._busy = True
         self._turn_task = asyncio.create_task(self._run_turn(prompt))
 
@@ -589,6 +609,125 @@ class AgentService:
         finally:
             with suppress(OSError):
                 os.unlink(tmp_path)
+
+    # -----------------------------------------------------------------
+    # Agent switching
+    # -----------------------------------------------------------------
+
+    @property
+    def agent_registry(self) -> AgentRegistry:
+        return self._agent_registry
+
+    @property
+    def active_agent_name(self) -> str:
+        return self._active_agent_name
+
+    @property
+    def active_agent_profile(self) -> AgentProfile | None:
+        return self._agent_registry.get(self._active_agent_name)
+
+    async def switch_agent(self, profile: AgentProfile) -> None:
+        """Switch to a different agent profile, rebuilding the runner.
+
+        The model is taken from the profile if set, otherwise falls back
+        to the current model.  The session (thread) is preserved — only
+        the agent personality/tools change.
+        """
+        if profile.name == self._active_agent_name:
+            await self.updates.put(
+                UiUpdate(kind="system", text=f"Already using agent '{profile.name}'.")
+            )
+            return
+
+        if self._busy:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text="Cannot switch agents while a turn is running. Interrupt first.",
+                )
+            )
+            return
+
+        model = profile.model or (self._model_context.model if self._model_context else self.model)
+        self._active_agent_name = profile.name
+
+        self._runner = _build_runner(
+            agent_name=profile.name,
+            model=model,
+            db_path=self.db_path,
+            dynamic_task_config=self.dynamic_task_config,
+            memory_sources=self.memory_sources,
+            memory_source_paths=self.memory_source_paths or {},
+            skills_dirs=self.skills_dirs,
+            message_queue_provider=self._shared_queue.drain,
+        )
+
+        if self._thread_context is not None:
+            self._thread_context.agent_name = profile.name
+
+        label = profile.description or profile.name
+        await self.updates.put(
+            UiUpdate(kind="system", text=f"Switched to agent: {profile.name} — {label}")
+        )
+
+    # -----------------------------------------------------------------
+    # Conversation log & export
+    # -----------------------------------------------------------------
+
+    @property
+    def conversation_log(self) -> ConversationLog:
+        return self._conversation_log
+
+    def _log_record(self, record: MessageRecord) -> None:
+        """Append a record to the conversation log."""
+        self._conversation_log.append(record)
+
+    async def export_conversation(self) -> str | None:
+        """Export the conversation to Markdown and open in ``$EDITOR``.
+
+        Returns the exported Markdown text, or ``None`` if the
+        conversation is empty or the editor fails.
+        """
+        md = self._conversation_log.to_markdown()
+        if not md.strip():
+            await self.updates.put(UiUpdate(kind="system", text="Nothing to export."))
+            return None
+
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+        if not editor:
+            # No editor — just emit the markdown as a system message.
+            await self.updates.put(
+                UiUpdate(kind="system", text="Exported conversation (set $EDITOR to open):")
+            )
+            await self.updates.put(UiUpdate(kind="system", text=md))
+            return md
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".md", prefix="adk-export-", delete=False, mode="w"
+        ) as tmp:
+            tmp.write(md)
+            tmp_path = tmp.name
+
+        try:
+            loop = asyncio.get_running_loop()
+            returncode = await loop.run_in_executor(
+                None,
+                lambda: subprocess.call(editor.split() + [tmp_path]),  # noqa: S603
+            )
+            if returncode != 0:
+                await self.updates.put(
+                    UiUpdate(kind="error", text=f"Editor exited with code {returncode}.")
+                )
+            else:
+                await self.updates.put(
+                    UiUpdate(kind="system", text=f"Conversation exported to {tmp_path}")
+                )
+            return md
+        except Exception as exc:  # noqa: BLE001
+            await self.updates.put(UiUpdate(kind="error", text=f"Export error: {exc}"))
+            return md
 
     async def _handle_bash_shortcut(self, text: str) -> None:
         """Execute a shell command (``!cmd``) and display the output."""
@@ -683,6 +822,7 @@ class AgentService:
 
         if self._thread_context.active_session_id != prev_session:
             await self.updates.put(UiUpdate(kind="clear_transcript"))
+            self._conversation_log.clear()
             await self.updates.put(
                 UiUpdate(
                     kind="system",
@@ -750,6 +890,10 @@ class AgentService:
         except Exception as exc:  # noqa: BLE001
             await self.updates.put(UiUpdate(kind="error", text=str(exc)))
         finally:
+            # Flush any accumulated assistant text to the conversation log.
+            if self._current_assistant_text:
+                self._log_record(MessageRecord(role="assistant", text=self._current_assistant_text))
+                self._current_assistant_text = ""
             self._busy = False
             self._turn_task = None
             self._pending_edit_args.clear()
@@ -775,6 +919,7 @@ class AgentService:
             )
             if combined.strip():
                 await self.updates.put(UiUpdate(kind="user_message", text=combined.strip()))
+                self._log_record(MessageRecord(role="user", text=combined.strip()))
                 self._busy = True
                 self._turn_task = asyncio.create_task(self._run_turn(combined.strip()))
 
@@ -784,6 +929,7 @@ class AgentService:
         error_message = getattr(event, "error_message", None)
         if isinstance(error_message, str) and error_message.strip():
             await self.updates.put(UiUpdate(kind="error", text=error_message.strip()))
+            self._log_record(MessageRecord(role="error", text=error_message.strip()))
 
         content = getattr(event, "content", None)
         parts = getattr(content, "parts", None) if content is not None else None
@@ -796,6 +942,8 @@ class AgentService:
                 is_thought = getattr(part, "thought", False)
                 kind = "thought_delta" if is_thought else "assistant_delta"
                 self._set_activity_phase("thinking" if is_thought else "responding")
+                if not is_thought:
+                    self._current_assistant_text += text
                 for chunk in _chunk_stream_text(text):
                     await self.updates.put(UiUpdate(kind=kind, text=chunk))
                     await asyncio.sleep(0)
@@ -809,6 +957,19 @@ class AgentService:
                     detail = _format_tool_call_detail(tool_name, args_dict)
                     await self.updates.put(
                         UiUpdate(kind="tool_call", tool_name=tool_name, tool_detail=detail)
+                    )
+                    # Flush accumulated assistant text before tool call.
+                    if self._current_assistant_text:
+                        self._log_record(
+                            MessageRecord(role="assistant", text=self._current_assistant_text)
+                        )
+                        self._current_assistant_text = ""
+                    self._log_record(
+                        MessageRecord(
+                            role="tool_call",
+                            text=detail or "",
+                            tool_name=tool_name,
+                        )
                     )
                     # Stash args for edit_file keyed by call ID so we can
                     # generate a diff when the response arrives — which may
@@ -830,6 +991,13 @@ class AgentService:
                     if detail is not None:
                         await self.updates.put(
                             UiUpdate(kind="tool_result", tool_name=tool_name, tool_detail=detail)
+                        )
+                        self._log_record(
+                            MessageRecord(
+                                role="tool_result",
+                                text=detail,
+                                tool_name=tool_name,
+                            )
                         )
 
                     # Emit diff content for syntax-highlighted rendering.
@@ -860,6 +1028,7 @@ class AgentService:
                     diff_text = _extract_diff_content(tool_name, response, call_args=call_args)
                     if diff_text is not None:
                         await self.updates.put(UiUpdate(kind="diff_content", text=diff_text))
+                        self._log_record(MessageRecord(role="diff", text=diff_text))
 
                     for key in ("error", "stderr"):
                         value = response.get(key)
