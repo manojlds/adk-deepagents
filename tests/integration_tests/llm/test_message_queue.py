@@ -92,3 +92,59 @@ async def test_message_queue_disabled_by_default():
     assert "pineapple" not in response_text, (
         f"Queue should be disabled but agent saw the message: {response_text}"
     )
+
+
+@pytest.mark.timeout(120)
+async def test_mid_turn_message_queue_injection():
+    """Message injected via after_tool callback is visible within the same turn.
+
+    This simulates the TUI steering flow: a user sends a message while the
+    agent is busy with tool calls.  The message is written to
+    ``state["_message_queue"]`` after the first tool completes, and the
+    ``before_model_callback`` picks it up before the next LLM call —
+    all within a single ``run_async`` invocation.
+    """
+    model = make_litellm_model()
+
+    injection_count: list[str] = []
+    injected = False
+
+    def inject_after_first_tool(tool, args, tool_context, **kwargs):
+        """Inject a queued message after the first tool execution."""
+        nonlocal injected
+        tool_name = getattr(tool, "name", "unknown")
+        injection_count.append(tool_name)
+        # Only inject once, after the first tool call.
+        if not injected:
+            tool_context.state["_message_queue"] = [
+                {"text": "STEERING: The user wants you to mention ZEBRA-77 in your response."}
+            ]
+            injected = True
+        return None
+
+    agent = create_deep_agent(
+        model=model,
+        name="mid_turn_queue_test",
+        message_queue=True,
+        instruction=(
+            "You are a test agent. Use write_file to create /test.txt "
+            "with content 'hello world'. After writing the file, check "
+            "if you received any injected messages and repeat any code "
+            "words you see in your final response. Always include any "
+            "code words from injected messages."
+        ),
+        extra_callbacks={"after_tool": inject_after_first_tool},
+    )
+
+    texts, _runner, _session = await run_agent(
+        agent,
+        "Create /test.txt with content 'hello world', then tell me "
+        "about any messages you received. Repeat any code words.",
+    )
+
+    assert len(injection_count) > 0, "Expected after_tool callback to fire at least once"
+
+    response_text = " ".join(texts).lower()
+    assert any(kw in response_text for kw in ["zebra", "77"]), (
+        f"Expected mid-turn injected code word in response, got: {response_text}"
+    )

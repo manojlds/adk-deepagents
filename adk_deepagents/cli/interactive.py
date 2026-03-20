@@ -166,6 +166,7 @@ def _build_cli_agent(
         "delegation_mode": "dynamic",
         "dynamic_task_config": dynamic_task_config or build_cli_dynamic_task_config(),
         "interrupt_on": INTERACTIVE_INTERRUPT_ON,
+        "message_queue": True,
     }
     if model is not None:
         agent_kwargs["model"] = model

@@ -341,6 +341,7 @@ class UiUpdate:
         "turn_started",
         "turn_finished",
         "clear_transcript",
+        "queued_message",
         "exit",
     ]
     text: str | None = None
@@ -385,6 +386,7 @@ class AgentService:
     _pending_edit_args: dict[str, dict[str, Any]] = field(
         default_factory=dict, init=False, repr=False
     )
+    _queued_messages: list[str] = field(default_factory=list, init=False, repr=False)
 
     def initialize(self) -> None:
         """Build the runner and internal contexts. Must be called once."""
@@ -419,6 +421,17 @@ class AgentService:
 
         self._model_context = _ModelCommandContext(model=self.model, switch_model=_switch_model)
 
+    async def queue_message(self, text: str) -> None:
+        """Buffer a message for injection into the next LLM call.
+
+        The message is stored locally and will be flushed into the ADK
+        session's ``state["_message_queue"]`` at the start of the next
+        ``run_async()`` iteration.  A ``queued_message`` UI update is
+        emitted so the TUI can display the message immediately.
+        """
+        self._queued_messages.append(text)
+        await self.updates.put(UiUpdate(kind="queued_message", text=text))
+
     async def handle_input(self, text: str) -> None:
         """Process user input — slash command or normal prompt."""
         text = text.strip()
@@ -430,7 +443,7 @@ class AgentService:
             return
 
         if self._busy:
-            await self.updates.put(UiUpdate(kind="system", text="A turn is already running."))
+            await self.queue_message(text)
             return
 
         await self.updates.put(UiUpdate(kind="user_message", text=text))
@@ -517,6 +530,42 @@ class AgentService:
         if result == "exit":
             await self.updates.put(UiUpdate(kind="exit"))
 
+    async def _flush_queued_messages(self) -> None:
+        """Write buffered queued messages into the ADK session state.
+
+        The ``before_model_callback`` will consume
+        ``state["_message_queue"]`` before the next LLM call and inject
+        them into the conversation.  Messages are drained from the
+        local buffer so they aren't sent twice.
+        """
+        if not self._queued_messages:
+            return
+
+        assert self._thread_context is not None
+
+        messages = list(self._queued_messages)
+        self._queued_messages.clear()
+
+        thread_ctx = self._thread_context
+        try:
+            session = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._runner.session_service.get_session(
+                    app_name=self._runner.app_name,
+                    user_id=thread_ctx.user_id,
+                    session_id=thread_ctx.active_session_id,
+                ),
+            )
+            if session is not None:
+                # Merge with any existing queued messages in state.
+                existing = session.state.get("_message_queue")
+                queue = list(existing) if isinstance(existing, list) else []
+                queue.extend({"text": m} for m in messages)
+                session.state["_message_queue"] = queue
+        except Exception:  # noqa: BLE001
+            # If session write fails, re-buffer so the messages aren't lost.
+            self._queued_messages.extend(messages)
+
     async def _run_turn(self, prompt: str) -> None:
         assert self._thread_context is not None
         assert self._approval_context is not None
@@ -533,6 +582,11 @@ class AgentService:
                 next_message = pending_messages.pop(0)
                 pending_confirmations: list[_ToolConfirmationRequest] = []
                 seen_confirmation_ids: set[str] = set()
+
+                # Flush any queued messages into session state so the
+                # before_model_callback can inject them into the next
+                # LLM call.
+                await self._flush_queued_messages()
 
                 async for event in self._runner.run_async(
                     user_id=self._thread_context.user_id,

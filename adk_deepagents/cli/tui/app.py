@@ -430,7 +430,6 @@ class DeepAgentTui(App[None]):
             composer.set_activity_status(update.text)
 
         elif update.kind == "turn_started":
-            composer.disable_input()
             composer.set_activity_status("Working...")
 
         elif update.kind == "turn_finished":
@@ -441,6 +440,10 @@ class DeepAgentTui(App[None]):
 
         elif update.kind == "clear_transcript":
             messages.clear_transcript()
+
+        elif update.kind == "queued_message":
+            messages.end_assistant_message()
+            messages.add_queued_message(update.text or "")
 
         elif update.kind == "exit":
             self.exit()

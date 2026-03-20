@@ -128,6 +128,13 @@ class MessageDisplay(VerticalScroll):
         margin: 0;
         padding: 0;
     }
+
+    MessageDisplay .queued-msg {
+        color: $warning;
+        text-opacity: 80%;
+        text-style: italic;
+        margin-bottom: 1;
+    }
     """
 
     _current_assistant_md: Markdown | None = None
@@ -145,6 +152,13 @@ class MessageDisplay(VerticalScroll):
         """Append a user message bubble."""
         self._end_assistant()
         widget = Static(f"> {text}", classes="user-msg")
+        self.mount(widget)
+        self.scroll_end(animate=False)
+
+    def add_queued_message(self, text: str) -> None:
+        """Append a queued message indicator (sent while agent was busy)."""
+        self._end_assistant()
+        widget = Static(f"> [queued] {text}", classes="queued-msg")
         self.mount(widget)
         self.scroll_end(animate=False)
 
