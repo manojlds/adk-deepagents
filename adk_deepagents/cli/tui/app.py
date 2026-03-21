@@ -372,9 +372,13 @@ class DeepAgentTui(App[None]):
         elif action == "session_export":
             self.run_worker(self._do_export())
         elif action == "messages_half_page_up":
-            self.query_one(MessageDisplay).scroll_up(animate=False)
+            md = self.query_one(MessageDisplay)
+            half = max(1, md.size.height // 2)
+            md.scroll_relative(y=-half, animate=False)
         elif action == "messages_half_page_down":
-            self.query_one(MessageDisplay).scroll_down(animate=False)
+            md = self.query_one(MessageDisplay)
+            half = max(1, md.size.height // 2)
+            md.scroll_relative(y=half, animate=False)
         elif action == "messages_page_up":
             self.query_one(MessageDisplay).scroll_page_up(animate=False)
         elif action == "messages_page_down":
@@ -507,6 +511,7 @@ class DeepAgentTui(App[None]):
             messages.add_tool_result(
                 update.tool_name or "unknown_tool",
                 detail=update.tool_detail,
+                output=update.tool_output,
             )
 
         elif update.kind == "diff_content":

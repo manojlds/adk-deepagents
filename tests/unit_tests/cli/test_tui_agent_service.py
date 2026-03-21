@@ -18,9 +18,11 @@ from adk_deepagents.cli.tui.agent_service import (
     _coerce_payload_dict,
     _expand_file_references,
     _extract_diff_content,
+    _extract_tool_output,
     _format_tool_call_detail,
     _format_tool_response_detail,
     _generate_unified_diff,
+    _guess_language_from_path,
     _SharedMessageQueue,
 )
 
@@ -1296,3 +1298,199 @@ class TestExportConversation:
             updates.append(service.updates.get_nowait())
         texts = " ".join(u.text or "" for u in updates)
         assert "test question" in texts
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: _guess_language_from_path tests
+# ---------------------------------------------------------------------------
+
+
+class TestGuessLanguageFromPath:
+    """Test the _guess_language_from_path helper."""
+
+    def test_python_extension(self) -> None:
+        assert _guess_language_from_path("src/app.py") == "python"
+
+    def test_typescript_extension(self) -> None:
+        assert _guess_language_from_path("src/index.ts") == "typescript"
+
+    def test_tsx_extension(self) -> None:
+        assert _guess_language_from_path("App.tsx") == "typescript"
+
+    def test_javascript_extension(self) -> None:
+        assert _guess_language_from_path("util.js") == "javascript"
+
+    def test_json_extension(self) -> None:
+        assert _guess_language_from_path("config.json") == "json"
+
+    def test_yaml_extension(self) -> None:
+        assert _guess_language_from_path("docker-compose.yml") == "yaml"
+
+    def test_unknown_extension(self) -> None:
+        assert _guess_language_from_path("data.xyz") == ""
+
+    def test_no_extension(self) -> None:
+        assert _guess_language_from_path("Makefile") == ""
+
+    def test_none_path(self) -> None:
+        assert _guess_language_from_path(None) == ""
+
+    def test_empty_string(self) -> None:
+        assert _guess_language_from_path("") == ""
+
+    def test_case_insensitive(self) -> None:
+        assert _guess_language_from_path("README.MD") == "markdown"
+
+    def test_deeply_nested_path(self) -> None:
+        assert _guess_language_from_path("/home/user/project/src/lib/utils.rs") == "rust"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: _extract_tool_output tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractToolOutput:
+    """Test the _extract_tool_output helper."""
+
+    def test_read_file_with_content(self) -> None:
+        content = "line1\nline2\nline3\nline4"
+        result = _extract_tool_output("read_file", {"content": content, "path": "app.py"})
+        assert result is not None
+        assert "```python" in result
+        assert "line1" in result
+
+    def test_read_file_with_path_language_hint(self) -> None:
+        content = "fn main() {\n    println!();\n    return;\n}"
+        result = _extract_tool_output("read_file", {"content": content, "path": "main.rs"})
+        assert result is not None
+        assert "```rust" in result
+
+    def test_read_file_too_short(self) -> None:
+        """Content with fewer than _TOOL_OUTPUT_MIN_LINES should return None."""
+        result = _extract_tool_output("read_file", {"content": "short", "path": "f.py"})
+        assert result is None
+
+    def test_read_file_empty_content(self) -> None:
+        result = _extract_tool_output("read_file", {"content": "", "path": "f.py"})
+        assert result is None
+
+    def test_read_file_no_content_key(self) -> None:
+        result = _extract_tool_output("read_file", {"path": "f.py"})
+        assert result is None
+
+    def test_execute_with_output(self) -> None:
+        output = "BUILD SUCCESSFUL\nCompiled 3 files\nTests passed\nDone"
+        result = _extract_tool_output("execute", {"output": output})
+        assert result is not None
+        assert "```\n" in result
+        assert "BUILD SUCCESSFUL" in result
+
+    def test_execute_too_short(self) -> None:
+        result = _extract_tool_output("execute", {"output": "ok"})
+        assert result is None
+
+    def test_grep_with_result(self) -> None:
+        grep_result = "file1.py:10: match1\nfile2.py:20: match2\nfile3.py:30: match3"
+        result = _extract_tool_output("grep", {"result": grep_result})
+        assert result is not None
+        assert "```\n" in result
+
+    def test_grep_too_short(self) -> None:
+        result = _extract_tool_output("grep", {"result": "one match"})
+        assert result is None
+
+    def test_glob_with_entries(self) -> None:
+        entries = [{"path": "/a.py"}, {"path": "/b.py"}, {"path": "/c.py"}]
+        result = _extract_tool_output("glob", {"entries": entries})
+        assert result is not None
+        assert "```\n" in result
+
+    def test_glob_too_few_entries(self) -> None:
+        entries = [{"path": "/a.py"}]
+        result = _extract_tool_output("glob", {"entries": entries})
+        assert result is None
+
+    def test_unknown_tool(self) -> None:
+        result = _extract_tool_output("unknown_tool", {"data": "anything"})
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: tool_output emission tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolOutputEmission:
+    """Test that tool_output is included in UiUpdate for tool results."""
+
+    def test_tool_output_emitted_for_read_file(self) -> None:
+        service = _service()
+        content = "line1\nline2\nline3\nline4"
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "read_file",
+                        {"status": "success", "content": content, "path": "app.py"},
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        result_updates = [u for u in updates if u.kind == "tool_result"]
+        assert len(result_updates) == 1
+        assert result_updates[0].tool_output is not None
+        assert "```python" in result_updates[0].tool_output
+
+    def test_tool_output_none_for_short_content(self) -> None:
+        service = _service()
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "read_file",
+                        {"status": "success", "content": "short", "path": "f.py"},
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        result_updates = [u for u in updates if u.kind == "tool_result"]
+        assert len(result_updates) == 1
+        assert result_updates[0].tool_output is None
+
+    def test_tool_output_none_for_unknown_tool(self) -> None:
+        service = _service()
+        event = _FakeEvent(
+            [
+                _FakePart(
+                    function_response=_FakeFunctionResponse(
+                        "unknown_tool",
+                        {"status": "success", "data": "whatever"},
+                    )
+                ),
+            ]
+        )
+
+        asyncio.run(service._emit_event_updates(event))
+
+        updates = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+
+        result_updates = [u for u in updates if u.kind == "tool_result"]
+        assert len(result_updates) == 1
+        assert result_updates[0].tool_output is None

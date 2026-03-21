@@ -36,7 +36,7 @@ from adk_deepagents.cli.tui.models import (
     ConversationLog,
     MessageRecord,
 )
-from adk_deepagents.types import DynamicTaskConfig
+from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 log = logging.getLogger("adk_deepagents.tui.service")
 
@@ -323,6 +323,90 @@ def _format_tool_response_detail(tool_name: str, response: dict[str, Any]) -> st
     return None
 
 
+# Minimum line count for tool output to be worth formatting.
+_TOOL_OUTPUT_MIN_LINES = 3
+# File extensions to language hints for code-fence rendering.
+_EXT_TO_LANG: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".jsx": "javascript",
+    ".rs": "rust",
+    ".go": "go",
+    ".rb": "ruby",
+    ".java": "java",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".zsh": "bash",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".xml": "xml",
+    ".html": "html",
+    ".css": "css",
+    ".sql": "sql",
+    ".md": "markdown",
+    ".dockerfile": "dockerfile",
+    ".tf": "hcl",
+}
+
+
+def _guess_language_from_path(path: str | None) -> str:
+    """Guess a code-fence language hint from a file path."""
+    if not path:
+        return ""
+    from pathlib import PurePosixPath
+
+    suffix = PurePosixPath(path).suffix.lower()
+    return _EXT_TO_LANG.get(suffix, "")
+
+
+def _extract_tool_output(tool_name: str, response: dict[str, Any]) -> str | None:
+    """Extract displayable output text from a tool response.
+
+    Returns a Markdown-formatted string with code fences for content that
+    benefits from syntax highlighting, or ``None`` when there is nothing
+    interesting to show.
+    """
+    if tool_name == "read_file":
+        content = response.get("content")
+        if isinstance(content, str) and content.strip():
+            lines = content.strip().splitlines()
+            if len(lines) >= _TOOL_OUTPUT_MIN_LINES:
+                path = response.get("path", "")
+                lang = _guess_language_from_path(path)
+                return f"```{lang}\n{content.strip()}\n```"
+
+    if tool_name == "execute":
+        output = response.get("output")
+        if isinstance(output, str) and output.strip():
+            lines = output.strip().splitlines()
+            if len(lines) >= _TOOL_OUTPUT_MIN_LINES:
+                return f"```\n{output.strip()}\n```"
+
+    if tool_name == "grep":
+        result = response.get("result")
+        if isinstance(result, str) and result.strip():
+            lines = result.strip().splitlines()
+            if len(lines) >= _TOOL_OUTPUT_MIN_LINES:
+                return f"```\n{result.strip()}\n```"
+
+    if tool_name == "glob":
+        entries = response.get("entries")
+        if isinstance(entries, list) and len(entries) >= _TOOL_OUTPUT_MIN_LINES:
+            text = "\n".join(str(e) for e in entries)
+            return f"```\n{text}\n```"
+
+    return None
+
+
 def _extract_diff_content(
     tool_name: str,
     response: dict[str, Any],
@@ -418,6 +502,7 @@ class UiUpdate:
     text: str | None = None
     tool_name: str | None = None
     tool_detail: str | None = None
+    tool_output: str | None = None
     request_id: str | None = None
     approval_tool_name: str | None = None
     approval_hint: str | None = None
@@ -491,6 +576,7 @@ class AgentService:
             memory_source_paths=self.memory_source_paths or {},
             skills_dirs=self.skills_dirs,
             message_queue_provider=self._shared_queue.drain,
+            summarization=SummarizationConfig(),
         )
         self._thread_context = _ThreadCommandContext(
             db_path=self.db_path,
@@ -511,6 +597,7 @@ class AgentService:
                 memory_source_paths=self.memory_source_paths or {},
                 skills_dirs=self.skills_dirs,
                 message_queue_provider=self._shared_queue.drain,
+                summarization=SummarizationConfig(),
             )
 
         self._model_context = _ModelCommandContext(model=self.model, switch_model=_switch_model)
@@ -667,6 +754,7 @@ class AgentService:
             skills_dirs=self.skills_dirs,
             message_queue_provider=self._shared_queue.drain,
             instruction=profile.prompt,
+            summarization=SummarizationConfig(),
         )
 
         if self._thread_context is not None:
@@ -848,6 +936,14 @@ class AgentService:
         if result == "exit":
             await self.updates.put(UiUpdate(kind="exit"))
 
+        if result == "compact":
+            # Trigger the compact tool by sending a prompt to the agent.
+            compact_prompt = "Please compact and summarize the conversation so far."
+            await self.updates.put(UiUpdate(kind="user_message", text=compact_prompt))
+            self._log_record(MessageRecord(role="user", text=compact_prompt))
+            self._busy = True
+            self._turn_task = asyncio.create_task(self._run_turn(compact_prompt))
+
     async def _run_turn(self, prompt: str) -> None:
         assert self._thread_context is not None
         assert self._approval_context is not None
@@ -995,9 +1091,16 @@ class AgentService:
                 response = getattr(function_response, "response", None)
                 if isinstance(response, dict):
                     detail = _format_tool_response_detail(tool_name, response)
+                    # Extract formatted tool output for syntax highlighting.
+                    tool_output = _extract_tool_output(tool_name, response)
                     if detail is not None:
                         await self.updates.put(
-                            UiUpdate(kind="tool_result", tool_name=tool_name, tool_detail=detail)
+                            UiUpdate(
+                                kind="tool_result",
+                                tool_name=tool_name,
+                                tool_detail=detail,
+                                tool_output=tool_output,
+                            )
                         )
                         self._log_record(
                             MessageRecord(

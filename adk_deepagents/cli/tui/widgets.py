@@ -142,6 +142,10 @@ class MessageDisplay(VerticalScroll):
 
     Assistant text is rendered as Markdown for rich formatting.  Tool calls,
     system messages, and thinking blocks remain as styled ``Static`` widgets.
+
+    Auto-scroll only triggers when the user is already at (or near) the
+    bottom.  If they have scrolled up to read history, new content will
+    **not** yank them back.
     """
 
     DEFAULT_CSS = """
@@ -258,7 +262,19 @@ class MessageDisplay(VerticalScroll):
         text-style: italic;
         margin-bottom: 1;
     }
+
+    MessageDisplay .tool-output-md {
+        margin: 0 0 1 2;
+        padding: 0;
+    }
+
+    MessageDisplay .tool-output-md.hidden {
+        display: none;
+    }
     """
+
+    # How many pixels from the bottom still counts as "at the bottom".
+    _AUTO_SCROLL_THRESHOLD = 5
 
     _current_assistant_md: Markdown | None = None
     _current_assistant_text: str = ""
@@ -271,19 +287,28 @@ class MessageDisplay(VerticalScroll):
     # Whether thinking/reasoning blocks are shown.
     _show_thinking: bool = True
 
+    def _is_near_bottom(self) -> bool:
+        """Return True if the scroll position is at or near the bottom."""
+        return (self.max_scroll_y - self.scroll_y) <= self._AUTO_SCROLL_THRESHOLD
+
+    def _auto_scroll(self) -> None:
+        """Scroll to the end only if the user hasn't scrolled up."""
+        if self._is_near_bottom():
+            self.scroll_end(animate=False)
+
     def add_user_message(self, text: str) -> None:
         """Append a user message bubble."""
         self._end_assistant()
         widget = Static(f"> {text}", classes="user-msg")
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def add_queued_message(self, text: str) -> None:
         """Append a queued message indicator (sent while agent was busy)."""
         self._end_assistant()
         widget = Static(f"> [queued] {text}", classes="queued-msg")
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def start_assistant_message(self) -> None:
         """Begin a new assistant message for streaming deltas (markdown)."""
@@ -304,7 +329,7 @@ class MessageDisplay(VerticalScroll):
         assert self._current_assistant_md is not None
         self._current_assistant_text += text
         self._current_assistant_md.update(self._current_assistant_text)
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def start_thought_block(self) -> None:
         """Begin a new thought/reasoning block for streaming deltas."""
@@ -325,7 +350,7 @@ class MessageDisplay(VerticalScroll):
         assert self._current_thought is not None
         self._current_thought_text += text
         self._current_thought.update("thinking... " + self._current_thought_text)
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def end_assistant_message(self) -> None:
         """Close the current assistant message so the next one starts fresh."""
@@ -340,15 +365,21 @@ class MessageDisplay(VerticalScroll):
         if detail:
             classes = "tool-detail-msg" if self._show_tool_details else "tool-detail-msg hidden"
             self.mount(Static(f"  {detail}", classes=classes))
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
-    def add_tool_result(self, tool_name: str, *, detail: str | None = None) -> None:
-        """Show a concise tool result summary."""
+    def add_tool_result(
+        self, tool_name: str, *, detail: str | None = None, output: str | None = None
+    ) -> None:
+        """Show a concise tool result summary with optional formatted output."""
         self._end_assistant()
         rendered = f"  -> {detail}" if detail else f"  -> {tool_name} completed"
         classes = "tool-result-msg" if self._show_tool_details else "tool-result-msg hidden"
         self.mount(Static(rendered, classes=classes))
-        self.scroll_end(animate=False)
+        if output:
+            cls = "tool-output-md" if self._show_tool_details else "tool-output-md hidden"
+            widget = Markdown(output, classes=cls)
+            self.mount(widget)
+        self._auto_scroll()
 
     def add_system_message(self, text: str, *, error: bool = False) -> None:
         """Show a system or error message."""
@@ -356,7 +387,7 @@ class MessageDisplay(VerticalScroll):
         cls = "error-msg" if error else "system-msg"
         widget = Static(text, classes=cls)
         self.mount(widget)
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def add_diff_block(self, diff_text: str) -> None:
         """Render a unified diff with per-line coloring."""
@@ -370,7 +401,7 @@ class MessageDisplay(VerticalScroll):
                 self.mount(Static(line, classes="diff-line-removed"))
             else:
                 self.mount(Static(line, classes="diff-line-context"))
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def add_approval_prompt(
         self, *, tool_name: str, hint: str | None, args_preview: str, request_id: str
@@ -384,7 +415,7 @@ class MessageDisplay(VerticalScroll):
 
         box = ApprovalBox(request_id=request_id, label_text=label)
         self.mount(box)
-        self.scroll_end(animate=False)
+        self._auto_scroll()
 
     def clear_transcript(self) -> None:
         """Remove all messages."""
@@ -403,6 +434,11 @@ class MessageDisplay(VerticalScroll):
             else:
                 widget.add_class("hidden")
         for widget in self.query(".tool-result-msg"):
+            if self._show_tool_details:
+                widget.remove_class("hidden")
+            else:
+                widget.add_class("hidden")
+        for widget in self.query(".tool-output-md"):
             if self._show_tool_details:
                 widget.remove_class("hidden")
             else:
