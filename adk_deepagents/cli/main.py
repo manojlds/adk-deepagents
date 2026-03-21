@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import load_dotenv
 
@@ -38,6 +40,15 @@ from adk_deepagents.cli.session_store import (
     get_latest_thread,
     get_thread,
     list_threads,
+)
+from adk_deepagents.optimization import (
+    FeedbackRecord,
+    append_feedback_jsonl,
+    format_optimization_report,
+    import_otel_traces,
+    load_otel_json,
+    run_optimize_loop,
+    save_trajectories_jsonl,
 )
 
 MODEL_ENV_VAR = "ADK_DEEPAGENTS_MODEL"
@@ -106,8 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("list", "reset", "threads"),
-        help="Profile command to run (list, reset, threads).",
+        choices=("list", "reset", "threads", "optimize"),
+        help="Profile command to run (list, reset, threads, optimize).",
     )
     parser.add_argument(
         "command_arg",
@@ -116,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "command_arg2",
+        nargs="?",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "command_arg3",
         nargs="?",
         help=argparse.SUPPRESS,
     )
@@ -196,6 +212,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print installed adk-deepagents version.",
     )
 
+    parser.add_argument(
+        "--trace-id",
+        help="Optimization metadata: trace identifier for feedback linkage.",
+    )
+    parser.add_argument(
+        "--span-id",
+        help="Optimization metadata: span identifier for feedback linkage.",
+    )
+    parser.add_argument(
+        "--feedback-source",
+        choices=("human", "auto", "judge"),
+        default="human",
+        help="Feedback source for optimize feedback-add (default: human).",
+    )
+    parser.add_argument(
+        "--feedback-id",
+        help="Explicit feedback id for optimize feedback-add (auto-generated if omitted).",
+    )
+    parser.add_argument(
+        "--score",
+        type=float,
+        help="Numeric feedback score for optimize feedback-add.",
+    )
+    parser.add_argument(
+        "--label",
+        help="Short feedback label for optimize feedback-add.",
+    )
+    parser.add_argument(
+        "--rationale",
+        help="Free-form feedback rationale for optimize feedback-add.",
+    )
+    parser.add_argument(
+        "--session-id",
+        help="Session id for optimize feedback-add linkage.",
+    )
+
     return parser
 
 
@@ -204,15 +256,15 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.shell_allow_list is not None and args.non_interactive_prompt is None:
         parser.error("--shell-allow-list requires -n/--non-interactive.")
 
-    if args.command in {"list", "reset", "threads"} and (
+    if args.command in {"list", "reset", "threads", "optimize"} and (
         args.non_interactive_prompt is not None or args.message_prompt is not None
     ):
         parser.error(
-            "list/reset/threads commands cannot be combined with "
+            "list/reset/threads/optimize commands cannot be combined with "
             "-n/--non-interactive or -m/--message."
         )
 
-    if args.command in {"list", "reset", "threads"} and (args.quiet or args.no_stream):
+    if args.command in {"list", "reset", "threads", "optimize"} and (args.quiet or args.no_stream):
         parser.error("-q/--quiet and --no-stream are only valid for non-interactive runs.")
 
     if getattr(args, "tui", False) and args.non_interactive_prompt is not None:
@@ -221,11 +273,13 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     if args.message_prompt is not None and (args.quiet or args.no_stream):
         parser.error("-q/--quiet and --no-stream cannot be combined with -m/--message.")
 
-    if args.command in {"list", "reset", "threads"} and args.resume is not None:
-        parser.error("--resume cannot be combined with list/reset/threads commands.")
+    if args.command in {"list", "reset", "threads", "optimize"} and args.resume is not None:
+        parser.error("--resume cannot be combined with list/reset/threads/optimize commands.")
 
-    if args.command != "threads" and (
-        args.command_arg is not None or args.command_arg2 is not None
+    if args.command not in {"threads", "optimize"} and (
+        args.command_arg is not None
+        or args.command_arg2 is not None
+        or args.command_arg3 is not None
     ):
         parser.error("Unexpected extra command arguments.")
 
@@ -241,6 +295,26 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 
         if args.command_arg == "delete" and args.command_arg2 is None:
             parser.error("threads delete requires <thread_id>.")
+
+    if args.command == "optimize":
+        if args.command_arg not in {"ingest-otel", "feedback-add", "run"}:
+            parser.error("optimize requires a subcommand: ingest-otel, feedback-add, or run.")
+
+        if args.command_arg == "ingest-otel" and (
+            args.command_arg2 is None or args.command_arg3 is None
+        ):
+            parser.error("optimize ingest-otel requires <otel_json_path> <output_jsonl_path>.")
+
+        if args.command_arg == "feedback-add":
+            if args.command_arg2 is None:
+                parser.error("optimize feedback-add requires <feedback_jsonl_path>.")
+            if args.score is None and args.label is None and args.rationale is None:
+                parser.error(
+                    "optimize feedback-add requires at least one of --score, --label, or --rationale."
+                )
+
+        if args.command_arg == "run" and (args.command_arg2 is None or args.command_arg3 is None):
+            parser.error("optimize run requires <trajectories_jsonl_path> <feedback_jsonl_path>.")
 
 
 def _initialize_cli_state() -> tuple[CliPaths, CliDefaults] | tuple[None, None]:
@@ -314,6 +388,61 @@ def _handle_threads_command(
     except ValueError as exc:
         print(f"error: failed to manage threads: {exc}", file=sys.stderr)
         return 1
+
+
+def _handle_optimize_command(args: argparse.Namespace) -> int:
+    """Handle optimize subcommands (OTEL ingest, feedback append)."""
+    subcommand = args.command_arg
+    if subcommand == "ingest-otel":
+        assert args.command_arg2 is not None
+        assert args.command_arg3 is not None
+        try:
+            payload = load_otel_json(args.command_arg2)
+            trajectories = import_otel_traces(payload)
+            save_trajectories_jsonl(trajectories, args.command_arg3)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"error: optimize ingest-otel failed: {exc}", file=sys.stderr)
+            return 1
+
+        print(
+            f"Imported {len(trajectories)} trajectories from '{args.command_arg2}' "
+            f"to '{args.command_arg3}'."
+        )
+        return 0
+
+    if subcommand == "run":
+        assert args.command_arg2 is not None
+        assert args.command_arg3 is not None
+        report = run_optimize_loop(
+            trajectories_path=args.command_arg2,
+            feedback_path=args.command_arg3,
+        )
+        print(format_optimization_report(report))
+        return 0
+
+    assert subcommand == "feedback-add"
+    assert args.command_arg2 is not None
+    feedback = FeedbackRecord(
+        feedback_id=args.feedback_id or f"fb_{uuid4().hex}",
+        source=args.feedback_source,
+        score=args.score,
+        label=args.label,
+        rationale=args.rationale,
+        trace_id=args.trace_id,
+        span_id=args.span_id,
+        session_id=args.session_id,
+    )
+    try:
+        append_feedback_jsonl(feedback, args.command_arg2)
+    except OSError as exc:
+        print(f"error: optimize feedback-add failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Appended feedback '{feedback.feedback_id}' to '{args.command_arg2}'"
+        f" (source={feedback.source})."
+    )
+    return 0
 
 
 def _resolve_resume_thread_id(paths: CliPaths, agent_name: str, resume_value: str) -> str:
@@ -395,6 +524,9 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
 
         print(f"Reset profile '{args.agent}'.")
         return 0
+
+    if args.command == "optimize":
+        return _handle_optimize_command(args)
 
     resolved_agent = args.agent or defaults.default_agent or DEFAULT_AGENT_NAME
 

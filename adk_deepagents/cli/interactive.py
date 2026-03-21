@@ -29,6 +29,7 @@ from adk_deepagents.cli.session_store import (
     get_thread,
     list_threads,
 )
+from adk_deepagents.telemetry import ensure_otel_tracing_configured
 from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 INPUT_PROMPT = "> "
@@ -206,6 +207,8 @@ def _build_runner(
     instruction: str | None = None,
     summarization: SummarizationConfig | None = None,
 ) -> Runner:
+    ensure_otel_tracing_configured()
+
     agent = _build_cli_agent(
         agent_name=agent_name,
         model=model,

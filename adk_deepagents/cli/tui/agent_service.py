@@ -9,10 +9,13 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import threading
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +39,16 @@ from adk_deepagents.cli.tui.models import (
     ConversationLog,
     MessageRecord,
 )
+from adk_deepagents.optimization import (
+    FeedbackRecord,
+    append_feedback_jsonl,
+    format_optimization_report,
+    import_otel_traces,
+    load_otel_json,
+    load_trajectories_jsonl,
+    run_optimize_loop,
+    save_trajectories_jsonl,
+)
 from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 log = logging.getLogger("adk_deepagents.tui.service")
@@ -48,6 +61,9 @@ _STREAM_CHUNK_SIZE = 28
 _ACTIVITY_FRAMES: tuple[str, ...] = ("|", "/", "-", "\\")
 _FILE_REF_MAX_SIZE = 100_000  # Skip files larger than 100KB.
 _FILE_REF_PATTERN = re.compile(r"(?<!\w)@([\w./\-~][\w./\-~]*)")
+_DEFAULT_TRAJECTORIES_PATH = Path(".adk-deepagents/optimization/trajectories.jsonl")
+_DEFAULT_FEEDBACK_PATH = Path(".adk-deepagents/optimization/feedback.jsonl")
+_DEFAULT_COLLECTOR_TRACES_PATH = Path(".devenv/state/otel/traces.json")
 
 ActivityPhase = Literal["working", "thinking", "tool", "responding", "approval"]
 
@@ -523,6 +539,10 @@ class AgentService:
     memory_sources: list[str] = field(default_factory=list)
     memory_source_paths: dict[str, Path] = field(default_factory=dict)
     skills_dirs: list[str] = field(default_factory=list)
+    trajectories_path: Path = field(default_factory=lambda: _DEFAULT_TRAJECTORIES_PATH)
+    feedback_path: Path = field(default_factory=lambda: _DEFAULT_FEEDBACK_PATH)
+    collector_traces_path: Path = field(default_factory=lambda: _DEFAULT_COLLECTOR_TRACES_PATH)
+    auto_ingest_collector: bool = True
 
     updates: asyncio.Queue[UiUpdate] = field(default_factory=asyncio.Queue)
 
@@ -553,6 +573,7 @@ class AgentService:
     _shared_queue: _SharedMessageQueue = field(
         default_factory=_SharedMessageQueue, init=False, repr=False
     )
+    _last_collector_mtime_ns: int | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Eagerly set active agent name so the property is usable before initialize().
@@ -601,6 +622,122 @@ class AgentService:
             )
 
         self._model_context = _ModelCommandContext(model=self.model, switch_model=_switch_model)
+
+    def list_trace_summaries(self, limit: int = 100) -> list[tuple[str, str]]:
+        """Return recent trace summaries for panel/list rendering."""
+        self.auto_ingest_from_collector_if_changed()
+        trajectories = [
+            trajectory
+            for trajectory in load_trajectories_jsonl(self.trajectories_path)
+            if trajectory.session_id == self.session_id
+        ]
+        recent = list(reversed(trajectories[-max(1, limit) :]))
+        rows: list[tuple[str, str]] = []
+        for trajectory in recent:
+            tool_calls = sum(1 for event in trajectory.events if event.kind == "tool_call")
+            delegations = sum(1 for event in trajectory.events if event.kind == "delegation")
+            label = (
+                f"{trajectory.trace_id}  "
+                f"agent={trajectory.agent_name or '-'} "
+                f"events={len(trajectory.events)} "
+                f"tools={tool_calls} delegations={delegations}"
+            )
+            rows.append((trajectory.trace_id, label))
+        return rows
+
+    def auto_ingest_from_collector_if_changed(self) -> int:
+        """Auto-ingest collector traces into normalized trajectories when changed."""
+        if not self.auto_ingest_collector:
+            return 0
+        if not self.collector_traces_path.exists():
+            return 0
+
+        try:
+            stat = self.collector_traces_path.stat()
+            current_mtime_ns = stat.st_mtime_ns
+        except OSError:
+            return 0
+
+        try:
+            payload = load_otel_json(self.collector_traces_path)
+            trajectories = import_otel_traces(payload)
+            save_trajectories_jsonl(trajectories, self.trajectories_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            log.warning("Auto-ingest from collector failed: %s", exc)
+            return 0
+
+        if self._last_collector_mtime_ns == current_mtime_ns:
+            return 0
+
+        self._last_collector_mtime_ns = current_mtime_ns
+        return len(trajectories)
+
+    def get_trace_detail_lines(self, trace_id: str, max_events: int = 40) -> list[str]:
+        """Return human-readable lines for one trace."""
+        self.auto_ingest_from_collector_if_changed()
+        trajectories = [
+            trajectory
+            for trajectory in load_trajectories_jsonl(self.trajectories_path)
+            if trajectory.session_id == self.session_id
+        ]
+        trajectory = next((item for item in trajectories if item.trace_id == trace_id), None)
+        if trajectory is None:
+            return [f"Trace not found: {trace_id}"]
+
+        lines = [
+            (
+                f"Trace {trajectory.trace_id}: "
+                f"agent={trajectory.agent_name or '-'} "
+                f"session={trajectory.session_id or '-'} "
+                f"events={len(trajectory.events)}"
+            )
+        ]
+        events = trajectory.events[-max(1, max_events) :]
+        previous_signature: tuple[str, str] | None = None
+        for event in events:
+            op_name = event.attributes.get("gen_ai.operation.name")
+            op_text = op_name if isinstance(op_name, str) else ""
+            detail = event.name or event.tool_name or event.model or op_text or "-"
+            ts = event.timestamp
+            if ts.isdigit() and len(ts) >= 10:
+                try:
+                    dt = datetime.fromtimestamp(int(ts) / 1_000_000_000, tz=UTC)
+                    ts = dt.strftime("%H:%M:%S")
+                except (ValueError, OverflowError):
+                    pass
+
+            if event.kind == "agent_turn":
+                display = f"{ts} agent  {event.agent_name or detail}"
+            elif event.kind == "model_call":
+                display = f"{ts} model request  {event.model or detail}"
+            elif event.kind == "model_response":
+                display = f"{ts} model response {event.model or detail}"
+            elif event.kind == "tool_result":
+                display = f"{ts} tool   {event.tool_name or detail}"
+            elif event.kind == "tool_call":
+                display = f"{ts} tool call {event.tool_name or detail}"
+            else:
+                display = f"{ts} span   {detail}"
+
+            signature = (event.kind, detail)
+            if previous_signature == signature:
+                continue
+            previous_signature = signature
+            lines.append(display)
+        return lines
+
+    def annotate_trace(self, trace_id: str, score: float, notes: str | None = None) -> str:
+        """Append a feedback record for a trace and return confirmation text."""
+        feedback = FeedbackRecord(
+            feedback_id=f"fb_trace_{trace_id}_{int(time.time() * 1000)}",
+            source="human",
+            score=score,
+            rationale=notes,
+            trace_id=trace_id,
+            session_id=self.session_id,
+        )
+        append_feedback_jsonl(feedback, self.feedback_path)
+        return f"Annotated trace {trace_id} with score={score:.3f} -> {self.feedback_path}"
 
     async def queue_message(self, text: str) -> None:
         """Buffer a message for injection into the next LLM call.
@@ -887,6 +1024,18 @@ class AgentService:
         assert self._thread_context is not None
         assert self._model_context is not None
 
+        if command.lower().startswith("/feedback"):
+            await self._handle_feedback_command(command)
+            return
+
+        if command.lower().startswith("/optimize"):
+            await self._handle_optimize_command(command)
+            return
+
+        if command.lower().startswith("/traces") or command.lower().startswith("/trace"):
+            await self._handle_trace_command(command)
+            return
+
         prev_session = self._thread_context.active_session_id
         prev_model = self._model_context.model
 
@@ -943,6 +1092,201 @@ class AgentService:
             self._log_record(MessageRecord(role="user", text=compact_prompt))
             self._busy = True
             self._turn_task = asyncio.create_task(self._run_turn(compact_prompt))
+
+    async def _handle_feedback_command(self, command: str) -> None:
+        """Record feedback from the TUI.
+
+        Usage:
+            /feedback <score> [rationale...]
+        """
+        parts = shlex.split(command)
+        if len(parts) < 2:
+            await self.updates.put(
+                UiUpdate(kind="error", text="Usage: /feedback <score> [rationale...]")
+            )
+            return
+
+        raw_score = parts[1]
+        try:
+            score = float(raw_score)
+        except ValueError:
+            await self.updates.put(UiUpdate(kind="error", text="/feedback score must be numeric."))
+            return
+
+        rationale = " ".join(parts[2:]).strip() if len(parts) > 2 else None
+        feedback = FeedbackRecord(
+            feedback_id=f"fb_tui_{self.session_id}_{int(time.time() * 1000)}",
+            source="human",
+            score=score,
+            rationale=rationale,
+            session_id=self.session_id,
+        )
+        append_feedback_jsonl(feedback, self.feedback_path)
+        await self.updates.put(
+            UiUpdate(
+                kind="system",
+                text=(
+                    f"Feedback recorded (score={score:.3f}) -> {self.feedback_path}"
+                    if rationale is None
+                    else f"Feedback recorded (score={score:.3f})"
+                ),
+            )
+        )
+
+    async def _handle_optimize_command(self, command: str) -> None:
+        """Run optimize subcommands from the TUI.
+
+        Supported:
+            /optimize ingest <otel_json_path> [trajectories_jsonl_path]
+            /optimize run [trajectories_jsonl_path] [feedback_jsonl_path]
+        """
+        parts = shlex.split(command)
+        if len(parts) < 2:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=(
+                        "Usage: /optimize ingest <otel_json> [out_jsonl] "
+                        "or /optimize run [traj_jsonl] [feedback_jsonl]"
+                    ),
+                )
+            )
+            return
+
+        subcommand = parts[1].lower()
+        if subcommand == "ingest":
+            if len(parts) < 3:
+                await self.updates.put(
+                    UiUpdate(
+                        kind="error",
+                        text="Usage: /optimize ingest <otel_json> [out_jsonl]",
+                    )
+                )
+                return
+
+            otel_path = Path(parts[2])
+            output_path = Path(parts[3]) if len(parts) >= 4 else self.trajectories_path
+            try:
+                payload = load_otel_json(otel_path)
+                trajectories = import_otel_traces(payload)
+                save_trajectories_jsonl(trajectories, output_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                await self.updates.put(
+                    UiUpdate(kind="error", text=f"Optimize ingest failed: {exc}")
+                )
+                return
+
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=f"Imported {len(trajectories)} trajectories -> {output_path}",
+                )
+            )
+            return
+
+        if subcommand == "run":
+            traj_path = Path(parts[2]) if len(parts) >= 3 else self.trajectories_path
+            feedback_path = Path(parts[3]) if len(parts) >= 4 else self.feedback_path
+            report = run_optimize_loop(
+                trajectories_path=str(traj_path),
+                feedback_path=str(feedback_path),
+            )
+            await self.updates.put(UiUpdate(kind="system", text=format_optimization_report(report)))
+            return
+
+        await self.updates.put(
+            UiUpdate(kind="error", text="Unknown /optimize subcommand. Use ingest or run.")
+        )
+
+    async def _handle_trace_command(self, command: str) -> None:
+        """Browse and annotate imported trajectories from the TUI.
+
+        Supported:
+            /traces [limit]
+            /trace <trace_id>
+            /trace annotate <trace_id> <score> [notes...]
+        """
+        parts = shlex.split(command)
+        if not parts:
+            return
+
+        if parts[0] == "/traces":
+            limit = 10
+            if len(parts) >= 2:
+                try:
+                    limit = max(1, int(parts[1]))
+                except ValueError:
+                    await self.updates.put(
+                        UiUpdate(kind="error", text="/traces limit must be an integer.")
+                    )
+                    return
+
+            summaries = self.list_trace_summaries(limit=limit)
+            if not summaries:
+                await self.updates.put(
+                    UiUpdate(
+                        kind="system",
+                        text=f"No trajectories found at {self.trajectories_path}.",
+                    )
+                )
+                return
+
+            await self.updates.put(
+                UiUpdate(kind="system", text=f"Recent traces (showing {len(summaries)}):")
+            )
+            for _trace_id, label in summaries:
+                await self.updates.put(UiUpdate(kind="system", text=f"- {label}"))
+            return
+
+        if parts[0] != "/trace":
+            await self.updates.put(UiUpdate(kind="error", text="Unknown trace command."))
+            return
+
+        if len(parts) < 2:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=(
+                        "Usage: /trace <trace_id> or /trace annotate <trace_id> <score> [notes...]"
+                    ),
+                )
+            )
+            return
+
+        if parts[1] == "annotate":
+            if len(parts) < 4:
+                await self.updates.put(
+                    UiUpdate(
+                        kind="error",
+                        text="Usage: /trace annotate <trace_id> <score> [notes...]",
+                    )
+                )
+                return
+
+            trace_id = parts[2]
+            try:
+                score = float(parts[3])
+            except ValueError:
+                await self.updates.put(
+                    UiUpdate(kind="error", text="/trace annotate score must be numeric.")
+                )
+                return
+
+            notes = " ".join(parts[4:]).strip() if len(parts) > 4 else None
+            message = self.annotate_trace(trace_id, score, notes)
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=message,
+                )
+            )
+            return
+
+        trace_id = parts[1]
+        lines = self.get_trace_detail_lines(trace_id, max_events=20)
+        for index, line in enumerate(lines):
+            kind = "error" if index == 0 and line.startswith("Trace not found:") else "system"
+            await self.updates.put(UiUpdate(kind=kind, text=line))
 
     async def _run_turn(self, prompt: str) -> None:
         assert self._thread_context is not None

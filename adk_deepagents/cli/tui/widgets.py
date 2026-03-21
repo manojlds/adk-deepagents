@@ -522,6 +522,14 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/theme", "Switch TUI color theme"),
     ("/editor", "Open external editor to compose a message"),
     ("/compact", "Compact/summarize the session context"),
+    ("/feedback <score> [notes]", "Record optimization feedback"),
+    ("/optimize ingest <otel_json> [out]", "Import OTEL traces into trajectories"),
+    ("/optimize run [traj] [feedback]", "Run optimize loop report"),
+    ("/traces [limit]", "List imported trajectories"),
+    ("/trace <trace_id>", "Show recent events for a trace"),
+    ("/trace annotate <trace_id> <score> [notes]", "Annotate a trace with feedback"),
+    ("/view traces", "Switch to traces view"),
+    ("/view chat", "Switch to chat view"),
     ("/quit", "Exit the TUI"),
 ]
 
@@ -657,15 +665,15 @@ class PromptInput(Static):
     DEFAULT_CSS = """
     PromptInput {
         height: auto;
-        min-height: 3;
-        max-height: 12;
+        min-height: 2;
+        max-height: 8;
         padding: 0 1;
     }
 
     PromptInput SubmittableTextArea {
         width: 1fr;
-        min-height: 3;
-        max-height: 10;
+        min-height: 2;
+        max-height: 6;
         border: tall $accent;
     }
 
@@ -1096,6 +1104,30 @@ DEFAULT_PALETTE_ITEMS: list[CommandPaletteItem] = [
         keybind="",
     ),
     CommandPaletteItem(
+        action="optimize_run",
+        label="Optimize",
+        description="Run optimization report",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="trace_list",
+        label="Traces",
+        description="List imported trajectories",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="view_chat",
+        label="View Chat",
+        description="Switch to chat tab",
+        keybind="",
+    ),
+    CommandPaletteItem(
+        action="view_traces",
+        label="View Traces",
+        description="Switch to traces tab",
+        keybind="",
+    ),
+    CommandPaletteItem(
         action="editor_open",
         label="Editor",
         description="Open external editor to compose a message",
@@ -1129,7 +1161,7 @@ class CommandPalette(Vertical):
         width: 60;
         max-width: 80%;
         height: auto;
-        max-height: 20;
+        max-height: 26;
         background: $surface;
         border: solid $accent;
         padding: 0 1;
@@ -1149,7 +1181,7 @@ class CommandPalette(Vertical):
 
     CommandPalette OptionList {
         width: 1fr;
-        max-height: 14;
+        max-height: 20;
     }
     """
 
@@ -1230,6 +1262,212 @@ class CommandPalette(Vertical):
                 option_list.add_option(Option(text, id=item.action))
         if option_list.option_count > 0:
             option_list.highlighted = 0
+
+
+# ---------------------------------------------------------------------------
+# Trace Panel – browse and annotate imported trajectories
+# ---------------------------------------------------------------------------
+
+
+class TracePanel(Vertical):
+    """Toggleable panel for browsing imported traces and adding annotations."""
+
+    DEFAULT_CSS = """
+    TracePanel {
+        width: 48;
+        min-width: 24;
+        max-width: 72;
+        height: 1fr;
+        display: none;
+        border-left: solid $border;
+        background: $surface;
+        padding: 1;
+    }
+
+    TracePanel.visible {
+        display: block;
+    }
+
+    TracePanel.tab-active {
+        display: block;
+        width: 1fr;
+        min-width: 1fr;
+        max-width: 1fr;
+    }
+
+    TracePanel .trace-header {
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+
+    TracePanel #trace-list {
+        height: 8;
+        margin-bottom: 1;
+    }
+
+    TracePanel #trace-detail {
+        height: 1fr;
+        border: round $border;
+        padding: 1;
+        margin-bottom: 1;
+    }
+
+    TracePanel .trace-controls {
+        layout: horizontal;
+        height: auto;
+        margin-top: 1;
+    }
+
+    TracePanel #trace-score {
+        width: 10;
+    }
+
+    TracePanel #trace-notes {
+        width: 1fr;
+        margin-left: 1;
+    }
+
+    TracePanel #trace-annotate {
+        width: 12;
+        margin-left: 1;
+    }
+    """
+
+    class TraceSelected(Message):
+        def __init__(self, trace_id: str) -> None:
+            super().__init__()
+            self.trace_id = trace_id
+
+    class AnnotateRequested(Message):
+        def __init__(self, trace_id: str, score: float, notes: str | None) -> None:
+            super().__init__()
+            self.trace_id = trace_id
+            self.score = score
+            self.notes = notes
+
+    class RefreshRequested(Message):
+        def __init__(self) -> None:
+            super().__init__()
+
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
+        self._selected_trace_id: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("Trace Browser", classes="trace-header")
+        yield OptionList(id="trace-list")
+        yield Static("Select a trace to view details.", id="trace-detail")
+        with Horizontal(classes="trace-controls"):
+            yield Input(placeholder="score", id="trace-score")
+            yield Input(placeholder="notes", id="trace-notes")
+            yield Button("Annotate", id="trace-annotate", variant="primary")
+            yield Button("Refresh", id="trace-refresh")
+
+    def toggle(self) -> bool:
+        if self.has_class("visible"):
+            self.remove_class("visible")
+            return False
+        self.add_class("visible")
+        return True
+
+    def set_trace_rows(self, rows: list[tuple[str, str]]) -> None:
+        selected = self._selected_trace_id
+        option_list = self.query_one("#trace-list", OptionList)
+        option_list.clear_options()
+        selected_index: int | None = None
+        for trace_id, label in rows:
+            option_list.add_option(Option(label, id=trace_id))
+            if selected is not None and selected == trace_id:
+                selected_index = option_list.option_count - 1
+        if option_list.option_count > 0:
+            option_list.highlighted = selected_index if selected_index is not None else 0
+
+    def set_detail_lines(self, lines: list[str]) -> None:
+        self.query_one("#trace-detail", Static).update(
+            "\n".join(lines) if lines else "No detail available."
+        )
+
+    def selected_trace_id(self) -> str | None:
+        return self._selected_trace_id
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            self._selected_trace_id = event.option_id
+            self.post_message(self.TraceSelected(event.option_id))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "trace-refresh":
+            self.post_message(self.RefreshRequested())
+            return
+        if event.button.id != "trace-annotate":
+            return
+        self._emit_annotation_if_valid()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id in {"trace-score", "trace-notes"}:
+            self._emit_annotation_if_valid()
+
+    def on_key(self, event: events.Key) -> None:
+        if not self.has_class("visible"):
+            return
+
+        if event.key in {"j", "down"}:
+            option_list = self.query_one("#trace-list", OptionList)
+            idx = option_list.highlighted or 0
+            if option_list.option_count > 0:
+                option_list.highlighted = min(option_list.option_count - 1, idx + 1)
+            event.stop()
+            return
+
+        if event.key in {"k", "up"}:
+            option_list = self.query_one("#trace-list", OptionList)
+            idx = option_list.highlighted or 0
+            if option_list.option_count > 0:
+                option_list.highlighted = max(0, idx - 1)
+            event.stop()
+            return
+
+        if event.key == "enter":
+            option_list = self.query_one("#trace-list", OptionList)
+            idx = option_list.highlighted
+            if idx is not None and 0 <= idx < option_list.option_count:
+                option = option_list.get_option_at_index(idx)
+                if option.id:
+                    self._selected_trace_id = option.id
+                    self.post_message(self.TraceSelected(option.id))
+                    event.stop()
+            return
+
+        if event.key == "a":
+            self.query_one("#trace-score", Input).focus()
+            event.stop()
+            return
+
+        if event.key == "r":
+            self.post_message(self.RefreshRequested())
+            event.stop()
+
+    def _emit_annotation_if_valid(self) -> None:
+        if self._selected_trace_id is None:
+            return
+        score_text = self.query_one("#trace-score", Input).value.strip()
+        notes_text = self.query_one("#trace-notes", Input).value.strip()
+        try:
+            score = float(score_text)
+        except ValueError:
+            return
+        self.post_message(
+            self.AnnotateRequested(self._selected_trace_id, score, notes_text or None)
+        )
 
 
 # ---------------------------------------------------------------------------

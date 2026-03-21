@@ -2,6 +2,7 @@
 
 {
   packages = [
+    pkgs.opentelemetry-collector-contrib
     pkgs.temporal-cli
     pkgs.uv
   ];
@@ -10,6 +11,9 @@
     ADK_DEEPAGENTS_TEMPORAL_TARGET_HOST = "127.0.0.1:7233";
     ADK_DEEPAGENTS_TEMPORAL_NAMESPACE = "default";
     ADK_DEEPAGENTS_TEMPORAL_TASK_QUEUE = "adk-deepagents-tasks";
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318";
+    OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
+    OTEL_SERVICE_NAME = "adk-deepagents";
   };
 
   processes.temporal-server.exec = ''
@@ -21,9 +25,47 @@
       --db-filename .devenv/state/temporal/temporal.db
   '';
 
+  processes.otel-collector.exec = ''
+    mkdir -p .devenv/state/otel
+    cat > .devenv/state/otel/collector-config.yaml <<'EOF'
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch: {}
+
+    exporters:
+      debug:
+        verbosity: basic
+      file:
+        path: .devenv/state/otel/traces.json
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [debug, file]
+    EOF
+
+    ${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib \
+      --config .devenv/state/otel/collector-config.yaml
+  '';
+
   scripts.temporal-reset.exec = ''
     rm -rf .devenv/state/temporal
     mkdir -p .devenv/state/temporal
     echo "Temporal state reset: .devenv/state/temporal"
+  '';
+
+  scripts.otel-reset.exec = ''
+    rm -rf .devenv/state/otel
+    mkdir -p .devenv/state/otel
+    echo "OTEL state reset: .devenv/state/otel"
   '';
 }

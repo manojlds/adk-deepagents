@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -97,6 +98,53 @@ def test_build_parser_parses_threads_subcommands() -> None:
     assert args.agent == "demo"
 
 
+def test_build_parser_parses_optimize_ingest_subcommand() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["optimize", "ingest-otel", "trace.json", "trajectories.jsonl"])
+
+    assert args.command == "optimize"
+    assert args.command_arg == "ingest-otel"
+    assert args.command_arg2 == "trace.json"
+    assert args.command_arg3 == "trajectories.jsonl"
+
+
+def test_build_parser_parses_optimize_feedback_add_subcommand() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(
+        [
+            "optimize",
+            "feedback-add",
+            "feedback.jsonl",
+            "--trace-id",
+            "trace-1",
+            "--score",
+            "0.9",
+            "--label",
+            "good",
+        ]
+    )
+
+    assert args.command == "optimize"
+    assert args.command_arg == "feedback-add"
+    assert args.command_arg2 == "feedback.jsonl"
+    assert args.trace_id == "trace-1"
+    assert args.score == 0.9
+    assert args.label == "good"
+
+
+def test_build_parser_parses_optimize_run_subcommand() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["optimize", "run", "trajectories.jsonl", "feedback.jsonl"])
+
+    assert args.command == "optimize"
+    assert args.command_arg == "run"
+    assert args.command_arg2 == "trajectories.jsonl"
+    assert args.command_arg3 == "feedback.jsonl"
+
+
 def test_cli_main_help_returns_exit_code_zero(capsys) -> None:
     exit_code = cli_main(["--help"])
     captured = capsys.readouterr()
@@ -136,6 +184,22 @@ def test_cli_main_validation_errors_return_exit_code_two(capsys) -> None:
     assert "--shell-allow-list requires -n/--non-interactive" in captured.err
 
 
+def test_cli_main_optimize_feedback_add_requires_signal(capsys) -> None:
+    exit_code = cli_main(["optimize", "feedback-add", "feedback.jsonl"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "requires at least one of --score, --label, or --rationale" in captured.err
+
+
+def test_cli_main_optimize_run_requires_paths(capsys) -> None:
+    exit_code = cli_main(["optimize", "run", "only-trajectories.jsonl"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "optimize run requires <trajectories_jsonl_path> <feedback_jsonl_path>" in captured.err
+
+
 def test_cli_main_reset_requires_agent(capsys) -> None:
     exit_code = cli_main(["reset"])
     captured = capsys.readouterr()
@@ -165,7 +229,7 @@ def test_cli_main_rejects_resume_with_threads_command(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 2
-    assert "--resume cannot be combined with list/reset/threads commands" in captured.err
+    assert "--resume cannot be combined with list/reset/threads/optimize commands" in captured.err
 
 
 def test_cli_main_rejects_empty_model_flag(capsys) -> None:
@@ -781,6 +845,122 @@ def test_cli_main_quiet_requires_non_interactive_prompt_or_piped_stdin(
 
     assert exit_code == 2
     assert "require -n/--non-interactive or piped stdin" in captured.err
+
+
+def test_cli_main_optimize_ingest_otel_writes_trajectories_jsonl(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    otel_path = tmp_path / "otel.json"
+    output_path = tmp_path / "trajectories.jsonl"
+    otel_payload = {
+        "resourceSpans": [
+            {
+                "scopeSpans": [
+                    {
+                        "spans": [
+                            {
+                                "traceId": "abc123",
+                                "spanId": "span1",
+                                "name": "tool call",
+                                "startTimeUnixNano": "1",
+                                "attributes": [
+                                    {
+                                        "key": "adk.tool.name",
+                                        "value": {"stringValue": "read_file"},
+                                    },
+                                    {
+                                        "key": "adk.session.id",
+                                        "value": {"stringValue": "s1"},
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    otel_path.write_text(json.dumps(otel_payload), encoding="utf-8")
+
+    exit_code = cli_main(["optimize", "ingest-otel", str(otel_path), str(output_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Imported 1 trajectories" in captured.out
+    lines = output_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["trace_id"] == "abc123"
+    assert row["session_id"] == "s1"
+    assert len(row["events"]) == 1
+
+
+def test_cli_main_optimize_feedback_add_appends_record(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    feedback_path = tmp_path / "feedback.jsonl"
+
+    exit_code = cli_main(
+        [
+            "optimize",
+            "feedback-add",
+            str(feedback_path),
+            "--feedback-id",
+            "fb-1",
+            "--feedback-source",
+            "judge",
+            "--trace-id",
+            "abc123",
+            "--score",
+            "0.75",
+            "--label",
+            "helpful",
+            "--rationale",
+            "Good tool use",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Appended feedback 'fb-1'" in captured.out
+
+    lines = feedback_path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["feedback_id"] == "fb-1"
+    assert payload["source"] == "judge"
+    assert payload["trace_id"] == "abc123"
+    assert payload["score"] == 0.75
+
+
+def test_cli_main_optimize_run_prints_report(tmp_path, monkeypatch, capsys) -> None:
+    home_dir = tmp_path / ".adk-deepagents"
+    monkeypatch.setenv("ADK_DEEPAGENTS_HOME", str(home_dir))
+
+    trajectories_path = tmp_path / "trajectories.jsonl"
+    feedback_path = tmp_path / "feedback.jsonl"
+    trajectories_path.write_text(
+        '{"trace_id":"t1","events":[]}\n',
+        encoding="utf-8",
+    )
+    feedback_path.write_text(
+        '{"feedback_id":"fb1","source":"human","score":0.5,"trace_id":"t1"}\n',
+        encoding="utf-8",
+    )
+
+    exit_code = cli_main(["optimize", "run", str(trajectories_path), str(feedback_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Optimization loop report" in captured.out
+    assert "trajectories: 1" in captured.out
+    assert "feedback records: 1" in captured.out
 
 
 def test_python_module_entrypoint_help_works() -> None:

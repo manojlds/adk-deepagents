@@ -6,6 +6,7 @@ from adk_deepagents.graph import create_deep_agent, create_deep_agent_async
 from adk_deepagents.types import (
     BrowserConfig,
     DynamicTaskConfig,
+    OptimizationConfig,
     SkillsConfig,
     SubAgentSpec,
     SummarizationConfig,
@@ -18,6 +19,7 @@ __all__ = [
     "create_deep_agent_async",
     "BrowserConfig",
     "DynamicTaskConfig",
+    "OptimizationConfig",
     "SkillsConfig",
     "SubAgentSpec",
     "SummarizationConfig",

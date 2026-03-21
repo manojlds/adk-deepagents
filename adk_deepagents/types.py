@@ -173,3 +173,17 @@ class SkillsConfig:
 
     # Placeholder — populated when adk-skills integration is wired up.
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class OptimizationConfig:
+    """Configuration for OTEL-driven trajectory optimization workflows."""
+
+    enabled: bool = False
+    """Enable optimization data operations (ingest/feedback commands)."""
+
+    trajectories_path: str = ".adk-deepagents/optimization/trajectories.jsonl"
+    """Default local path for normalized trajectory exports."""
+
+    feedback_path: str = ".adk-deepagents/optimization/feedback.jsonl"
+    """Default local path for trajectory-linked feedback records."""

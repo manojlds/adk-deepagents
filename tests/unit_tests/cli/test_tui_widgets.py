@@ -28,6 +28,7 @@ from adk_deepagents.cli.tui.widgets import (
     Sidebar,
     SubmittableTextArea,
     ThemePicker,
+    TracePanel,
     _extract_at_query,
     _scan_project_files,
     invalidate_file_cache,
@@ -668,3 +669,45 @@ class TestPhase5PaletteItems:
     def test_compact_action_present(self):
         actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
         assert "session_compact" in actions
+
+
+class TestOptimizationCommandsAndPalette:
+    def test_feedback_command_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/feedback" in cmd_names
+
+    def test_optimize_command_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/optimize" in cmd_names
+
+    def test_optimize_palette_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "optimize_run" in actions
+
+    def test_traces_commands_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/traces" in cmd_names
+        assert "/trace" in cmd_names
+
+    def test_trace_palette_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "trace_list" in actions
+
+    def test_view_tab_actions_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "view_chat" in actions
+        assert "view_traces" in actions
+
+
+class TestTracePanelWidget:
+    def test_trace_panel_has_toggle_method(self):
+        assert hasattr(TracePanel, "toggle")
+
+    def test_trace_panel_css_contains_trace_list(self):
+        assert "#trace-list" in TracePanel.DEFAULT_CSS
+
+    def test_trace_panel_css_contains_trace_detail(self):
+        assert "#trace-detail" in TracePanel.DEFAULT_CSS
+
+    def test_trace_panel_has_refresh_message(self):
+        assert hasattr(TracePanel, "RefreshRequested")

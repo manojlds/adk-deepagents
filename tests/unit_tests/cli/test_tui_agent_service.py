@@ -1301,6 +1301,157 @@ class TestExportConversation:
 
 
 # ---------------------------------------------------------------------------
+# Optimization slash command tests
+# ---------------------------------------------------------------------------
+
+
+class TestOptimizationSlashCommands:
+    def test_feedback_command_records_jsonl(self, tmp_path: Path) -> None:
+        service = _service()
+        service.feedback_path = tmp_path / "feedback.jsonl"
+
+        asyncio.run(service._handle_feedback_command("/feedback 0.8 useful"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+        assert any(u.kind == "system" and "Feedback recorded" in (u.text or "") for u in updates)
+        assert service.feedback_path.exists()
+
+    def test_feedback_command_rejects_non_numeric_score(self) -> None:
+        service = _service()
+
+        asyncio.run(service._handle_feedback_command("/feedback not-a-number"))
+
+        update = service.updates.get_nowait()
+        assert update.kind == "error"
+        assert "numeric" in (update.text or "")
+
+    def test_optimize_ingest_command_imports_otel(self, tmp_path: Path) -> None:
+        service = _service()
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+
+        otel_path = tmp_path / "otel.json"
+        otel_path.write_text(
+            '{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"t1","spanId":"s1","name":"tool call","startTimeUnixNano":"1","attributes":[]}]}]}]}',
+            encoding="utf-8",
+        )
+
+        asyncio.run(service._handle_optimize_command(f"/optimize ingest {otel_path}"))
+
+        update = service.updates.get_nowait()
+        assert update.kind == "system"
+        assert "Imported 1 trajectories" in (update.text or "")
+        assert service.trajectories_path.exists()
+
+    def test_optimize_run_command_reports_summary(self, tmp_path: Path) -> None:
+        service = _service()
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+        service.feedback_path = tmp_path / "feedback.jsonl"
+        service.trajectories_path.write_text(
+            '{"trace_id":"t1","session_id":"s1","events":[]}\n',
+            encoding="utf-8",
+        )
+        service.feedback_path.write_text(
+            '{"feedback_id":"fb1","source":"human","score":1.0,"trace_id":"t1"}\n',
+            encoding="utf-8",
+        )
+
+        asyncio.run(service._handle_optimize_command("/optimize run"))
+
+        update = service.updates.get_nowait()
+        assert update.kind == "system"
+        assert "Optimization loop report" in (update.text or "")
+
+    def test_traces_command_lists_recent(self, tmp_path: Path) -> None:
+        service = _service()
+        service.auto_ingest_collector = False
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+        service.trajectories_path.write_text(
+            '{"trace_id":"t1","agent_name":"agent-a","session_id":"s1","events":[{"kind":"tool_call","timestamp":"1","span_id":"sp1"}]}\n'
+            '{"trace_id":"t2","agent_name":"agent-b","session_id":"s2","events":[]}\n',
+            encoding="utf-8",
+        )
+
+        asyncio.run(service._handle_trace_command("/traces"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+        texts = "\n".join(u.text or "" for u in updates)
+        assert "Recent traces" in texts
+        assert "t1" in texts
+        assert "t2" not in texts
+
+    def test_trace_command_shows_events(self, tmp_path: Path) -> None:
+        service = _service()
+        service.auto_ingest_collector = False
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+        service.trajectories_path.write_text(
+            '{"trace_id":"t1","session_id":"s1","events":[{"kind":"model_call","timestamp":"1","span_id":"sp1","name":"model call"}]}\n',
+            encoding="utf-8",
+        )
+
+        asyncio.run(service._handle_trace_command("/trace t1"))
+
+        updates: list[UiUpdate] = []
+        while not service.updates.empty():
+            updates.append(service.updates.get_nowait())
+        texts = "\n".join(u.text or "" for u in updates)
+        assert "Trace t1" in texts
+        assert "model request" in texts
+
+    def test_trace_annotate_appends_feedback(self, tmp_path: Path) -> None:
+        service = _service()
+        service.feedback_path = tmp_path / "feedback.jsonl"
+
+        asyncio.run(service._handle_trace_command("/trace annotate t1 0.6 useful"))
+
+        assert service.feedback_path.exists()
+        update = service.updates.get_nowait()
+        assert update.kind == "system"
+        assert "Annotated trace t1" in (update.text or "")
+
+    def test_list_trace_summaries_returns_rows(self, tmp_path: Path) -> None:
+        service = _service()
+        service.auto_ingest_collector = False
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+        service.trajectories_path.write_text(
+            '{"trace_id":"t1","session_id":"s1","events":[]}\n',
+            encoding="utf-8",
+        )
+
+        rows = service.list_trace_summaries(limit=10)
+        assert len(rows) == 1
+        assert rows[0][0] == "t1"
+
+    def test_get_trace_detail_lines_not_found(self, tmp_path: Path) -> None:
+        service = _service()
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+        service.trajectories_path.write_text("", encoding="utf-8")
+
+        lines = service.get_trace_detail_lines("missing")
+        assert lines[0] == "Trace not found: missing"
+
+    def test_auto_ingest_from_collector_if_changed(self, tmp_path: Path) -> None:
+        service = _service()
+        service.collector_traces_path = tmp_path / "traces.json"
+        service.trajectories_path = tmp_path / "trajectories.jsonl"
+        service.collector_traces_path.write_text(
+            '{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"t1","spanId":"s1","name":"tool call","startTimeUnixNano":"1","attributes":[]}]}]}]}',
+            encoding="utf-8",
+        )
+
+        count = service.auto_ingest_from_collector_if_changed()
+        assert count == 1
+        assert service.trajectories_path.exists()
+
+        # No changes -> no re-ingest.
+        count2 = service.auto_ingest_from_collector_if_changed()
+        assert count2 == 0
+
+
+# ---------------------------------------------------------------------------
 # Phase 5: _guess_language_from_path tests
 # ---------------------------------------------------------------------------
 

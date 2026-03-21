@@ -12,7 +12,7 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer, Header
+from textual.widgets import Button, Footer, Header
 
 from adk_deepagents.cli.tui.agent_service import AgentService, UiUpdate
 from adk_deepagents.cli.tui.keybindings import KeybindConfig, load_keybind_config
@@ -32,6 +32,7 @@ from adk_deepagents.cli.tui.widgets import (
     PromptInput,
     Sidebar,
     ThemePicker,
+    TracePanel,
 )
 from adk_deepagents.types import DynamicTaskConfig
 
@@ -83,6 +84,10 @@ def _build_bindings(kb: KeybindConfig) -> list[Binding]:
         "editor_open": ("Editor", False),
         "sidebar_toggle": ("Sidebar", False),
         "session_export": ("Export", False),
+        "optimize_run": ("Optimize", False),
+        "trace_list": ("Traces", False),
+        "view_chat": ("View Chat", False),
+        "view_traces": ("View Traces", False),
         "messages_half_page_up": ("Half Page Up", False),
         "messages_half_page_down": ("Half Page Down", False),
         "messages_page_up": ("Page Up", False),
@@ -138,14 +143,42 @@ class DeepAgentTui(App[None]):
         layout: horizontal;
     }
 
+    #top-tabs {
+        height: auto;
+        padding: 0;
+        border-bottom: solid $border;
+        background: $panel;
+    }
+
+    #tab-chat,
+    #tab-traces {
+        width: auto;
+        margin-right: 0;
+        height: auto;
+        min-height: 1;
+        padding: 0 1;
+    }
+
     #messages {
         height: 1fr;
         width: 1fr;
     }
 
+    #messages.tab-hidden {
+        display: none;
+    }
+
+    #sidebar.tab-hidden {
+        display: none;
+    }
+
     #composer {
         height: auto;
-        min-height: 3;
+        min-height: 2;
+    }
+
+    #composer.tab-hidden {
+        display: none;
     }
 
     #command-palette {
@@ -185,6 +218,7 @@ class DeepAgentTui(App[None]):
 
         super().__init__()
         self._config = config
+        self._active_view: str = "chat"
         self._service = AgentService(
             agent_name=config.agent_name,
             user_id=config.user_id,
@@ -208,9 +242,13 @@ class DeepAgentTui(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        with Horizontal(id="top-tabs"):
+            yield Button("Chat", id="tab-chat", variant="primary")
+            yield Button("Traces", id="tab-traces")
         with Horizontal(id="main-area"):
             yield Sidebar(id="sidebar")
             yield MessageDisplay(id="messages")
+            yield TracePanel(id="trace-panel")
         yield PromptInput(id="composer")
         yield CommandPalette(items=self._palette_items, id="command-palette")
         yield ThemePicker(id="theme-picker")
@@ -232,6 +270,12 @@ class DeepAgentTui(App[None]):
 
         # Wire agent names to the prompt input for @agent autocomplete.
         self._sync_agent_names()
+
+        # Ensure tab buttons and pane visibility are synchronized.
+        self._set_active_view("chat")
+
+        # Keep trace panel fresh while visible.
+        self.set_interval(2.0, self._refresh_trace_panel)
 
         if self._config.first_prompt:
             await self._service.handle_input(self._config.first_prompt)
@@ -371,6 +415,14 @@ class DeepAgentTui(App[None]):
             self._do_toggle_sidebar()
         elif action == "session_export":
             self.run_worker(self._do_export())
+        elif action == "optimize_run":
+            self.run_worker(self._service.handle_input("/optimize run"))
+        elif action == "trace_list":
+            self._set_active_view("traces")
+        elif action == "view_chat":
+            self._set_active_view("chat")
+        elif action == "view_traces":
+            self._set_active_view("traces")
         elif action == "messages_half_page_up":
             md = self.query_one(MessageDisplay)
             half = max(1, md.size.height // 2)
@@ -441,6 +493,53 @@ class DeepAgentTui(App[None]):
         visible = sidebar.toggle()
         if visible:
             self._update_sidebar_info()
+
+    def _set_active_view(self, view: str) -> None:
+        """Switch between chat and traces views (tab-like behavior)."""
+        panel = self.query_one(TracePanel)
+        messages = self.query_one(MessageDisplay)
+        sidebar = self.query_one(Sidebar)
+        composer = self.query_one(PromptInput)
+        chat_btn = self.query_one("#tab-chat", Button)
+        traces_btn = self.query_one("#tab-traces", Button)
+
+        if view == "traces":
+            self._active_view = "traces"
+            chat_btn.variant = "default"
+            traces_btn.variant = "primary"
+            messages.add_class("tab-hidden")
+            sidebar.add_class("tab-hidden")
+            composer.add_class("tab-hidden")
+            panel.add_class("visible")
+            panel.add_class("tab-active")
+            self._refresh_trace_panel()
+            panel.set_detail_lines(["Select a trace to view details."])
+            return
+
+        self._active_view = "chat"
+        chat_btn.variant = "primary"
+        traces_btn.variant = "default"
+        messages.remove_class("tab-hidden")
+        sidebar.remove_class("tab-hidden")
+        composer.remove_class("tab-hidden")
+        panel.remove_class("visible")
+        panel.remove_class("tab-active")
+
+    def _refresh_trace_panel(self) -> None:
+        """Refresh trace rows when the panel is visible."""
+        panel = self.query_one(TracePanel)
+        if self._active_view != "traces" or not panel.has_class("visible"):
+            return
+        rows = self._service.list_trace_summaries(limit=100)
+        panel.set_trace_rows(rows)
+        if not rows:
+            panel.set_detail_lines(
+                [
+                    "No traces imported yet.",
+                    "Check collector output: .devenv/state/otel/traces.json",
+                    "Then run /optimize ingest <path> or wait for auto-ingest.",
+                ]
+            )
 
     async def _do_export(self) -> None:
         """Export the conversation to Markdown."""
@@ -564,6 +663,17 @@ class DeepAgentTui(App[None]):
     # Widget event handlers
     # -----------------------------------------------------------------
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle top tab bar button presses."""
+        if event.button.id == "tab-chat":
+            self._set_active_view("chat")
+            event.stop()
+            return
+        if event.button.id == "tab-traces":
+            self._set_active_view("traces")
+            event.stop()
+            return
+
     async def on_prompt_input_submitted(self, event: PromptInput.Submitted) -> None:
         """Handle user input submission."""
         value = event.value.strip()
@@ -582,6 +692,12 @@ class DeepAgentTui(App[None]):
             return
         if value == "/export":
             self.run_worker(self._do_export())
+            return
+        if value == "/view traces":
+            self._set_active_view("traces")
+            return
+        if value == "/view chat":
+            self._set_active_view("chat")
             return
         if value == "/agent":
             # Show current agent info.
@@ -629,6 +745,20 @@ class DeepAgentTui(App[None]):
         """Handle session selection from the sidebar."""
         await self._service.handle_input(f"/threads {event.session_id}")
         self._update_sidebar_info()
+
+    def on_trace_panel_trace_selected(self, event: TracePanel.TraceSelected) -> None:
+        """Render detail for the selected trace in the trace panel."""
+        lines = self._service.get_trace_detail_lines(event.trace_id, max_events=40)
+        self.query_one(TracePanel).set_detail_lines(lines)
+
+    def on_trace_panel_annotate_requested(self, event: TracePanel.AnnotateRequested) -> None:
+        """Persist a trace annotation from the panel controls."""
+        message = self._service.annotate_trace(event.trace_id, event.score, event.notes)
+        self.query_one(MessageDisplay).add_system_message(message)
+
+    def on_trace_panel_refresh_requested(self, _event: TracePanel.RefreshRequested) -> None:
+        """Refresh trace list on explicit user request."""
+        self._refresh_trace_panel()
 
     async def _do_switch_agent_by_name(self, agent_name: str) -> None:
         """Switch to the agent with the given name."""
