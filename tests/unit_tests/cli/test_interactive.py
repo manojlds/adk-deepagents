@@ -766,6 +766,74 @@ def test_run_interactive_async_returns_zero_when_no_tty_and_no_first_prompt(monk
     assert exit_code == 0
 
 
+def test_handle_slash_command_compact_returns_compact() -> None:
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl.handle_slash_command("/compact", stdout=out, stderr=err)
+
+    assert result == "compact"
+    assert "compact and summarize" in out.getvalue()
+    assert err.getvalue() == ""
+
+
+def test_handle_slash_command_help_mentions_compact() -> None:
+    out = io.StringIO()
+    err = io.StringIO()
+
+    repl.handle_slash_command("/help", stdout=out, stderr=err)
+
+    assert "/compact" in out.getvalue()
+
+
+def test_build_cli_agent_passes_summarization_config(monkeypatch) -> None:
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_CONCURRENCY_POLICY", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_QUEUE_TIMEOUT_SECONDS", raising=False)
+
+    from adk_deepagents.types import SummarizationConfig
+
+    captured: dict[str, object] = {}
+
+    def _fake_create_deep_agent(**kwargs: object):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(repl, "create_deep_agent", _fake_create_deep_agent)
+
+    config = SummarizationConfig()
+    repl._build_cli_agent(
+        agent_name="demo",
+        model=None,
+        cwd=Path("/tmp/workspace"),
+        summarization=config,
+    )
+
+    assert captured["summarization"] is config
+
+
+def test_build_cli_agent_without_summarization_omits_key(monkeypatch) -> None:
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_MAX_PARALLEL", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_CONCURRENCY_POLICY", raising=False)
+    monkeypatch.delenv("ADK_DYNAMIC_TASK_QUEUE_TIMEOUT_SECONDS", raising=False)
+
+    captured: dict[str, object] = {}
+
+    def _fake_create_deep_agent(**kwargs: object):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(repl, "create_deep_agent", _fake_create_deep_agent)
+
+    repl._build_cli_agent(
+        agent_name="demo",
+        model=None,
+        cwd=Path("/tmp/workspace"),
+    )
+
+    assert "summarization" not in captured
+
+
 def test_run_interactive_returns_error_code_on_exception(monkeypatch, capsys) -> None:
     def _raise(coro):
         coro.close()

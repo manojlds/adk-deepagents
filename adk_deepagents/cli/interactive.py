@@ -29,7 +29,7 @@ from adk_deepagents.cli.session_store import (
     get_thread,
     list_threads,
 )
-from adk_deepagents.types import DynamicTaskConfig
+from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
 INPUT_PROMPT = "> "
 APPROVAL_PROMPT = "approval> "
@@ -51,11 +51,12 @@ INTERACTIVE_HELP_TEXT = (
     "  /clear                     Start a new thread and make it active\n"
     "  /model                     Show the active model for this REPL session\n"
     "  /model <name|default>      Switch model for subsequent turns\n"
+    "  /compact                   Compact/summarize the session context\n"
     "  /quit                      Exit interactive mode\n"
     "  /q                         Exit interactive mode\n"
 )
 
-SlashCommandResult = Literal["not_command", "handled", "exit"]
+SlashCommandResult = Literal["not_command", "handled", "exit", "compact"]
 ApprovalDecision = Literal["approve", "reject", "auto"]
 InputReader = Callable[[str], str]
 
@@ -155,6 +156,7 @@ def _build_cli_agent(
     skills_dirs: Sequence[str] = (),
     message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
     instruction: str | None = None,
+    summarization: SummarizationConfig | None = None,
 ):
     backend = MemoryMappedFilesystemBackend(
         root_dir=cwd,
@@ -180,6 +182,8 @@ def _build_cli_agent(
         agent_kwargs["skills"] = list(skills_dirs)
     if instruction:
         agent_kwargs["instruction"] = instruction
+    if summarization is not None:
+        agent_kwargs["summarization"] = summarization
 
     try:
         return create_deep_agent(**agent_kwargs)
@@ -200,6 +204,7 @@ def _build_runner(
     skills_dirs: Sequence[str] = (),
     message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
     instruction: str | None = None,
+    summarization: SummarizationConfig | None = None,
 ) -> Runner:
     agent = _build_cli_agent(
         agent_name=agent_name,
@@ -211,6 +216,7 @@ def _build_runner(
         skills_dirs=skills_dirs,
         message_queue_provider=message_queue_provider,
         instruction=instruction,
+        summarization=summarization,
     )
     session_service = SqliteSessionService(str(db_path))
     return Runner(
@@ -453,6 +459,13 @@ def handle_slash_command(
             stdout=stdout,
             stderr=stderr,
         )
+
+    if command_lower == "/compact":
+        print(
+            "Please compact and summarize the conversation so far.",
+            file=stdout,
+        )
+        return "compact"
 
     print(
         f"[error] Unknown slash command: {command}. Type /help for available commands.",
@@ -822,6 +835,7 @@ async def _run_interactive_async(
         memory_sources=memory_sources,
         memory_source_paths=memory_source_paths,
         skills_dirs=skills_dirs,
+        summarization=SummarizationConfig(),
     )
 
     def _switch_model(new_model: str | None) -> None:
@@ -834,6 +848,7 @@ async def _run_interactive_async(
             memory_sources=memory_sources,
             memory_source_paths=memory_source_paths,
             skills_dirs=skills_dirs,
+            summarization=SummarizationConfig(),
         )
 
     model_context = _ModelCommandContext(model=model, switch_model=_switch_model)
@@ -870,6 +885,10 @@ async def _run_interactive_async(
             continue
         if slash_result == "exit":
             break
+        if slash_result == "compact":
+            # Send the compact instruction as a regular prompt to the agent.
+            # The agent's compact_conversation tool will handle summarization.
+            normalized_prompt = "Please compact and summarize the conversation so far."
 
         await _run_interactive_turn(
             runner=runner,

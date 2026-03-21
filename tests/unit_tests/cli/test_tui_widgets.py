@@ -602,3 +602,69 @@ class TestPromptInputAgentMentionPicker:
 
     def test_agent_mention_picker_visible_css_present(self):
         assert "#agent-mention-picker.visible" in PromptInput.DEFAULT_CSS
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Auto-scroll and half-page scroll tests
+# ---------------------------------------------------------------------------
+
+
+class TestMessageDisplayAutoScroll:
+    """Test auto-scroll constants and method existence on MessageDisplay."""
+
+    def test_auto_scroll_threshold_is_positive(self):
+        assert MessageDisplay._AUTO_SCROLL_THRESHOLD > 0
+
+    def test_auto_scroll_threshold_value(self):
+        assert MessageDisplay._AUTO_SCROLL_THRESHOLD == 5
+
+    def test_has_is_near_bottom_method(self):
+        assert hasattr(MessageDisplay, "_is_near_bottom")
+        assert callable(MessageDisplay._is_near_bottom)
+
+    def test_has_auto_scroll_method(self):
+        assert hasattr(MessageDisplay, "_auto_scroll")
+        assert callable(MessageDisplay._auto_scroll)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Tool output CSS tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolOutputCSS:
+    """Test that MessageDisplay DEFAULT_CSS includes tool-output-md styles."""
+
+    def test_tool_output_md_in_css(self):
+        assert ".tool-output-md" in MessageDisplay.DEFAULT_CSS
+
+    def test_tool_output_md_hidden_in_css(self):
+        assert ".tool-output-md.hidden" in MessageDisplay.DEFAULT_CSS
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Compact command in slash commands list
+# ---------------------------------------------------------------------------
+
+
+class TestPhase5SlashCommands:
+    def test_compact_command_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/compact" in cmd_names
+
+    def test_compact_description_nonempty(self):
+        compact_items = [(c, d) for c, d in SLASH_COMMANDS if c.startswith("/compact")]
+        assert len(compact_items) >= 1
+        for _cmd, desc in compact_items:
+            assert desc.strip()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Palette item for compact
+# ---------------------------------------------------------------------------
+
+
+class TestPhase5PaletteItems:
+    def test_compact_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "session_compact" in actions
