@@ -43,24 +43,58 @@ on every workflow update.
 
 ## Run Temporal services with devenv
 
-This repository includes a `devenv.nix` profile that starts a local Temporal
-server:
+This repository includes a `devenv.nix` profile with:
+
+- `temporal-server`
+- `temporal-worker`
+- `otel-collector`
+
+Quick start:
 
 ```bash
-devenv up temporal-server
+# Start Temporal server + worker
+devenv up temporal-server temporal-worker
+
+# Or start all local support services
+devenv up
 ```
 
 Defaults:
 
 - gRPC: `127.0.0.1:7233`
 - namespace: `default`
+- task queue: `adk-deepagents-tasks`
+- worker health probe: `127.0.0.1:17451`
 - SQLite DB: `.devenv/state/temporal/temporal.db`
 
-## Run a Temporal worker
+The `temporal-worker` process runs:
 
-`task()` dispatch requires a Temporal worker process. Build one with
-`create_temporal_worker(...)` using the same model/tools/subagents as your parent
-agent process:
+```bash
+uv run python -m adk_deepagents.temporal.dev_worker
+```
+
+The devenv process passes `--health-port 17451` so local supervisors can do a
+simple liveness probe.
+
+and picks model in this order:
+
+1. `ADK_DEEPAGENTS_TEMPORAL_WORKER_MODEL`
+2. `ADK_DEEPAGENTS_MODEL`
+3. `gemini-2.5-flash`
+
+When these `ADK_DEEPAGENTS_TEMPORAL_*` variables are present, CLI/TUI runs
+also auto-enable Temporal-backed dynamic tasks.
+
+If you use vaibhav, one command starts the same stack:
+
+```bash
+vaibhav dev start adk-deepagents
+```
+
+## Run a custom Temporal worker
+
+If you need custom tools/subagents/models, build a worker explicitly with
+`create_temporal_worker(...)`:
 
 ```python
 import asyncio

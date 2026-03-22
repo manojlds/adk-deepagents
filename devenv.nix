@@ -11,6 +11,7 @@
     ADK_DEEPAGENTS_TEMPORAL_TARGET_HOST = "127.0.0.1:7233";
     ADK_DEEPAGENTS_TEMPORAL_NAMESPACE = "default";
     ADK_DEEPAGENTS_TEMPORAL_TASK_QUEUE = "adk-deepagents-tasks";
+    ADK_DEEPAGENTS_TEMPORAL_WORKER_HEALTH_PORT = "17451";
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318";
     OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf";
     OTEL_SERVICE_NAME = "adk-deepagents";
@@ -23,6 +24,11 @@
       --port 7233 \
       --namespace default \
       --db-filename .devenv/state/temporal/temporal.db
+  '';
+
+  processes.temporal-worker.exec = ''
+    exec uv run python -m adk_deepagents.temporal.dev_worker \
+      --health-port 17451
   '';
 
   processes.otel-collector.exec = ''
