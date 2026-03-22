@@ -351,6 +351,9 @@ agent = create_deep_agent(
 See [docs/temporal.md](docs/temporal.md) for worker setup, `devenv` services,
 and integration test instructions.
 
+When the CLI runs in an environment with `ADK_DEEPAGENTS_TEMPORAL_*` variables,
+it auto-enables Temporal-backed dynamic tasks using those settings.
+
 ### Summarization
 
 Automatic context window management. When the conversation exceeds a configurable fraction of the context window, older messages are replaced with a condensed summary.
@@ -518,11 +521,14 @@ The repo includes a `devenv.nix` that can run local support services for
 Temporal workflows and OTEL trace collection.
 
 ```bash
-# Start services (temporal-server + otel-collector)
+# Start services (temporal-server + temporal-worker + otel-collector)
 devenv up
 
 # Enter shell with devenv-provided environment variables
 devenv shell
+
+# Start only Temporal stack processes
+devenv up temporal-server temporal-worker
 
 # Reset local OTEL state file
 otel-reset
@@ -530,6 +536,11 @@ otel-reset
 # Reset local Temporal dev state
 temporal-reset
 ```
+
+`temporal-worker` runs `uv run python -m adk_deepagents.temporal.dev_worker`
+and uses `ADK_DEEPAGENTS_TEMPORAL_WORKER_MODEL` (or `ADK_DEEPAGENTS_MODEL`) for
+its default model. It also exposes a local liveness probe on
+`127.0.0.1:17451` for supervisor health checks.
 
 Trace collector output is written to:
 
