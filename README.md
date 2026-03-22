@@ -512,6 +512,38 @@ uv run ruff format .
 uv run ty check
 ```
 
+### devenv (Temporal + OTEL collector)
+
+The repo includes a `devenv.nix` that can run local support services for
+Temporal workflows and OTEL trace collection.
+
+```bash
+# Start services (temporal-server + otel-collector)
+devenv up
+
+# Enter shell with devenv-provided environment variables
+devenv shell
+
+# Reset local OTEL state file
+otel-reset
+
+# Reset local Temporal dev state
+temporal-reset
+```
+
+Trace collector output is written to:
+
+```text
+.devenv/state/otel/traces.json
+```
+
+The lockfile (`devenv.lock`) pins devenv inputs for reproducible environments.
+Update it with:
+
+```bash
+devenv update
+```
+
 ### Testing
 
 Tests use pytest with pytest-asyncio (`asyncio_mode = "auto"`). Unit tests are in `tests/unit_tests/`, integration tests in `tests/integration_tests/`.
