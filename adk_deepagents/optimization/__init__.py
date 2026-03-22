@@ -17,9 +17,6 @@ from adk_deepagents.optimization.contracts import (
     TaskOutcome,
     TrajectoryBundle,
 )
-from adk_deepagents.optimization.contracts import (
-    TrajectoryEvent as BundleEvent,
-)
 from adk_deepagents.optimization.feedback import (
     append_feedback_jsonl,
     load_feedback_jsonl,
@@ -51,7 +48,6 @@ __all__ = [
     "ScorerConfig",
     "TaskOutcome",
     "Trajectory",
-    "BundleEvent",
     "TrajectoryBundle",
     "TrajectoryEvent",
     "append_feedback_jsonl",
