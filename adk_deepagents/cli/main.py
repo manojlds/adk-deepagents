@@ -57,6 +57,16 @@ def _load_workspace_env() -> None:
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 
 
+def _setup_otel() -> None:
+    """Enable OTEL trace export when env vars are configured."""
+    try:
+        from google.adk.telemetry.setup import maybe_set_otel_providers
+
+        maybe_set_otel_providers()
+    except ImportError:
+        pass
+
+
 def resolve_model(cli_model: str | None, defaults: CliDefaults) -> str | None:
     """Resolve model precedence as CLI flag > env var > config default."""
     explicit_model = _normalize_model(cli_model)
@@ -414,6 +424,17 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         )
 
     _load_workspace_env()
+    _setup_otel()
+
+    otel_traces_path: Path | None = None
+    otel_env = os.environ.get("OTEL_TRACES_FILE")
+    if otel_env:
+        otel_traces_path = Path(otel_env)
+    else:
+        devenv_traces = Path.cwd() / ".devenv" / "state" / "otel" / "traces.json"
+        if devenv_traces.exists():
+            otel_traces_path = devenv_traces
+
     resolved_model = resolve_model(args.model, defaults)
     dynamic_task_config = build_cli_dynamic_task_config(defaults)
 
@@ -506,6 +527,8 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             skills_dirs=resources.skills_dirs,
             keybinds_raw=defaults.tui_keybinds,
             theme_name=defaults.tui_theme,
+            trajectories_dir=paths.trajectories_dir,
+            otel_traces_path=otel_traces_path,
         )
 
     return run_interactive(
@@ -520,4 +543,6 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
         memory_sources=resources.memory_sources,
         memory_source_paths=resources.memory_source_paths,
         skills_dirs=resources.skills_dirs,
+        trajectories_dir=paths.trajectories_dir,
+        otel_traces_path=otel_traces_path,
     )

@@ -27,6 +27,8 @@ def run_tui(
     skills_dirs: Sequence[str] = (),
     keybinds_raw: dict[str, Any] | None = None,
     theme_name: str | None = None,
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> int:
     """Launch the Textual TUI and block until exit."""
     # Enable debug logging to a file for TUI diagnostics.
@@ -52,6 +54,8 @@ def run_tui(
         skills_dirs=list(skills_dirs),
         keybinds_raw=keybinds_raw,
         theme_name=theme_name,
+        trajectories_dir=trajectories_dir,
+        otel_traces_path=otel_traces_path,
     )
 
     app = DeepAgentTui(config)

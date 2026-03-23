@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol, TextIO
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TextIO
 
 from google.adk.runners import Runner
 from google.adk.sessions.sqlite_session_service import SqliteSessionService
@@ -31,6 +31,9 @@ from adk_deepagents.cli.session_store import (
 )
 from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
 
+if TYPE_CHECKING:
+    from adk_deepagents.optimization.trajectory import Trajectory
+
 INPUT_PROMPT = "> "
 APPROVAL_PROMPT = "approval> "
 THREAD_LIST_LIMIT = 200
@@ -43,6 +46,7 @@ INTERACTIVE_INTERRUPT_ON: dict[str, bool] = {
     "execute_bash": True,
 }
 MAX_APPROVAL_ARGS_PREVIEW = 400
+MAX_TRAJECTORY_TEXT_PREVIEW = 1200
 INTERACTIVE_HELP_TEXT = (
     "Interactive commands:\n"
     "  /help                      Show this help message\n"
@@ -52,6 +56,12 @@ INTERACTIVE_HELP_TEXT = (
     "  /model                     Show the active model for this REPL session\n"
     "  /model <name|default>      Switch model for subsequent turns\n"
     "  /compact                   Compact/summarize the session context\n"
+    "  /trajectories              List recent trajectories from OTEL traces\n"
+    "  /trajectories golden       List golden trajectories\n"
+    "  /trajectories show <id> [--detail] Show trajectory flow (brief by default)\n"
+    "  /trajectories mark <id>    Mark a trajectory as golden\n"
+    "  /trajectories rate <id> <0-1> Rate a trajectory\n"
+    "  /trajectories export       Export dataset for optimization\n"
     "  /quit                      Exit interactive mode\n"
     "  /q                         Exit interactive mode\n"
 )
@@ -393,6 +403,509 @@ def _handle_model_slash_command(
     return "handled"
 
 
+def _merge_ingested_trajectory(
+    existing: Trajectory, incoming: Trajectory
+) -> tuple[Trajectory, bool]:
+    """Merge an OTEL-ingested trajectory while preserving local annotations."""
+    merged = incoming
+
+    if merged.session_id is None:
+        merged.session_id = existing.session_id
+    if merged.agent_name is None:
+        merged.agent_name = existing.agent_name
+    if not merged.steps and existing.steps:
+        merged.steps = existing.steps
+    if merged.start_time_ns == 0:
+        merged.start_time_ns = existing.start_time_ns
+    if merged.end_time_ns == 0:
+        merged.end_time_ns = existing.end_time_ns
+    if merged.status == "unset" and existing.status != "unset":
+        merged.status = existing.status
+
+    # Preserve user annotations from the local store.
+    merged.score = existing.score
+    merged.is_golden = existing.is_golden
+    merged.feedback = existing.feedback
+    merged.tags = existing.tags
+
+    changed = (
+        existing.session_id != merged.session_id
+        or existing.agent_name != merged.agent_name
+        or existing.steps != merged.steps
+        or existing.start_time_ns != merged.start_time_ns
+        or existing.end_time_ns != merged.end_time_ns
+        or existing.status != merged.status
+    )
+    return merged, changed
+
+
+def _resolve_trajectory_id_from_prefix(
+    prefix: str,
+    *,
+    trace_ids: list[str],
+    stderr: TextIO,
+) -> str | None:
+    matching = [trace_id for trace_id in trace_ids if trace_id.startswith(prefix)]
+    if not matching:
+        print(f"[error] No trajectory matching prefix '{prefix}'.", file=stderr)
+        return None
+    if len(matching) > 1:
+        print(
+            f"[error] Ambiguous prefix '{prefix}' matches {len(matching)} trajectories.",
+            file=stderr,
+        )
+        return None
+    return matching[0]
+
+
+def _print_json_payload(
+    name: str,
+    payload: Any,
+    *,
+    indent: str,
+    stdout: TextIO,
+) -> None:
+    if payload is None:
+        print(f"{indent}{name}: <none>", file=stdout)
+        return
+
+    print(f"{indent}{name}:", file=stdout)
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+    for line in rendered.splitlines():
+        print(f"{indent}  {line}", file=stdout)
+
+
+def _truncate_trajectory_text(text: str) -> str:
+    normalized = text.strip()
+    if len(normalized) <= MAX_TRAJECTORY_TEXT_PREVIEW:
+        return normalized
+    omitted = len(normalized) - MAX_TRAJECTORY_TEXT_PREVIEW
+    return normalized[:MAX_TRAJECTORY_TEXT_PREVIEW] + f"... [truncated {omitted} chars]"
+
+
+def _append_role_texts_from_content(
+    *,
+    role: str | None,
+    parts: Any,
+    user_texts: list[str],
+    assistant_texts: list[str],
+    thought_texts: list[str],
+) -> None:
+    if not isinstance(parts, list):
+        return
+
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+
+        normalized = text.strip()
+        if part.get("thought") is True:
+            thought_texts.append(normalized)
+            continue
+
+        if role == "user":
+            user_texts.append(normalized)
+        elif role in {"assistant", "model"}:
+            assistant_texts.append(normalized)
+
+
+def _extract_model_call_flow_texts(model_call: Any) -> tuple[list[str], list[str], list[str]]:
+    """Extract user/thinking/assistant text snippets from model request/response payloads."""
+    user_texts: list[str] = []
+    thought_texts: list[str] = []
+    assistant_texts: list[str] = []
+
+    request_payload = model_call.request if isinstance(model_call.request, dict) else None
+    if request_payload is not None:
+        contents = request_payload.get("contents")
+        if isinstance(contents, list):
+            for content in contents:
+                if not isinstance(content, dict):
+                    continue
+                role = content.get("role") if isinstance(content.get("role"), str) else None
+                _append_role_texts_from_content(
+                    role=role,
+                    parts=content.get("parts"),
+                    user_texts=user_texts,
+                    assistant_texts=assistant_texts,
+                    thought_texts=thought_texts,
+                )
+
+        # Fallback for OpenAI-style request payloads.
+        messages = request_payload.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                role = message.get("role") if isinstance(message.get("role"), str) else None
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    text = content.strip()
+                    if role == "user":
+                        user_texts.append(text)
+                    elif role in {"assistant", "model"}:
+                        assistant_texts.append(text)
+                elif isinstance(content, list):
+                    _append_role_texts_from_content(
+                        role=role,
+                        parts=content,
+                        user_texts=user_texts,
+                        assistant_texts=assistant_texts,
+                        thought_texts=thought_texts,
+                    )
+
+    response_payload = model_call.response if isinstance(model_call.response, dict) else None
+    if response_payload is not None:
+        content = response_payload.get("content")
+        if isinstance(content, dict):
+            role = content.get("role") if isinstance(content.get("role"), str) else None
+            _append_role_texts_from_content(
+                role=role,
+                parts=content.get("parts"),
+                user_texts=user_texts,
+                assistant_texts=assistant_texts,
+                thought_texts=thought_texts,
+            )
+
+        candidates = response_payload.get("candidates")
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_content = candidate.get("content")
+                if not isinstance(candidate_content, dict):
+                    continue
+                role = (
+                    candidate_content.get("role")
+                    if isinstance(candidate_content.get("role"), str)
+                    else None
+                )
+                _append_role_texts_from_content(
+                    role=role,
+                    parts=candidate_content.get("parts"),
+                    user_texts=user_texts,
+                    assistant_texts=assistant_texts,
+                    thought_texts=thought_texts,
+                )
+
+    return user_texts, thought_texts, assistant_texts
+
+
+def _print_text_entries(
+    label: str,
+    texts: list[str],
+    *,
+    indent: str,
+    stdout: TextIO,
+) -> None:
+    if not texts:
+        print(f"{indent}{label}: none", file=stdout)
+        return
+
+    print(f"{indent}{label} ({len(texts)}):", file=stdout)
+    for index, text in enumerate(texts, start=1):
+        print(f"{indent}  - {index}:", file=stdout)
+        for line in _truncate_trajectory_text(text).splitlines() or [""]:
+            print(f"{indent}      {line}", file=stdout)
+
+
+def _render_trajectory_details(
+    trajectory: Trajectory,
+    *,
+    stdout: TextIO,
+    detailed: bool = False,
+) -> None:
+    score = f"{trajectory.score:.2f}" if trajectory.score is not None else "-"
+    print(f"Trajectory {trajectory.trace_id}:", file=stdout)
+    print(
+        "  "
+        f"status={trajectory.status} "
+        f"agent={trajectory.agent_name or '-'} "
+        f"session={trajectory.session_id or '-'}",
+        file=stdout,
+    )
+    print(
+        "  "
+        f"duration_ms={trajectory.duration_ms:.2f} "
+        f"steps={len(trajectory.steps)} "
+        f"input_tokens={trajectory.total_input_tokens} "
+        f"output_tokens={trajectory.total_output_tokens}",
+        file=stdout,
+    )
+    print(
+        f"  score={score} golden={'yes' if trajectory.is_golden else 'no'}",
+        file=stdout,
+    )
+
+    if trajectory.tags:
+        tag_text = ", ".join(f"{key}={value}" for key, value in sorted(trajectory.tags.items()))
+        print(f"  tags: {tag_text}", file=stdout)
+    else:
+        print("  tags: none", file=stdout)
+
+    if trajectory.feedback:
+        print(f"  feedback ({len(trajectory.feedback)}):", file=stdout)
+        for index, feedback in enumerate(trajectory.feedback, start=1):
+            rating = f"{feedback.rating:.2f}" if feedback.rating is not None else "-"
+            timestamp = str(feedback.timestamp_ns) if feedback.timestamp_ns else "-"
+            comment = feedback.comment if feedback.comment else "-"
+            print(
+                "    "
+                f"- entry {index}: source={feedback.source} "
+                f"rating={rating} "
+                f"timestamp_ns={timestamp} "
+                f"comment={comment}",
+                file=stdout,
+            )
+            if feedback.metadata:
+                _print_json_payload(
+                    "metadata",
+                    feedback.metadata,
+                    indent="      ",
+                    stdout=stdout,
+                )
+    else:
+        print("  feedback: none", file=stdout)
+
+    print(f"  steps ({len(trajectory.steps)}):", file=stdout)
+    if not trajectory.steps:
+        print("    none", file=stdout)
+        return
+
+    for step_index, step in enumerate(trajectory.steps, start=1):
+        print(f"    - step {step_index}: agent={step.agent_name or '-'}", file=stdout)
+
+        model_call = step.model_call
+        if model_call is None:
+            print("      model: none", file=stdout)
+        else:
+            finish_reason = model_call.finish_reason or "-"
+            print(
+                "      "
+                f"model={model_call.model or '-'} "
+                f"input_tokens={model_call.input_tokens} "
+                f"output_tokens={model_call.output_tokens} "
+                f"duration_ms={model_call.duration_ms:.2f} "
+                f"finish_reason={finish_reason}",
+                file=stdout,
+            )
+
+            user_texts, thought_texts, assistant_texts = _extract_model_call_flow_texts(model_call)
+            print("      flow:", file=stdout)
+            _print_text_entries("user", user_texts, indent="        ", stdout=stdout)
+            _print_text_entries("thinking", thought_texts, indent="        ", stdout=stdout)
+            _print_text_entries("assistant", assistant_texts, indent="        ", stdout=stdout)
+
+            if detailed:
+                _print_json_payload("request", model_call.request, indent="      ", stdout=stdout)
+                _print_json_payload("response", model_call.response, indent="      ", stdout=stdout)
+            else:
+                print(
+                    "      raw_payloads: hidden (add --detail to include request/response)",
+                    file=stdout,
+                )
+
+        if not step.tool_calls:
+            print("      tool_calls: none", file=stdout)
+            continue
+
+        print(f"      tool_calls ({len(step.tool_calls)}):", file=stdout)
+        for tool_index, tool_call in enumerate(step.tool_calls, start=1):
+            error = tool_call.error or "-"
+            print(
+                "        "
+                f"- tool {tool_index}: name={tool_call.name} "
+                f"duration_ms={tool_call.duration_ms:.2f} "
+                f"error={error}",
+                file=stdout,
+            )
+            if detailed:
+                _print_json_payload("args", tool_call.args, indent="          ", stdout=stdout)
+                _print_json_payload(
+                    "response", tool_call.response, indent="          ", stdout=stdout
+                )
+
+        if not detailed:
+            print(
+                "        payloads: hidden (add --detail to include tool args/response)",
+                file=stdout,
+            )
+
+
+def _handle_trajectory_slash_command(
+    raw_command: str,
+    *,
+    trajectories_dir: Path,
+    otel_traces_path: Path | None,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> SlashCommandResult:
+    """Handle /trajectories subcommands."""
+    from adk_deepagents.optimization.store import TrajectoryStore
+
+    parts = raw_command.split()
+    subcommand = parts[1] if len(parts) > 1 else None
+
+    store = TrajectoryStore(trajectories_dir)
+
+    if subcommand is None:
+        # Ingest new traces from OTEL file, then list all.
+        if otel_traces_path is not None and otel_traces_path.exists():
+            from adk_deepagents.telemetry.trace_reader import read_traces_file
+
+            new_trajectories = read_traces_file(otel_traces_path)
+            added = 0
+            updated = 0
+            for traj in new_trajectories:
+                existing = store.load(traj.trace_id)
+                if existing is None:
+                    store.save(traj)
+                    added += 1
+
+                else:
+                    merged, changed = _merge_ingested_trajectory(existing, traj)
+                    if changed:
+                        store.save(merged)
+                        updated += 1
+
+            if added:
+                print(f"Imported {added} new trajectory(ies) from OTEL traces.", file=stdout)
+            if updated:
+                print(f"Updated {updated} existing trajectory(ies) from OTEL traces.", file=stdout)
+
+        all_ids = store.list_ids()
+        if not all_ids:
+            print("No trajectories found.", file=stdout)
+            return "handled"
+
+        print(f"Trajectories ({len(all_ids)}):", file=stdout)
+        for trace_id in all_ids:
+            traj = store.load(trace_id)
+            if traj is None:
+                continue
+            golden = " [golden]" if traj.is_golden else ""
+            score = f" score={traj.score:.2f}" if traj.score is not None else ""
+            status = f" status={traj.status}"
+            agent = f" agent={traj.agent_name}" if traj.agent_name else ""
+            steps = f" steps={len(traj.steps)}"
+            print(f"  {trace_id[:12]}{golden}{score}{status}{agent}{steps}", file=stdout)
+        return "handled"
+
+    if subcommand == "golden":
+        golden = store.list_trajectories(is_golden=True)
+        if not golden:
+            print("No golden trajectories.", file=stdout)
+            return "handled"
+
+        print(f"Golden trajectories ({len(golden)}):", file=stdout)
+        for traj in golden:
+            score = f" score={traj.score:.2f}" if traj.score is not None else ""
+            agent = f" agent={traj.agent_name}" if traj.agent_name else ""
+            print(f"  {traj.trace_id[:12]}{score}{agent}", file=stdout)
+        return "handled"
+
+    if subcommand == "show":
+        if len(parts) < 3:
+            print("[error] Usage: /trajectories show <trace_id_prefix> [--detail]", file=stderr)
+            return "handled"
+
+        show_flags = parts[3:]
+        detailed = False
+        if show_flags:
+            if len(show_flags) == 1 and show_flags[0] == "--detail":
+                detailed = True
+            else:
+                print("[error] Usage: /trajectories show <trace_id_prefix> [--detail]", file=stderr)
+                return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        trajectory = store.load(resolved_trace_id)
+        if trajectory is None:
+            print(f"[error] Failed to load trajectory '{resolved_trace_id[:12]}'.", file=stderr)
+            return "handled"
+
+        _render_trajectory_details(trajectory, stdout=stdout, detailed=detailed)
+        return "handled"
+
+    if subcommand == "mark":
+        if len(parts) < 3:
+            print("[error] Usage: /trajectories mark <trace_id_prefix>", file=stderr)
+            return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        if store.mark_golden(resolved_trace_id):
+            print(f"Marked {resolved_trace_id[:12]} as golden.", file=stdout)
+        else:
+            print(f"[error] Failed to mark {resolved_trace_id[:12]}.", file=stderr)
+        return "handled"
+
+    if subcommand == "rate":
+        if len(parts) < 4:
+            print("[error] Usage: /trajectories rate <trace_id_prefix> <0-1>", file=stderr)
+            return "handled"
+
+        try:
+            score = float(parts[3])
+        except ValueError:
+            print("[error] Score must be a number between 0 and 1.", file=stderr)
+            return "handled"
+
+        if not 0.0 <= score <= 1.0:
+            print("[error] Score must be between 0 and 1.", file=stderr)
+            return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        if store.set_score(resolved_trace_id, score):
+            print(f"Set score={score:.2f} on {resolved_trace_id[:12]}.", file=stdout)
+        else:
+            print(f"[error] Failed to set score on {resolved_trace_id[:12]}.", file=stderr)
+        return "handled"
+
+    if subcommand == "export":
+        dataset = store.export_dataset()
+        if not dataset:
+            print("No trajectories to export.", file=stdout)
+            return "handled"
+
+        print(
+            f"Exported {len(dataset)} trajectory(ies):"
+            f" {sum(1 for d in dataset if d.get('is_golden'))} golden,"
+            f" {sum(1 for d in dataset if d.get('score') is not None)} scored.",
+            file=stdout,
+        )
+        return "handled"
+
+    print(
+        f"[error] Unknown /trajectories subcommand: {subcommand}. Type /help for usage.",
+        file=stderr,
+    )
+    return "handled"
+
+
 def handle_slash_command(
     prompt: str,
     *,
@@ -400,6 +913,8 @@ def handle_slash_command(
     stderr: TextIO,
     thread_context: _ThreadCommandContext | None = None,
     model_context: _ModelCommandContext | None = None,
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> SlashCommandResult:
     """Handle slash commands in interactive mode."""
     if not prompt.startswith("/"):
@@ -466,6 +981,19 @@ def handle_slash_command(
             file=stdout,
         )
         return "compact"
+
+    if command_lower == "/trajectories" or command_lower.startswith("/trajectories "):
+        if trajectories_dir is None:
+            print("[error] Trajectory store is unavailable in this context.", file=stderr)
+            return "handled"
+
+        return _handle_trajectory_slash_command(
+            command,
+            trajectories_dir=trajectories_dir,
+            otel_traces_path=otel_traces_path,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     print(
         f"[error] Unknown slash command: {command}. Type /help for available commands.",
@@ -809,6 +1337,8 @@ async def _run_interactive_async(
     stdin: _SupportsIsatty | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> int:
     """Run interactive REPL mode until the user exits."""
     input_stream = stdin if stdin is not None else sys.stdin
@@ -880,6 +1410,8 @@ async def _run_interactive_async(
             stderr=err_stream,
             thread_context=thread_context,
             model_context=model_context,
+            trajectories_dir=trajectories_dir,
+            otel_traces_path=otel_traces_path,
         )
         if slash_result == "handled":
             continue
@@ -917,6 +1449,8 @@ def run_interactive(
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> int:
     """Execute interactive REPL mode."""
     try:
@@ -933,6 +1467,8 @@ def run_interactive(
                 memory_sources=memory_sources,
                 memory_source_paths=memory_source_paths,
                 skills_dirs=skills_dirs,
+                trajectories_dir=trajectories_dir,
+                otel_traces_path=otel_traces_path,
             )
         )
     except Exception as exc:  # noqa: BLE001 - CLI should map runtime errors to exit code 1.

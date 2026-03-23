@@ -523,6 +523,8 @@ class AgentService:
     memory_sources: list[str] = field(default_factory=list)
     memory_source_paths: dict[str, Path] = field(default_factory=dict)
     skills_dirs: list[str] = field(default_factory=list)
+    trajectories_dir: Path | None = None
+    otel_traces_path: Path | None = None
 
     updates: asyncio.Queue[UiUpdate] = field(default_factory=asyncio.Queue)
 
@@ -823,6 +825,40 @@ class AgentService:
         except Exception as exc:  # noqa: BLE001
             await self.updates.put(UiUpdate(kind="error", text=f"Export error: {exc}"))
             return md
+
+    async def handle_trajectory_command(self, args: str) -> None:
+        """Handle /trajectories subcommands, emitting UiUpdate messages."""
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
+            await self.updates.put(UiUpdate(kind="error", text="Trajectory store is unavailable."))
+            return
+
+        out = io.StringIO()
+        err = io.StringIO()
+
+        from adk_deepagents.cli.interactive import _handle_trajectory_slash_command
+
+        raw_command = f"/trajectories {args}".strip() if args else "/trajectories"
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: _handle_trajectory_slash_command(
+                raw_command,
+                trajectories_dir=trajectories_dir,
+                otel_traces_path=self.otel_traces_path,
+                stdout=out,
+                stderr=err,
+            ),
+        )
+
+        for line in out.getvalue().splitlines():
+            await self.updates.put(UiUpdate(kind="system", text=line))
+        for line in err.getvalue().splitlines():
+            if "[error]" in line.lower():
+                await self.updates.put(UiUpdate(kind="error", text=line))
+            else:
+                await self.updates.put(UiUpdate(kind="system", text=line))
 
     async def _handle_bash_shortcut(self, text: str) -> None:
         """Execute a shell command (``!cmd``) and display the output."""

@@ -67,6 +67,16 @@ class TestSlashCommands:
         cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
         assert "/editor" in cmd_names
 
+    def test_trajectory_commands_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/trajectories" in cmd_names
+        assert any(cmd.startswith("/trajectories show <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories show <id> --detail") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories golden") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories mark <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories rate <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories export") for cmd, _ in SLASH_COMMANDS)
+
     def test_descriptions_are_nonempty(self):
         for cmd, desc in SLASH_COMMANDS:
             assert desc.strip(), f"Empty description for {cmd}"

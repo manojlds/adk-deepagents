@@ -55,6 +55,8 @@ class TuiConfig:
     skills_dirs: list[str] = field(default_factory=list)
     keybinds_raw: dict[str, Any] | None = None
     theme_name: str | None = None
+    trajectories_dir: Path | None = None
+    otel_traces_path: Path | None = None
 
 
 def _build_bindings(kb: KeybindConfig) -> list[Binding]:
@@ -196,6 +198,8 @@ class DeepAgentTui(App[None]):
             memory_sources=config.memory_sources,
             memory_source_paths=config.memory_source_paths,
             skills_dirs=config.skills_dirs,
+            trajectories_dir=config.trajectories_dir,
+            otel_traces_path=config.otel_traces_path,
         )
         self._waiting_for_approval = False
         # Leader-key state: when the leader key is pressed, we set this flag
@@ -582,6 +586,10 @@ class DeepAgentTui(App[None]):
             return
         if value == "/export":
             self.run_worker(self._do_export())
+            return
+        if value == "/trajectories" or value.startswith("/trajectories "):
+            args = value[len("/trajectories") :].strip()
+            self.run_worker(self._service.handle_trajectory_command(args))
             return
         if value == "/agent":
             # Show current agent info.

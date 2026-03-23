@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from adk_deepagents.optimization.store import TrajectoryStore
 from adk_deepagents.optimization.trajectory import (
     AgentStep,
     FeedbackEntry,
@@ -16,4 +17,5 @@ __all__ = [
     "ModelCall",
     "ToolCall",
     "Trajectory",
+    "TrajectoryStore",
 ]

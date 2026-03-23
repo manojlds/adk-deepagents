@@ -21,6 +21,9 @@ DEFAULT_AGENT_NAME = "agent"
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
+TRAJECTORIES_DIRNAME = "trajectories"
+
+
 @dataclass(frozen=True)
 class CliPaths:
     """Filesystem locations used by the CLI."""
@@ -29,6 +32,7 @@ class CliPaths:
     config_path: Path
     profiles_dir: Path
     sessions_db_path: Path
+    trajectories_dir: Path
 
 
 @dataclass
@@ -57,6 +61,7 @@ def resolve_cli_paths(home_dir: Path | None = None) -> CliPaths:
         config_path=root_dir / CONFIG_FILENAME,
         profiles_dir=root_dir / PROFILES_DIRNAME,
         sessions_db_path=root_dir / SESSIONS_DB_FILENAME,
+        trajectories_dir=root_dir / TRAJECTORIES_DIRNAME,
     )
 
 
