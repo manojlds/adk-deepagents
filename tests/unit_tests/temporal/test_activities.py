@@ -17,6 +17,7 @@ def test_task_snapshot_defaults():
     assert snapshot.subagent_spec is None
     assert snapshot.subagent_spec_hash is None
     assert snapshot.timeout_seconds == 120.0
+    assert snapshot.backend_context is None
 
 
 def test_task_snapshot_roundtrip():
@@ -36,6 +37,11 @@ def test_task_snapshot_roundtrip():
         },
         subagent_spec_hash="abc123",
         timeout_seconds=55.0,
+        backend_context={
+            "kind": "filesystem",
+            "root_dir": "/workspace",
+            "virtual_mode": True,
+        },
     )
 
     restored = TaskSnapshot.from_dict(snapshot.to_dict())

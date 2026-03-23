@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from adk_deepagents import create_deep_agent
+from adk_deepagents.cli.resources import MemoryMappedFilesystemBackend
 from adk_deepagents.temporal.worker import create_temporal_worker
 from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec, TemporalTaskConfig
 from tests.integration_tests.conftest import (
@@ -284,8 +286,81 @@ async def test_temporal_task_returns_function_calls_metadata(
         assert task_payloads, "Expected at least one task function-response payload"
         payload = task_payloads[-1]
         assert payload.get("status") == "completed", f"Expected completed status, got: {payload}"
-        assert "task_id" in payload, f"Expected task_id in payload, got: {payload}"
-        assert "result" in payload, f"Expected result in payload, got: {payload}"
+    assert "task_id" in payload, f"Expected task_id in payload, got: {payload}"
+    assert "result" in payload, f"Expected result in payload, got: {payload}"
+
+
+@pytest.mark.timeout(240)
+async def test_temporal_worker_sees_parent_workspace_backend(
+    ensure_temporal_server: TemporalTaskConfig,
+):
+    """Temporal delegation sees workspace files when parent uses filesystem backend."""
+    from google.adk.runners import InMemoryRunner
+    from google.genai import types
+
+    model = make_litellm_model()
+    temporal_config = _make_temporal_config(ensure_temporal_server)
+    dynamic_task_config = DynamicTaskConfig(timeout_seconds=90, temporal=temporal_config)
+
+    async with _temporal_worker(model, temporal_config, dynamic_task_config):
+        agent = create_deep_agent(
+            model=model,
+            name="temporal_workspace_backend_test",
+            instruction=(
+                "Always delegate using the task tool. "
+                "For filesystem checks, delegate and return the task result."
+            ),
+            backend=MemoryMappedFilesystemBackend(root_dir=Path.cwd()),
+            delegation_mode="dynamic",
+            dynamic_task_config=dynamic_task_config,
+        )
+
+        runner = InMemoryRunner(agent=agent, app_name="integration_test")
+        session = await runner.session_service.create_session(
+            app_name="integration_test",
+            user_id="test_user",
+            state={"files": {}},
+        )
+
+        content = types.Content(
+            role="user",
+            parts=[
+                types.Part(
+                    text=(
+                        "Use task to inspect /adk_deepagents and verify whether "
+                        "/adk_deepagents/__init__.py exists."
+                    )
+                )
+            ],
+        )
+
+        task_payloads: list[dict[str, Any]] = []
+
+        async for event in runner.run_async(
+            session_id=session.id,
+            user_id="test_user",
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    fn_resp = getattr(part, "function_response", None)
+                    if fn_resp is None:
+                        continue
+                    if getattr(fn_resp, "name", None) != "task":
+                        continue
+                    payload = getattr(fn_resp, "response", None)
+                    if isinstance(payload, dict):
+                        task_payloads.append(payload)
+
+        assert task_payloads, "Expected at least one task function-response payload"
+        payload = task_payloads[-1]
+        assert payload.get("status") == "completed", f"Expected completed status, got: {payload}"
+
+        result_text = str(payload.get("result", "")).lower()
+        assert "__init__.py" in result_text, (
+            "Expected delegated task to see /adk_deepagents files, "
+            f"got result: {payload.get('result')}"
+        )
 
 
 @pytest.mark.timeout(240)

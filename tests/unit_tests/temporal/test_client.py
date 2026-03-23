@@ -108,6 +108,14 @@ async def test_run_task_via_temporal_starts_new_workflow_when_not_found():
             snapshot=TaskSnapshot(
                 subagent_type="general_purpose",
                 prompt="work",
+                depth=2,
+                model_override="openai/gpt-4o-mini",
+                timeout_seconds=45.0,
+                backend_context={
+                    "kind": "filesystem",
+                    "root_dir": "/workspace",
+                    "virtual_mode": True,
+                },
                 subagent_spec={
                     "name": "runtime_specialist",
                     "description": "Runtime specialist",
@@ -123,6 +131,11 @@ async def test_run_task_via_temporal_starts_new_workflow_when_not_found():
     mock_client.start_workflow.assert_awaited_once()
     mock_handle.execute_update.assert_awaited_once()
     update_args = mock_handle.execute_update.await_args.kwargs["arg"]
+    assert update_args["subagent_type"] == "general_purpose"
+    assert update_args["depth"] == 2
+    assert update_args["model_override"] == "openai/gpt-4o-mini"
+    assert update_args["timeout_seconds"] == 45.0
+    assert update_args["backend_context"]["root_dir"] == "/workspace"
     assert update_args["subagent_spec"]["name"] == "runtime_specialist"
 
 

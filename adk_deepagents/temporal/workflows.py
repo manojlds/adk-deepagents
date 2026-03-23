@@ -72,6 +72,16 @@ class DynamicTaskWorkflow:
         if "subagent_spec_hash" in turn_input:
             merged["subagent_spec_hash"] = turn_input["subagent_spec_hash"]
 
+        for key in (
+            "subagent_type",
+            "depth",
+            "model_override",
+            "timeout_seconds",
+            "backend_context",
+        ):
+            if key in turn_input:
+                merged[key] = turn_input[key]
+
         result = await workflow.execute_activity(
             RUN_TASK_ACTIVITY_NAME,
             arg=merged,
