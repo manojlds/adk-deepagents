@@ -52,6 +52,11 @@ INTERACTIVE_HELP_TEXT = (
     "  /model                     Show the active model for this REPL session\n"
     "  /model <name|default>      Switch model for subsequent turns\n"
     "  /compact                   Compact/summarize the session context\n"
+    "  /trajectories              List recent trajectories from OTEL traces\n"
+    "  /trajectories golden       List golden trajectories\n"
+    "  /trajectories mark <id>    Mark a trajectory as golden\n"
+    "  /trajectories rate <id> <0-1> Rate a trajectory\n"
+    "  /trajectories export       Export dataset for optimization\n"
     "  /quit                      Exit interactive mode\n"
     "  /q                         Exit interactive mode\n"
 )
@@ -393,6 +398,145 @@ def _handle_model_slash_command(
     return "handled"
 
 
+def _handle_trajectory_slash_command(
+    raw_command: str,
+    *,
+    trajectories_dir: Path,
+    otel_traces_path: Path | None,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> SlashCommandResult:
+    """Handle /trajectories subcommands."""
+    from adk_deepagents.optimization.store import TrajectoryStore
+
+    parts = raw_command.split()
+    subcommand = parts[1] if len(parts) > 1 else None
+
+    store = TrajectoryStore(trajectories_dir)
+
+    if subcommand is None:
+        # Ingest new traces from OTEL file, then list all.
+        if otel_traces_path is not None and otel_traces_path.exists():
+            from adk_deepagents.telemetry.trace_reader import read_traces_file
+
+            new_trajectories = read_traces_file(otel_traces_path)
+            existing_ids = set(store.list_ids())
+            added = 0
+            for traj in new_trajectories:
+                if traj.trace_id not in existing_ids:
+                    store.save(traj)
+                    added += 1
+            if added:
+                print(f"Imported {added} new trajectory(ies) from OTEL traces.", file=stdout)
+
+        all_ids = store.list_ids()
+        if not all_ids:
+            print("No trajectories found.", file=stdout)
+            return "handled"
+
+        print(f"Trajectories ({len(all_ids)}):", file=stdout)
+        for trace_id in all_ids:
+            traj = store.load(trace_id)
+            if traj is None:
+                continue
+            golden = " [golden]" if traj.is_golden else ""
+            score = f" score={traj.score:.2f}" if traj.score is not None else ""
+            status = f" status={traj.status}"
+            agent = f" agent={traj.agent_name}" if traj.agent_name else ""
+            steps = f" steps={len(traj.steps)}"
+            print(f"  {trace_id[:12]}{golden}{score}{status}{agent}{steps}", file=stdout)
+        return "handled"
+
+    if subcommand == "golden":
+        golden = store.list_trajectories(is_golden=True)
+        if not golden:
+            print("No golden trajectories.", file=stdout)
+            return "handled"
+
+        print(f"Golden trajectories ({len(golden)}):", file=stdout)
+        for traj in golden:
+            score = f" score={traj.score:.2f}" if traj.score is not None else ""
+            agent = f" agent={traj.agent_name}" if traj.agent_name else ""
+            print(f"  {traj.trace_id[:12]}{score}{agent}", file=stdout)
+        return "handled"
+
+    if subcommand == "mark":
+        if len(parts) < 3:
+            print("[error] Usage: /trajectories mark <trace_id_prefix>", file=stderr)
+            return "handled"
+
+        prefix = parts[2]
+        matching = [tid for tid in store.list_ids() if tid.startswith(prefix)]
+        if not matching:
+            print(f"[error] No trajectory matching prefix '{prefix}'.", file=stderr)
+            return "handled"
+        if len(matching) > 1:
+            print(
+                f"[error] Ambiguous prefix '{prefix}' matches {len(matching)} trajectories.",
+                file=stderr,
+            )
+            return "handled"
+
+        if store.mark_golden(matching[0]):
+            print(f"Marked {matching[0][:12]} as golden.", file=stdout)
+        else:
+            print(f"[error] Failed to mark {matching[0][:12]}.", file=stderr)
+        return "handled"
+
+    if subcommand == "rate":
+        if len(parts) < 4:
+            print("[error] Usage: /trajectories rate <trace_id_prefix> <0-1>", file=stderr)
+            return "handled"
+
+        prefix = parts[2]
+        try:
+            score = float(parts[3])
+        except ValueError:
+            print("[error] Score must be a number between 0 and 1.", file=stderr)
+            return "handled"
+
+        if not 0.0 <= score <= 1.0:
+            print("[error] Score must be between 0 and 1.", file=stderr)
+            return "handled"
+
+        matching = [tid for tid in store.list_ids() if tid.startswith(prefix)]
+        if not matching:
+            print(f"[error] No trajectory matching prefix '{prefix}'.", file=stderr)
+            return "handled"
+        if len(matching) > 1:
+            print(
+                f"[error] Ambiguous prefix '{prefix}' matches {len(matching)} trajectories.",
+                file=stderr,
+            )
+            return "handled"
+
+        if store.set_score(matching[0], score):
+            print(f"Set score={score:.2f} on {matching[0][:12]}.", file=stdout)
+        else:
+            print(f"[error] Failed to set score on {matching[0][:12]}.", file=stderr)
+        return "handled"
+
+    if subcommand == "export":
+        dataset = store.export_dataset()
+        if not dataset:
+            print("No trajectories to export.", file=stdout)
+            return "handled"
+
+        print(
+            f"Exported {len(dataset)} trajectory(ies):"
+            f" {sum(1 for d in dataset if d.get('is_golden'))} golden,"
+            f" {sum(1 for d in dataset if d.get('score') is not None)} scored.",
+            file=stdout,
+        )
+        return "handled"
+
+    print(
+        f"[error] Unknown /trajectories subcommand: {subcommand}. Type /help for usage.",
+        file=stderr,
+    )
+    return "handled"
+
+
 def handle_slash_command(
     prompt: str,
     *,
@@ -400,6 +544,8 @@ def handle_slash_command(
     stderr: TextIO,
     thread_context: _ThreadCommandContext | None = None,
     model_context: _ModelCommandContext | None = None,
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> SlashCommandResult:
     """Handle slash commands in interactive mode."""
     if not prompt.startswith("/"):
@@ -466,6 +612,19 @@ def handle_slash_command(
             file=stdout,
         )
         return "compact"
+
+    if command_lower == "/trajectories" or command_lower.startswith("/trajectories "):
+        if trajectories_dir is None:
+            print("[error] Trajectory store is unavailable in this context.", file=stderr)
+            return "handled"
+
+        return _handle_trajectory_slash_command(
+            command,
+            trajectories_dir=trajectories_dir,
+            otel_traces_path=otel_traces_path,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     print(
         f"[error] Unknown slash command: {command}. Type /help for available commands.",
@@ -809,6 +968,8 @@ async def _run_interactive_async(
     stdin: _SupportsIsatty | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> int:
     """Run interactive REPL mode until the user exits."""
     input_stream = stdin if stdin is not None else sys.stdin
@@ -880,6 +1041,8 @@ async def _run_interactive_async(
             stderr=err_stream,
             thread_context=thread_context,
             model_context=model_context,
+            trajectories_dir=trajectories_dir,
+            otel_traces_path=otel_traces_path,
         )
         if slash_result == "handled":
             continue
@@ -917,6 +1080,8 @@ def run_interactive(
     memory_sources: Sequence[str] = (),
     memory_source_paths: Mapping[str, Path] | None = None,
     skills_dirs: Sequence[str] = (),
+    trajectories_dir: Path | None = None,
+    otel_traces_path: Path | None = None,
 ) -> int:
     """Execute interactive REPL mode."""
     try:
@@ -933,6 +1098,8 @@ def run_interactive(
                 memory_sources=memory_sources,
                 memory_source_paths=memory_source_paths,
                 skills_dirs=skills_dirs,
+                trajectories_dir=trajectories_dir,
+                otel_traces_path=otel_traces_path,
             )
         )
     except Exception as exc:  # noqa: BLE001 - CLI should map runtime errors to exit code 1.
