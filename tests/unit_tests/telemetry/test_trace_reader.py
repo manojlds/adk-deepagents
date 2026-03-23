@@ -207,6 +207,47 @@ def test_read_traces_file_basic(tmp_path: Path):
     assert step.tool_calls[0].name == "read_file"
 
 
+def test_read_traces_file_suffixed_span_names(tmp_path: Path):
+    """Span names may include labels like model/agent names after a space."""
+    tid = "aaa_suffix"
+    spans = [
+        _make_span(tid, "01", "invocation"),
+        _make_span(
+            tid,
+            "02",
+            "invoke_agent demo_cli",
+            parent_span_id="01",
+            attributes=[_str_attr("gen_ai.conversation.id", "session_abc")],
+        ),
+        _make_span(tid, "03", "call_llm", parent_span_id="02"),
+        _make_span(
+            tid,
+            "04",
+            "generate_content openai/glm-5",
+            parent_span_id="03",
+            attributes=[
+                _str_attr("gen_ai.request.model", "openai/glm-5"),
+                _int_attr("gen_ai.usage.input_tokens", 7),
+                _int_attr("gen_ai.usage.output_tokens", 3),
+            ],
+        ),
+    ]
+    f = tmp_path / "traces.json"
+    f.write_text(_make_batch(spans))
+
+    trajectories = read_traces_file(f)
+    assert len(trajectories) == 1
+
+    traj = trajectories[0]
+    assert traj.trace_id == tid
+    assert traj.agent_name == "demo_cli"
+    assert traj.session_id == "session_abc"
+    assert len(traj.steps) == 1
+    assert traj.steps[0].agent_name == "demo_cli"
+    assert traj.steps[0].model_call is not None
+    assert traj.steps[0].model_call.model == "openai/glm-5"
+
+
 def test_read_traces_file_multiple_steps(tmp_path: Path):
     tid = "bbb"
     spans = [
@@ -428,3 +469,75 @@ def test_read_traces_file_llm_request_response_parsed(tmp_path: Path):
     assert mc is not None
     assert mc.request == {"model": "gemini", "messages": []}
     assert mc.response == {"choices": [{"text": "hi"}]}
+
+
+def test_read_traces_file_llm_request_response_fallback_to_call_llm(tmp_path: Path):
+    tid = "ggg"
+    llm_request = json.dumps(
+        {
+            "model": "gemini",
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        }
+    )
+    llm_response = json.dumps(
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "thinking", "thought": True},
+                    {"text": "hello there"},
+                ],
+            }
+        }
+    )
+    spans = [
+        _make_span(tid, "01", "invocation"),
+        _make_span(
+            tid,
+            "02",
+            "invoke_agent",
+            parent_span_id="01",
+            attributes=[_str_attr("gen_ai.agent.name", "parse_agent")],
+        ),
+        _make_span(
+            tid,
+            "03",
+            "call_llm",
+            parent_span_id="02",
+            attributes=[
+                _str_attr("gcp.vertex.agent.llm_request", llm_request),
+                _str_attr("gcp.vertex.agent.llm_response", llm_response),
+            ],
+        ),
+        _make_span(
+            tid,
+            "04",
+            "generate_content",
+            parent_span_id="03",
+            attributes=[
+                _str_attr("gen_ai.request.model", "gemini"),
+                _int_attr("gen_ai.usage.input_tokens", 10),
+                _int_attr("gen_ai.usage.output_tokens", 5),
+            ],
+        ),
+    ]
+    f = tmp_path / "traces.json"
+    f.write_text(_make_batch(spans))
+
+    trajectories = read_traces_file(f)
+    assert len(trajectories) == 1
+    mc = trajectories[0].steps[0].model_call
+    assert mc is not None
+    assert mc.request == {
+        "model": "gemini",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+    }
+    assert mc.response == {
+        "content": {
+            "role": "model",
+            "parts": [
+                {"text": "thinking", "thought": True},
+                {"text": "hello there"},
+            ],
+        }
+    }

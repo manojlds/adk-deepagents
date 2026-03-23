@@ -8,6 +8,14 @@ from typing import Any, cast
 
 import adk_deepagents.cli.interactive as repl
 from adk_deepagents.cli.session_store import ThreadRecord
+from adk_deepagents.optimization.store import TrajectoryStore
+from adk_deepagents.optimization.trajectory import (
+    AgentStep,
+    FeedbackEntry,
+    ModelCall,
+    ToolCall,
+    Trajectory,
+)
 from adk_deepagents.types import DynamicTaskConfig
 
 
@@ -204,6 +212,9 @@ def test_handle_slash_command_help_prints_usage() -> None:
     assert "/threads" in out.getvalue()
     assert "/clear" in out.getvalue()
     assert "/model" in out.getvalue()
+    assert "/trajectories" in out.getvalue()
+    assert "/trajectories show" in out.getvalue()
+    assert "--detail" in out.getvalue()
     assert err.getvalue() == ""
 
 
@@ -348,6 +359,249 @@ def test_handle_slash_command_model_queries_and_switches() -> None:
     assert switched_models == ["gemini-2.5-pro", None]
     assert model_context.model is None
     assert thread_context.model is None
+
+
+def test_merge_ingested_trajectory_updates_core_and_preserves_annotations() -> None:
+    existing = Trajectory(
+        trace_id="t1",
+        steps=[],
+        status="unset",
+        score=0.9,
+        is_golden=True,
+        tags={"env": "test"},
+    )
+    incoming = Trajectory(
+        trace_id="t1",
+        agent_name="demo_cli",
+        session_id="session-1",
+        steps=[AgentStep(agent_name="demo_cli")],
+        status="unset",
+    )
+
+    merged, changed = repl._merge_ingested_trajectory(existing, incoming)
+
+    assert changed is True
+    assert merged.agent_name == "demo_cli"
+    assert merged.session_id == "session-1"
+    assert len(merged.steps) == 1
+    assert merged.score == 0.9
+    assert merged.is_golden is True
+    assert merged.tags == {"env": "test"}
+
+
+def test_merge_ingested_trajectory_noop_when_incoming_has_no_new_core_data() -> None:
+    existing = Trajectory(
+        trace_id="t1",
+        agent_name="demo_cli",
+        session_id="session-1",
+        steps=[AgentStep(agent_name="demo_cli")],
+        status="ok",
+        score=0.7,
+        is_golden=True,
+    )
+    incoming = Trajectory(trace_id="t1")
+
+    merged, changed = repl._merge_ingested_trajectory(existing, incoming)
+
+    assert changed is False
+    assert merged.agent_name == "demo_cli"
+    assert merged.session_id == "session-1"
+    assert len(merged.steps) == 1
+    assert merged.status == "ok"
+    assert merged.score == 0.7
+    assert merged.is_golden is True
+
+
+def test_handle_trajectory_show_renders_full_details(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    trajectory = Trajectory(
+        trace_id="abc123def456",
+        session_id="session-1",
+        agent_name="demo_cli",
+        steps=[
+            AgentStep(
+                agent_name="demo_cli",
+                model_call=ModelCall(
+                    model="gemini-2.5-flash",
+                    input_tokens=10,
+                    output_tokens=5,
+                    duration_ms=123.45,
+                    request={
+                        "contents": [
+                            {
+                                "role": "user",
+                                "parts": [{"text": "hi"}],
+                            }
+                        ]
+                    },
+                    response={
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {"text": "I should greet the user.", "thought": True},
+                                {"text": "Hello there!"},
+                            ],
+                        }
+                    },
+                    finish_reason="stop",
+                ),
+                tool_calls=[
+                    ToolCall(
+                        name="read_file",
+                        args={"path": "README.md"},
+                        response={"content": "..."},
+                        duration_ms=12.0,
+                    )
+                ],
+            )
+        ],
+        start_time_ns=1_000_000,
+        end_time_ns=6_000_000,
+        status="ok",
+        score=0.8,
+        is_golden=True,
+        feedback=[
+            FeedbackEntry(
+                source="user",
+                rating=0.9,
+                comment="great",
+                timestamp_ns=123,
+                metadata={"reviewer": "qa"},
+            )
+        ],
+        tags={"env": "test"},
+    )
+    store.save(trajectory)
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories show abc123",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    rendered = out.getvalue()
+    assert "Trajectory abc123def456:" in rendered
+    assert "status=ok agent=demo_cli session=session-1" in rendered
+    assert "score=0.80 golden=yes" in rendered
+    assert "tags: env=test" in rendered
+    assert "feedback (1):" in rendered
+    assert "metadata:" in rendered
+    assert "steps (1):" in rendered
+    assert "model=gemini-2.5-flash input_tokens=10 output_tokens=5" in rendered
+    assert "flow:" in rendered
+    assert "user (1):" in rendered
+    assert "hi" in rendered
+    assert "thinking (1):" in rendered
+    assert "I should greet the user." in rendered
+    assert "assistant (1):" in rendered
+    assert "Hello there!" in rendered
+    assert "tool_calls (1):" in rendered
+    assert "name=read_file duration_ms=12.00 error=-" in rendered
+    assert "raw_payloads: hidden" in rendered
+    assert "payloads: hidden" in rendered
+    assert "      request:" not in rendered
+    assert "      response:" not in rendered
+    assert err.getvalue() == ""
+
+
+def test_handle_trajectory_show_detail_includes_raw_payloads(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    trajectory = Trajectory(
+        trace_id="abc123def456",
+        agent_name="demo_cli",
+        steps=[
+            AgentStep(
+                agent_name="demo_cli",
+                model_call=ModelCall(
+                    model="gemini-2.5-flash",
+                    input_tokens=10,
+                    output_tokens=5,
+                    duration_ms=123.45,
+                    request={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+                    response={
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "hello"}],
+                        }
+                    },
+                ),
+                tool_calls=[
+                    ToolCall(
+                        name="read_file",
+                        args={"path": "README.md"},
+                        response={"content": "..."},
+                        duration_ms=12.0,
+                    )
+                ],
+            )
+        ],
+    )
+    store.save(trajectory)
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories show abc123 --detail",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    rendered = out.getvalue()
+    assert "request:" in rendered
+    assert "response:" in rendered
+    assert "args:" in rendered
+    assert "raw_payloads: hidden" not in rendered
+    assert "payloads: hidden" not in rendered
+    assert err.getvalue() == ""
+
+
+def test_handle_trajectory_show_usage_and_missing_prefix(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", feedback=[FeedbackEntry(source="user")]))
+
+    out = io.StringIO()
+    err = io.StringIO()
+    usage_result = repl._handle_trajectory_slash_command(
+        "/trajectories show",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    missing_result = repl._handle_trajectory_slash_command(
+        "/trajectories show does-not-exist",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    invalid_flag_result = repl._handle_trajectory_slash_command(
+        "/trajectories show abc123 --verbose",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert usage_result == "handled"
+    assert missing_result == "handled"
+    assert invalid_flag_result == "handled"
+    rendered_err = err.getvalue()
+    assert "Usage: /trajectories show <trace_id_prefix> [--detail]" in rendered_err
+    assert "No trajectory matching prefix 'does-not-exist'" in rendered_err
 
 
 def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:

@@ -522,6 +522,13 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/theme", "Switch TUI color theme"),
     ("/editor", "Open external editor to compose a message"),
     ("/compact", "Compact/summarize the session context"),
+    ("/trajectories", "List recent trajectories from OTEL traces"),
+    ("/trajectories show <id>", "Show trajectory flow (brief)"),
+    ("/trajectories show <id> --detail", "Show full trajectory payloads"),
+    ("/trajectories golden", "List golden trajectories"),
+    ("/trajectories mark <id>", "Mark a trajectory as golden"),
+    ("/trajectories rate <id> <0-1>", "Rate a trajectory"),
+    ("/trajectories export", "Summarize optimization dataset"),
     ("/quit", "Exit the TUI"),
 ]
 

@@ -828,7 +828,8 @@ class AgentService:
 
     async def handle_trajectory_command(self, args: str) -> None:
         """Handle /trajectories subcommands, emitting UiUpdate messages."""
-        if self.trajectories_dir is None:
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
             await self.updates.put(UiUpdate(kind="error", text="Trajectory store is unavailable."))
             return
 
@@ -844,7 +845,7 @@ class AgentService:
             None,
             lambda: _handle_trajectory_slash_command(
                 raw_command,
-                trajectories_dir=self.trajectories_dir,
+                trajectories_dir=trajectories_dir,
                 otel_traces_path=self.otel_traces_path,
                 stdout=out,
                 stderr=err,

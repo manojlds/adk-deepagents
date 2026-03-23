@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 _STATUS_MAP = {0: "unset", 1: "ok", 2: "error"}
 
 
+def _span_base_name(name: str) -> str:
+    """Return the canonical span operation name without suffix labels."""
+    return name.split(" ", 1)[0] if name else ""
+
+
+def _span_suffix(name: str, base_name: str) -> str | None:
+    """Return a span name suffix when formatted as ``"{base_name} <suffix>"``."""
+    prefix = f"{base_name} "
+    if not name.startswith(prefix):
+        return None
+    suffix = name[len(prefix) :].strip()
+    return suffix or None
+
+
 def _extract_value(v: dict) -> Any:
     """Extract concrete value from an OTLP AnyValue object."""
     if "stringValue" in v:
@@ -65,6 +79,22 @@ def _safe_json_loads(raw: Any) -> dict[str, Any] | None:
         return None
 
 
+def _as_int(value: Any) -> int:
+    """Best-effort integer coercion for token counters."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
 def _build_trajectory(trace_id: str, spans: list[dict]) -> Trajectory | None:
     """Build a Trajectory from a list of spans belonging to one trace."""
     span_by_id: dict[str, dict] = {}
@@ -77,14 +107,15 @@ def _build_trajectory(trace_id: str, spans: list[dict]) -> Trajectory | None:
         sid = span.get("spanId", "")
         span_by_id[sid] = span
         name = span.get("name", "")
+        base_name = _span_base_name(name)
 
-        if name == "invocation":
+        if base_name == "invocation":
             invocation_span = span
-        elif name == "invoke_agent":
+        elif base_name == "invoke_agent":
             invoke_agent_spans.append(span)
-        elif name == "generate_content":
+        elif base_name == "generate_content":
             generate_content_spans.append(span)
-        elif name == "execute_tool":
+        elif base_name == "execute_tool":
             execute_tool_spans.append(span)
 
     if invocation_span is None:
@@ -102,7 +133,10 @@ def _build_trajectory(trace_id: str, spans: list[dict]) -> Trajectory | None:
     for ia_span in invoke_agent_spans:
         ia_attrs = _parse_attributes(ia_span.get("attributes", []))
         if agent_name is None:
-            agent_name = ia_attrs.get("gen_ai.agent.name")
+            agent_name = ia_attrs.get("gen_ai.agent.name") or _span_suffix(
+                ia_span.get("name", ""),
+                "invoke_agent",
+            )
         if session_id is None:
             session_id = ia_attrs.get("gen_ai.conversation.id")
 
@@ -123,6 +157,22 @@ def _build_trajectory(trace_id: str, spans: list[dict]) -> Trajectory | None:
             current = span_by_id.get(pid)
         return None
 
+    def _find_ancestor_span(span: dict, *, base_name: str) -> dict | None:
+        """Walk parent chain to find the nearest ancestor with a base span name."""
+        visited: set[str] = set()
+        current = span
+        while current:
+            pid = current.get("parentSpanId", "")
+            if not pid or pid in visited:
+                return None
+            visited.add(pid)
+            current = span_by_id.get(pid)
+            if current is None:
+                return None
+            if _span_base_name(current.get("name", "")) == base_name:
+                return current
+        return None
+
     # Build ModelCall objects keyed by their span_id.
     model_calls_by_span: dict[str, ModelCall] = {}
     # Track which invoke_agent owns each generate_content span.
@@ -133,23 +183,49 @@ def _build_trajectory(trace_id: str, spans: list[dict]) -> Trajectory | None:
         key=lambda s: int(s.get("startTimeUnixNano", 0)),
     ):
         gc_attrs = _parse_attributes(gc_span.get("attributes", []))
+        call_llm_span = _find_ancestor_span(gc_span, base_name="call_llm")
+        call_llm_attrs = (
+            _parse_attributes(call_llm_span.get("attributes", []))
+            if call_llm_span is not None
+            else {}
+        )
         gc_start = int(gc_span.get("startTimeUnixNano", 0))
         gc_end = int(gc_span.get("endTimeUnixNano", 0))
 
         finish_reasons = gc_attrs.get("gen_ai.response.finish_reasons")
+        if finish_reasons is None:
+            finish_reasons = call_llm_attrs.get("gen_ai.response.finish_reasons")
         finish_reason: str | None = None
         if isinstance(finish_reasons, list) and finish_reasons:
             finish_reason = str(finish_reasons[0])
         elif isinstance(finish_reasons, str):
             finish_reason = finish_reasons
 
+        request_payload = _safe_json_loads(gc_attrs.get("gcp.vertex.agent.llm_request"))
+        if request_payload is None:
+            request_payload = _safe_json_loads(call_llm_attrs.get("gcp.vertex.agent.llm_request"))
+
+        response_payload = _safe_json_loads(gc_attrs.get("gcp.vertex.agent.llm_response"))
+        if response_payload is None:
+            response_payload = _safe_json_loads(call_llm_attrs.get("gcp.vertex.agent.llm_response"))
+
+        model_name = gc_attrs.get("gen_ai.request.model") or call_llm_attrs.get(
+            "gen_ai.request.model"
+        )
+        input_tokens = gc_attrs.get("gen_ai.usage.input_tokens")
+        if input_tokens is None:
+            input_tokens = call_llm_attrs.get("gen_ai.usage.input_tokens")
+        output_tokens = gc_attrs.get("gen_ai.usage.output_tokens")
+        if output_tokens is None:
+            output_tokens = call_llm_attrs.get("gen_ai.usage.output_tokens")
+
         mc = ModelCall(
-            model=gc_attrs.get("gen_ai.request.model", ""),
-            input_tokens=gc_attrs.get("gen_ai.usage.input_tokens", 0) or 0,
-            output_tokens=gc_attrs.get("gen_ai.usage.output_tokens", 0) or 0,
+            model=model_name if isinstance(model_name, str) else "",
+            input_tokens=_as_int(input_tokens),
+            output_tokens=_as_int(output_tokens),
             duration_ms=_ns_to_ms(gc_start, gc_end),
-            request=_safe_json_loads(gc_attrs.get("gcp.vertex.agent.llm_request")),
-            response=_safe_json_loads(gc_attrs.get("gcp.vertex.agent.llm_response")),
+            request=request_payload,
+            response=response_payload,
             finish_reason=finish_reason,
         )
         gc_sid = gc_span.get("spanId", "")
@@ -206,7 +282,12 @@ def _build_trajectory(trace_id: str, spans: list[dict]) -> Trajectory | None:
     ):
         ia_id = ia_span["spanId"]
         ia_attrs = _parse_attributes(ia_span.get("attributes", []))
-        ia_agent_name = ia_attrs.get("gen_ai.agent.name", agent_name or "")
+        ia_agent_name = (
+            ia_attrs.get("gen_ai.agent.name")
+            or _span_suffix(ia_span.get("name", ""), "invoke_agent")
+            or agent_name
+            or ""
+        )
 
         mc_list = mc_by_agent.get(ia_id, [])
         tc_list = sorted(tool_calls_by_agent.get(ia_id, []), key=lambda x: x[0])
