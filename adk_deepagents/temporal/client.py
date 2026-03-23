@@ -116,11 +116,18 @@ async def run_task_via_temporal(
             return TaskResult(error=f"Temporal workflow start failed: {exc}").to_dict()
 
     turn_input = {
+        "subagent_type": snapshot.subagent_type,
         "prompt": snapshot.prompt,
+        "depth": snapshot.depth,
         "history": snapshot.history,
         "files": snapshot.files,
         "todos": snapshot.todos,
+        "model_override": snapshot.model_override,
+        "timeout_seconds": snapshot.timeout_seconds,
     }
+
+    if snapshot.backend_context is not None:
+        turn_input["backend_context"] = snapshot.backend_context
 
     spec_hash: str | None = None
     if snapshot.subagent_spec is not None:

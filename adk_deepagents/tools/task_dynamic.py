@@ -11,6 +11,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from google.adk.agents import LlmAgent
@@ -19,7 +20,11 @@ from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from adk_deepagents.backends.protocol import BackendFactory
-from adk_deepagents.backends.runtime import get_registered_backend_factory, register_backend_factory
+from adk_deepagents.backends.runtime import (
+    get_or_create_backend_for_session,
+    get_registered_backend_factory,
+    register_backend_factory,
+)
 from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import DEFAULT_SUBAGENT_PROMPT
 from adk_deepagents.tools.task import (
@@ -362,6 +367,97 @@ def _coerce_backend_factory(value: Any) -> BackendFactory | None:
     return None
 
 
+def _backend_context_from_backend(backend: Any) -> dict[str, Any] | None:
+    root_value = getattr(backend, "_root", None)
+    if isinstance(root_value, Path):
+        root_dir = str(root_value)
+    elif isinstance(root_value, str) and root_value:
+        root_dir = root_value
+    else:
+        return None
+
+    context: dict[str, Any] = {
+        "kind": "filesystem",
+        "root_dir": root_dir,
+        "virtual_mode": bool(getattr(backend, "_virtual_mode", True)),
+    }
+
+    raw_mapped_sources = getattr(backend, "_memory_source_paths", None)
+    if isinstance(raw_mapped_sources, dict):
+        mapped_sources: dict[str, str] = {}
+        for raw_key, raw_path in raw_mapped_sources.items():
+            if not isinstance(raw_key, str) or not raw_key:
+                continue
+            if isinstance(raw_path, Path):
+                mapped_sources[raw_key] = str(raw_path)
+            elif isinstance(raw_path, str) and raw_path:
+                mapped_sources[raw_key] = raw_path
+
+        if mapped_sources:
+            context["memory_source_paths"] = mapped_sources
+
+    raw_respect_gitignore = getattr(backend, "_respect_gitignore", None)
+    if isinstance(raw_respect_gitignore, bool):
+        context["respect_gitignore"] = raw_respect_gitignore
+
+    raw_exclude_patterns = getattr(backend, "_exclude_patterns", None)
+    if isinstance(raw_exclude_patterns, (tuple, list)):
+        normalized_patterns = [
+            pattern
+            for pattern in raw_exclude_patterns
+            if isinstance(pattern, str) and pattern.strip()
+        ]
+        if normalized_patterns:
+            context["exclude_patterns"] = normalized_patterns
+
+    return context
+
+
+def _extract_temporal_backend_context(
+    *,
+    tool_context: ToolContext,
+    adk_parent_session_id: str | None,
+    runtime_backend_factory: BackendFactory | None,
+) -> dict[str, Any] | None:
+    state_dict = cast(dict[str, Any], tool_context.state)
+
+    backend: Any = None
+    if isinstance(adk_parent_session_id, str) and adk_parent_session_id:
+        backend = get_or_create_backend_for_session(adk_parent_session_id, state_dict)
+
+    if backend is None and runtime_backend_factory is not None:
+        try:
+            backend = runtime_backend_factory(state_dict)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "Failed to reconstruct parent backend for Temporal snapshot", exc_info=True
+            )
+
+    if backend is None:
+        backend = tool_context.state.get("_backend")
+
+    if backend is None:
+        state_backend_factory = _coerce_backend_factory(tool_context.state.get("_backend_factory"))
+        if state_backend_factory is not None:
+            try:
+                backend = state_backend_factory(state_dict)
+            except Exception:  # pragma: no cover - defensive
+                logger.debug(
+                    "Failed to build backend from tool_context state factory", exc_info=True
+                )
+
+    context = _backend_context_from_backend(backend)
+    if context is not None:
+        return context
+
+    # Final fallback: preserve the caller's current workspace root.
+    return {
+        "kind": "filesystem",
+        "root_dir": str(Path.cwd().resolve()),
+        "virtual_mode": True,
+    }
+
+
 def _coerce_files_state(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -495,7 +591,7 @@ def _dynamic_task_tool_doc(config: DynamicTaskConfig) -> str:
         "When delegating many tasks:\n"
         f"- Launch in waves of <= {config.max_parallel} concurrent task calls\n"
         "- Wait for one wave to complete before starting the next\n"
-        "- Reuse task_id to continue existing delegated work when needed"
+        "- Use a stable task_id when you want continuity; first use creates it, later uses resume it"
     )
 
 
@@ -781,6 +877,12 @@ def create_dynamic_task_tool(
                 tool_context.state.get("_backend_factory")
             )
 
+        temporal_backend_context = _extract_temporal_backend_context(
+            tool_context=tool_context,
+            adk_parent_session_id=adk_parent_session_id,
+            runtime_backend_factory=runtime_backend_factory,
+        )
+
         current_depth_raw = tool_context.state.get(_TASK_DEPTH_KEY, 0)
         current_depth = current_depth_raw if isinstance(current_depth_raw, int) else 0
 
@@ -800,11 +902,20 @@ def create_dynamic_task_tool(
         selected_registry: dict[str, SubAgentSpec | LlmAgent] = dict(registry)
         selected_registry.update(runtime_registry)
 
-        if task_id:
-            existing = store.get(task_id)
-            if not isinstance(existing, dict):
-                return {"status": "error", "error": f"Unknown task_id: {task_id}"}
+        existing: dict[str, Any] | None = None
+        resume_existing_task = False
+        if isinstance(task_id, str):
+            normalized_task_id = task_id.strip()
+            task_id = normalized_task_id or None
 
+        if task_id is not None:
+            candidate_existing = store.get(task_id)
+            if isinstance(candidate_existing, dict):
+                existing = candidate_existing
+                resume_existing_task = True
+
+        if resume_existing_task:
+            assert existing is not None
             task_state = existing
             stored_type = existing.get("subagent_type")
             if isinstance(stored_type, str) and stored_type.strip():
@@ -939,9 +1050,12 @@ def create_dynamic_task_tool(
                         f"max_depth={task_config.max_depth}"
                     ),
                 }
-            counter = int(tool_context.state.get(_TASK_COUNTER_KEY, 0)) + 1
-            tool_context.state[_TASK_COUNTER_KEY] = counter
-            task_id = f"task_{counter}"
+
+            if task_id is None:
+                counter = int(tool_context.state.get(_TASK_COUNTER_KEY, 0)) + 1
+                tool_context.state[_TASK_COUNTER_KEY] = counter
+                task_id = f"task_{counter}"
+
             task_depth = current_depth + 1
 
             selected = selected_registry.get(normalized_type)
@@ -1106,6 +1220,7 @@ def create_dynamic_task_tool(
                         "model_override": task_state.get("model_override"),
                         "subagent_spec": subagent_spec_payload,
                         "timeout_seconds": task_config.timeout_seconds,
+                        "backend_context": temporal_backend_context,
                     },
                     logical_parent_id=logical_parent_id,
                     task_id=task_id,

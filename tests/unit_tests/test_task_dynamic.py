@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
+from adk_deepagents.backends.filesystem import FilesystemBackend
+from adk_deepagents.backends.runtime import clear_session_backend, register_backend_factory
 from adk_deepagents.tools import task_dynamic
 from adk_deepagents.tools.task_dynamic import (
     create_dynamic_task_tool,
@@ -18,6 +21,7 @@ from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
 @dataclass
 class _DummyToolContext:
     state: dict
+    session: Any | None = None
 
 
 def _cleanup_runtime_registry(context: _DummyToolContext) -> None:
@@ -50,7 +54,20 @@ class TestDynamicTaskToolGuards:
         assert result["status"] == "error"
         assert "depth limit" in result["error"].lower()
 
-    async def test_unknown_task_id_returns_error(self):
+    async def test_unknown_task_id_creates_new_task(self, monkeypatch):
+        async def fake_run_dynamic_task(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "created",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
+
         task_tool = create_dynamic_task_tool(
             default_model="gemini-2.5-flash",
             default_tools=[],
@@ -66,8 +83,9 @@ class TestDynamicTaskToolGuards:
             tool_context=cast(Any, context),
         )
 
-        assert result["status"] == "error"
-        assert "unknown task_id" in result["error"].lower()
+        assert result["status"] == "completed"
+        assert result["task_id"] == "task_999"
+        assert context.state["_dynamic_tasks"]["task_999"]["subagent_type"] == "general_purpose"
 
     async def test_parallel_limit_blocks_execution(self):
         task_tool = create_dynamic_task_tool(
@@ -441,6 +459,110 @@ class TestDynamicTaskToolGuards:
         assert observed_snapshot["subagent_spec"]["name"] == "runtime_specialist"
         assert observed_snapshot["subagent_spec"]["description"] == "Runtime specialist"
         assert observed_snapshot["subagent_spec"]["tool_names"] == ["dummy_tool"]
+
+    async def test_temporal_mode_forwards_parent_backend_context(self, monkeypatch, tmp_path):
+        observed_snapshot: dict[str, Any] = {}
+
+        async def fake_temporal_run(*, snapshot_data, **kwargs):
+            del kwargs
+            observed_snapshot.update(snapshot_data)
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        class _ForbiddenRunner:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("InMemoryRunner should not be created in Temporal mode")
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task_temporal", fake_temporal_run)
+        monkeypatch.setattr(task_dynamic, "InMemoryRunner", _ForbiddenRunner)
+
+        parent_session_id = "parent_session_temporal"
+        root_dir = tmp_path / "workspace"
+        root_dir.mkdir()
+
+        register_backend_factory(
+            parent_session_id,
+            lambda _state: FilesystemBackend(root_dir=root_dir, virtual_mode=True),
+        )
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(temporal=TemporalTaskConfig()),
+        )
+
+        context = _DummyToolContext(state={})
+        context.session = type("_Session", (), {"id": parent_session_id})()
+
+        try:
+            result = await task_tool(
+                description="delegate",
+                prompt="delegate",
+                subagent_type="general",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            clear_session_backend(parent_session_id)
+
+        assert result["status"] == "completed"
+        assert observed_snapshot["backend_context"] == {
+            "kind": "filesystem",
+            "root_dir": str(root_dir.resolve()),
+            "virtual_mode": True,
+        }
+
+    async def test_temporal_mode_falls_back_to_current_workdir_backend_context(self, monkeypatch):
+        observed_snapshot: dict[str, Any] = {}
+
+        async def fake_temporal_run(*, snapshot_data, **kwargs):
+            del kwargs
+            observed_snapshot.update(snapshot_data)
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        class _ForbiddenRunner:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("InMemoryRunner should not be created in Temporal mode")
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task_temporal", fake_temporal_run)
+        monkeypatch.setattr(task_dynamic, "InMemoryRunner", _ForbiddenRunner)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(temporal=TemporalTaskConfig()),
+        )
+
+        context = _DummyToolContext(state={})
+        result = await task_tool(
+            description="delegate",
+            prompt="delegate",
+            subagent_type="general",
+            tool_context=cast(Any, context),
+        )
+
+        assert result["status"] == "completed"
+        assert observed_snapshot["backend_context"] == {
+            "kind": "filesystem",
+            "root_dir": str(Path.cwd().resolve()),
+            "virtual_mode": True,
+        }
 
     async def test_resume_recovers_runtime_from_persisted_task_state(self, monkeypatch):
         observed: dict[str, str] = {}

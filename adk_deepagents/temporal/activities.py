@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class TaskSnapshot:
     subagent_spec: dict[str, Any] | None = None
     subagent_spec_hash: str | None = None
     timeout_seconds: float = 120.0
+    backend_context: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -48,6 +50,9 @@ class TaskSnapshot:
             if isinstance(data.get("subagent_spec_hash"), str)
             else None,
             timeout_seconds=data.get("timeout_seconds", 120.0),
+            backend_context=data.get("backend_context")
+            if isinstance(data.get("backend_context"), dict)
+            else None,
         )
 
 
@@ -77,6 +82,69 @@ class TaskResult:
         )
 
 
+def _build_backend_factory(backend_context: dict[str, Any] | None) -> Any | None:
+    if not isinstance(backend_context, dict):
+        return None
+
+    if backend_context.get("kind") != "filesystem":
+        return None
+
+    raw_root_dir = backend_context.get("root_dir")
+    if not isinstance(raw_root_dir, str) or not raw_root_dir.strip():
+        return None
+
+    root_dir = raw_root_dir.strip()
+    virtual_mode = bool(backend_context.get("virtual_mode", True))
+
+    raw_mapped_sources = backend_context.get("memory_source_paths")
+    if isinstance(raw_mapped_sources, dict):
+        try:
+            from adk_deepagents.cli.resources import MemoryMappedFilesystemBackend
+
+            mapped_sources: dict[str, Path] = {}
+            for raw_key, raw_value in raw_mapped_sources.items():
+                if not isinstance(raw_key, str) or not raw_key.strip():
+                    continue
+                if not isinstance(raw_value, str) or not raw_value.strip():
+                    continue
+                mapped_sources[raw_key] = Path(raw_value)
+
+            raw_excludes = backend_context.get("exclude_patterns")
+            exclude_patterns = (
+                [
+                    pattern
+                    for pattern in raw_excludes
+                    if isinstance(pattern, str) and pattern.strip()
+                ]
+                if isinstance(raw_excludes, list)
+                else []
+            )
+
+            raw_respect_gitignore = backend_context.get("respect_gitignore")
+            respect_gitignore = (
+                raw_respect_gitignore if isinstance(raw_respect_gitignore, bool) else True
+            )
+
+            def _memory_mapped_factory(_state: dict[str, Any]) -> Any:
+                return MemoryMappedFilesystemBackend(
+                    root_dir=Path(root_dir),
+                    memory_source_paths=mapped_sources,
+                    respect_gitignore=respect_gitignore,
+                    exclude_patterns=exclude_patterns,
+                )
+
+            return _memory_mapped_factory
+        except Exception:  # pragma: no cover - defensive fallback
+            logger.debug("Unable to restore memory-mapped backend context", exc_info=True)
+
+    from adk_deepagents.backends.filesystem import FilesystemBackend
+
+    def _filesystem_factory(_state: dict[str, Any]) -> Any:
+        return FilesystemBackend(root_dir=root_dir, virtual_mode=virtual_mode)
+
+    return _filesystem_factory
+
+
 def create_run_task_activity(*, agent_builder: Any) -> Any:
     """Create the Temporal activity that executes one dynamic task turn."""
     from temporalio import activity
@@ -98,6 +166,8 @@ def create_run_task_activity(*, agent_builder: Any) -> Any:
             logger.exception("Failed to build sub-agent for Temporal task")
             return TaskResult(error=f"Agent build failed: {exc}").to_dict()
 
+        from adk_deepagents.backends.runtime import clear_session_backend, register_backend_factory
+
         runner = InMemoryRunner(agent=child_agent, app_name=_ACTIVITY_APP_NAME)
         session = await runner.session_service.create_session(
             app_name=_ACTIVITY_APP_NAME,
@@ -108,6 +178,16 @@ def create_run_task_activity(*, agent_builder: Any) -> Any:
                 "_dynamic_delegation_depth": snapshot.depth,
             },
         )
+
+        cleanup_backend_registration = False
+        backend_factory = _build_backend_factory(snapshot.backend_context)
+        if backend_factory is None:
+            logger.warning(
+                "Temporal activity missing backend context; falling back to default state backend"
+            )
+        if backend_factory is not None:
+            register_backend_factory(session.id, backend_factory)
+            cleanup_backend_registration = True
 
         prompt = snapshot.prompt
         if snapshot.history:
@@ -156,6 +236,9 @@ def create_run_task_activity(*, agent_builder: Any) -> Any:
                 session_state = final_session.state
         except Exception:  # pragma: no cover - defensive
             logger.debug("Unable to read Temporal activity session state", exc_info=True)
+        finally:
+            if cleanup_backend_registration:
+                clear_session_backend(session.id)
 
         return TaskResult(
             result="\n".join(texts).strip(),
