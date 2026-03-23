@@ -62,6 +62,7 @@ devenv up
 Defaults:
 
 - gRPC: `127.0.0.1:7233`
+- Web UI: `http://127.0.0.1:8233`
 - namespace: `default`
 - task queue: `adk-deepagents-tasks`
 - worker health probe: `127.0.0.1:17451`
@@ -84,6 +85,11 @@ and picks model in this order:
 
 When these `ADK_DEEPAGENTS_TEMPORAL_*` variables are present, CLI/TUI runs
 also auto-enable Temporal-backed dynamic tasks.
+
+`DynamicTaskWorkflow` executions can remain in `Running` state briefly after a
+turn completes so the same `task_id` can resume context. They auto-complete
+after the configured idle timeout (`ADK_DEEPAGENTS_TEMPORAL_IDLE_TIMEOUT_SECONDS`,
+default `600`).
 
 If you use vaibhav, one command starts the same stack:
 

@@ -22,6 +22,7 @@
     temporal server start-dev \
       --ip 127.0.0.1 \
       --port 7233 \
+      --ui-port 8233 \
       --namespace default \
       --db-filename .devenv/state/temporal/temporal.db
   '';

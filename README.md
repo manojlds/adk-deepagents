@@ -542,6 +542,12 @@ and uses `ADK_DEEPAGENTS_TEMPORAL_WORKER_MODEL` (or `ADK_DEEPAGENTS_MODEL`) for
 its default model. It also exposes a local liveness probe on
 `127.0.0.1:17451` for supervisor health checks.
 
+`temporal-server` also starts Temporal Web UI on `http://127.0.0.1:8233`.
+
+Temporal dynamic-task workflows may stay `Running` for a short period so the
+same `task_id` can resume; they auto-complete after idle timeout
+(`ADK_DEEPAGENTS_TEMPORAL_IDLE_TIMEOUT_SECONDS`, default `600`).
+
 Trace collector output is written to:
 
 ```text
