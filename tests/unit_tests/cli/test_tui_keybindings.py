@@ -35,6 +35,9 @@ class TestDefaults:
         assert "<leader>" in DEFAULT_KEYBINDS["thinking_toggle"]
         assert "<leader>" in DEFAULT_KEYBINDS["theme_picker"]
 
+    def test_trajectory_picker_default_present(self):
+        assert "trajectory_picker" in DEFAULT_KEYBINDS
+
     def test_leader_placeholder_in_defaults(self):
         """Some defaults should use <leader> placeholder."""
         assert "<leader>" in DEFAULT_KEYBINDS["session_new"]
@@ -154,6 +157,16 @@ class TestLoadKeybindConfig:
         config = load_keybind_config({"leader": "ctrl+a"})
         combos = config.keys_for("theme_picker")
         assert combos[0] == "ctrl+a k"
+
+    def test_trajectory_picker_default_binding(self):
+        config = load_keybind_config(None)
+        combos = config.keys_for("trajectory_picker")
+        assert combos[0] == "ctrl+x r"
+
+    def test_trajectory_picker_custom_leader(self):
+        config = load_keybind_config({"leader": "ctrl+a"})
+        combos = config.keys_for("trajectory_picker")
+        assert combos[0] == "ctrl+a r"
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from adk_deepagents.cli.interactive import (
 )
 from adk_deepagents.cli.tui.agent_service import (
     AgentService,
+    TrajectorySummary,
     UiUpdate,
     _activity_label_for_phase,
     _chunk_stream_text,
@@ -25,6 +26,8 @@ from adk_deepagents.cli.tui.agent_service import (
     _guess_language_from_path,
     _SharedMessageQueue,
 )
+from adk_deepagents.optimization.store import TrajectoryStore
+from adk_deepagents.optimization.trajectory import AgentStep, Trajectory
 
 
 class _FakeFunctionCall:
@@ -76,6 +79,56 @@ def _service() -> AgentService:
         auto_approve=False,
         session_id="s1",
     )
+
+
+def test_list_trajectory_summaries_empty_when_store_unavailable() -> None:
+    service = _service()
+    summaries = asyncio.run(service.list_trajectory_summaries(sync_from_otel=False))
+    assert summaries == []
+
+
+def test_list_trajectory_summaries_reads_and_sorts_entries(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(
+        Trajectory(
+            trace_id="older",
+            agent_name="demo",
+            steps=[AgentStep(agent_name="demo")],
+            start_time_ns=100,
+            status="ok",
+            score=0.4,
+        )
+    )
+    store.save(
+        Trajectory(
+            trace_id="newer",
+            agent_name="demo",
+            steps=[AgentStep(agent_name="demo")],
+            start_time_ns=200,
+            status="error",
+            score=0.9,
+            is_golden=True,
+        )
+    )
+
+    service = AgentService(
+        agent_name="demo",
+        user_id="u1",
+        model=None,
+        db_path=tmp_path / "demo.db",
+        auto_approve=False,
+        session_id="s1",
+        trajectories_dir=store_dir,
+    )
+    summaries = asyncio.run(service.list_trajectory_summaries(sync_from_otel=False))
+
+    assert len(summaries) == 2
+    assert isinstance(summaries[0], TrajectorySummary)
+    assert [entry.trace_id for entry in summaries] == ["newer", "older"]
+    assert summaries[0].status == "error"
+    assert summaries[0].score == 0.9
+    assert summaries[0].is_golden is True
 
 
 def test_coerce_payload_dict_parses_json_string() -> None:

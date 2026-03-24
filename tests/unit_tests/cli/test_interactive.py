@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -214,6 +215,10 @@ def test_handle_slash_command_help_prints_usage() -> None:
     assert "/model" in out.getvalue()
     assert "/trajectories" in out.getvalue()
     assert "/trajectories show" in out.getvalue()
+    assert "/trajectories unmark" in out.getvalue()
+    assert "/trajectories feedback" in out.getvalue()
+    assert "/trajectories tag" in out.getvalue()
+    assert "/trajectories untag" in out.getvalue()
     assert "--detail" in out.getvalue()
     assert err.getvalue() == ""
 
@@ -602,6 +607,259 @@ def test_handle_trajectory_show_usage_and_missing_prefix(tmp_path: Path) -> None
     rendered_err = err.getvalue()
     assert "Usage: /trajectories show <trace_id_prefix> [--detail]" in rendered_err
     assert "No trajectory matching prefix 'does-not-exist'" in rendered_err
+
+
+def test_handle_trajectory_export_summary_and_tip(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", score=0.8, is_golden=True))
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories export",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    rendered = out.getvalue()
+    assert "Exported 1 trajectory(ies): 1 golden, 1 scored." in rendered
+    assert "Tip: run '/trajectories export <path>' to write JSONL." in rendered
+    assert err.getvalue() == ""
+
+
+def test_handle_trajectory_export_writes_jsonl(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", score=0.8, is_golden=True))
+
+    output_path = tmp_path / "exports" / "dataset.jsonl"
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl._handle_trajectory_slash_command(
+        f"/trajectories export {output_path}",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    assert output_path.exists()
+    lines = output_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["trace_id"] == "abc123"
+    assert "Wrote 1 trajectory(ies) to" in out.getvalue()
+    assert err.getvalue() == ""
+
+
+def test_handle_trajectory_export_usage_error(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    TrajectoryStore(store_dir)
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories export one two",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    assert "Usage: /trajectories export [path]" in err.getvalue()
+
+
+def test_handle_trajectory_feedback_adds_entry(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123"))
+
+    out = io.StringIO()
+    err = io.StringIO()
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories feedback abc123 0.75 very helpful response",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    assert "Added feedback rating=0.75 on abc123" in out.getvalue()
+    assert err.getvalue() == ""
+
+    loaded = store.load("abc123")
+    assert loaded is not None
+    assert len(loaded.feedback) == 1
+    assert loaded.feedback[0].source == "user"
+    assert loaded.feedback[0].rating == 0.75
+    assert loaded.feedback[0].comment == "very helpful response"
+
+
+def test_handle_trajectory_feedback_usage_and_validation(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123"))
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    usage_result = repl._handle_trajectory_slash_command(
+        "/trajectories feedback",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    non_number_result = repl._handle_trajectory_slash_command(
+        "/trajectories feedback abc123 not-a-number",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    out_of_range_result = repl._handle_trajectory_slash_command(
+        "/trajectories feedback abc123 1.2",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert usage_result == "handled"
+    assert non_number_result == "handled"
+    assert out_of_range_result == "handled"
+    rendered_err = err.getvalue()
+    assert "Usage: /trajectories feedback <trace_id_prefix> <0-1> [comment]" in rendered_err
+    assert "Feedback rating must be a number between 0 and 1" in rendered_err
+    assert "Feedback rating must be between 0 and 1" in rendered_err
+
+
+def test_handle_trajectory_tag_and_untag(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123"))
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    tag_result = repl._handle_trajectory_slash_command(
+        "/trajectories tag abc123 env staging",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    assert tag_result == "handled"
+    assert "Set tag env=staging on abc123" in out.getvalue()
+
+    loaded = store.load("abc123")
+    assert loaded is not None
+    assert loaded.tags == {"env": "staging"}
+
+    untag_result = repl._handle_trajectory_slash_command(
+        "/trajectories untag abc123 env",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    assert untag_result == "handled"
+    assert "Removed tag env from abc123" in out.getvalue()
+
+    loaded = store.load("abc123")
+    assert loaded is not None
+    assert loaded.tags == {}
+    assert err.getvalue() == ""
+
+
+def test_handle_trajectory_tag_and_untag_usage_errors(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123"))
+
+    out = io.StringIO()
+    err = io.StringIO()
+
+    tag_usage = repl._handle_trajectory_slash_command(
+        "/trajectories tag abc123",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    untag_usage = repl._handle_trajectory_slash_command(
+        "/trajectories untag abc123",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+    missing_tag_result = repl._handle_trajectory_slash_command(
+        "/trajectories untag abc123 env",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert tag_usage == "handled"
+    assert untag_usage == "handled"
+    assert missing_tag_result == "handled"
+    rendered_err = err.getvalue()
+    assert "Usage: /trajectories tag <trace_id_prefix> <key> <value>" in rendered_err
+    assert "Usage: /trajectories untag <trace_id_prefix> <key>" in rendered_err
+    assert "Tag 'env' not found on abc123" in rendered_err
+
+
+def test_handle_trajectory_unmark_clears_golden(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", is_golden=True))
+
+    out = io.StringIO()
+    err = io.StringIO()
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories unmark abc123",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    assert "Unmarked abc123 as golden." in out.getvalue()
+    assert err.getvalue() == ""
+
+    loaded = store.load("abc123")
+    assert loaded is not None
+    assert loaded.is_golden is False
+
+
+def test_handle_trajectory_unmark_usage_error(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    TrajectoryStore(store_dir)
+    out = io.StringIO()
+    err = io.StringIO()
+
+    result = repl._handle_trajectory_slash_command(
+        "/trajectories unmark",
+        trajectories_dir=store_dir,
+        otel_traces_path=None,
+        stdout=out,
+        stderr=err,
+    )
+
+    assert result == "handled"
+    assert "Usage: /trajectories unmark <trace_id_prefix>" in err.getvalue()
 
 
 def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:

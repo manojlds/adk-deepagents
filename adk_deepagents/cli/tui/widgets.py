@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 
 from textual import events
@@ -523,12 +524,18 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/editor", "Open external editor to compose a message"),
     ("/compact", "Compact/summarize the session context"),
     ("/trajectories", "List recent trajectories from OTEL traces"),
+    ("/trajectories review", "Open trajectory review panel"),
     ("/trajectories show <id>", "Show trajectory flow (brief)"),
     ("/trajectories show <id> --detail", "Show full trajectory payloads"),
     ("/trajectories golden", "List golden trajectories"),
     ("/trajectories mark <id>", "Mark a trajectory as golden"),
+    ("/trajectories unmark <id>", "Remove trajectory golden mark"),
     ("/trajectories rate <id> <0-1>", "Rate a trajectory"),
+    ("/trajectories feedback <id> <0-1> [comment]", "Add feedback entry"),
+    ("/trajectories tag <id> <key> <value>", "Set trajectory tag"),
+    ("/trajectories untag <id> <key>", "Remove trajectory tag"),
     ("/trajectories export", "Summarize optimization dataset"),
+    ("/trajectories export <path>", "Write optimization dataset JSONL"),
     ("/quit", "Exit the TUI"),
 ]
 
@@ -583,7 +590,7 @@ class SubmittableTextArea(TextArea):
             event.stop()
             event.prevent_default()
             action = "agent_cycle" if event.key == "tab" else "agent_cycle_reverse"
-            self.app.action_app_action(action)
+            await self.app.run_action(action)
             return
 
         if event.key == "enter" and not self.read_only:
@@ -1103,6 +1110,12 @@ DEFAULT_PALETTE_ITEMS: list[CommandPaletteItem] = [
         keybind="",
     ),
     CommandPaletteItem(
+        action="trajectory_picker",
+        label="Trajectories",
+        description="Open trajectory review panel",
+        keybind="",
+    ),
+    CommandPaletteItem(
         action="editor_open",
         label="Editor",
         description="Open external editor to compose a message",
@@ -1487,6 +1500,219 @@ class AgentPicker(Vertical):
             text = f"{agent_name}{marker}  — {desc} {mode_tag}"
             if not q or q in agent_name.lower() or q in desc.lower():
                 option_list.add_option(Option(text, id=agent_name))
+        if option_list.option_count > 0:
+            option_list.highlighted = 0
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryPicker – overlay for rapid trajectory review and scoring
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TrajectoryPickerEntry:
+    """Lightweight trajectory row for the trajectory review picker."""
+
+    trace_id: str
+    status: str
+    agent_name: str
+    steps: int
+    score: float | None
+    is_golden: bool
+
+
+class TrajectoryPicker(Vertical):
+    """Modal overlay for reviewing trajectories with minimal typing.
+
+    Designed for smaller terminals / phone sessions: search, open details,
+    mark/unmark golden, quick score hotkeys, and export summary.
+    """
+
+    DEFAULT_CSS = """
+    TrajectoryPicker {
+        display: none;
+        width: 96%;
+        max-width: 120;
+        height: auto;
+        max-height: 26;
+        background: $surface;
+        border: solid $accent;
+        padding: 0 1;
+        layer: overlay;
+        align-horizontal: center;
+        offset-y: 1;
+    }
+
+    TrajectoryPicker.visible {
+        display: block;
+    }
+
+    TrajectoryPicker Input {
+        width: 1fr;
+        margin-bottom: 1;
+    }
+
+    TrajectoryPicker OptionList {
+        width: 1fr;
+        height: 1fr;
+        min-height: 8;
+        max-height: 18;
+    }
+
+    TrajectoryPicker #trajectory-hint {
+        margin-top: 1;
+        color: $text-muted;
+        text-opacity: 75%;
+    }
+    """
+
+    class ActionSelected(Message):
+        """Fired when the user requests an action in trajectory review."""
+
+        def __init__(
+            self,
+            action: str,
+            *,
+            trace_id: str | None = None,
+            score: float | None = None,
+        ) -> None:
+            super().__init__()
+            self.action = action
+            self.trace_id = trace_id
+            self.score = score
+
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        id: str | None = None,
+        classes: str | None = None,
+        disabled: bool = False,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes, disabled=disabled)
+        self._entries: list[TrajectoryPickerEntry] = []
+        self._entry_by_id: dict[str, TrajectoryPickerEntry] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="Search by id / status / agent...", id="trajectory-search")
+        yield OptionList(id="trajectory-list")
+        yield Static(
+            "Enter show | g mark/unmark | 0-5 score | r refresh | e export | esc close",
+            id="trajectory-hint",
+        )
+
+    def show(self, entries: list[TrajectoryPickerEntry]) -> None:
+        self._entries = entries
+        self._entry_by_id = {entry.trace_id: entry for entry in entries}
+        self.add_class("visible")
+        self._populate_list("")
+        search_input = self.query_one("#trajectory-search", Input)
+        search_input.value = ""
+        search_input.focus()
+
+    def hide(self) -> None:
+        self.remove_class("visible")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._populate_list(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        option_list = self.query_one("#trajectory-list", OptionList)
+        idx = option_list.highlighted
+        if idx is None or idx < 0 or idx >= option_list.option_count:
+            return
+        option = option_list.get_option_at_index(idx)
+        if option.id:
+            self.post_message(self.ActionSelected("show", trace_id=option.id))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        if event.option_id:
+            self.post_message(self.ActionSelected("show", trace_id=event.option_id))
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.hide()
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key in {"up", "down"}:
+            self.query_one("#trajectory-list", OptionList).focus()
+            return
+
+        if event.key == "r":
+            self.post_message(self.ActionSelected("refresh"))
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "e":
+            self.post_message(self.ActionSelected("export"))
+            event.prevent_default()
+            event.stop()
+            return
+
+        entry = self._selected_entry()
+        if entry is None:
+            return
+
+        if event.key == "g":
+            action = "unmark" if entry.is_golden else "mark"
+            self.post_message(self.ActionSelected(action, trace_id=entry.trace_id))
+            event.prevent_default()
+            event.stop()
+            return
+
+        score_map = {
+            "0": 0.0,
+            "1": 0.2,
+            "2": 0.4,
+            "3": 0.6,
+            "4": 0.8,
+            "5": 1.0,
+        }
+        if event.key in score_map:
+            self.post_message(
+                self.ActionSelected(
+                    "set_score",
+                    trace_id=entry.trace_id,
+                    score=score_map[event.key],
+                )
+            )
+            event.prevent_default()
+            event.stop()
+
+    def _selected_entry(self) -> TrajectoryPickerEntry | None:
+        option_list = self.query_one("#trajectory-list", OptionList)
+        idx = option_list.highlighted
+        if idx is None or idx < 0 or idx >= option_list.option_count:
+            return None
+        option = option_list.get_option_at_index(idx)
+        if option.id is None:
+            return None
+        return self._entry_by_id.get(option.id)
+
+    def _populate_list(self, query: str) -> None:
+        option_list = self.query_one("#trajectory-list", OptionList)
+        option_list.clear_options()
+        q = query.lower().strip()
+
+        for entry in self._entries:
+            score_text = f"{entry.score:.2f}" if entry.score is not None else "-"
+            golden = "*" if entry.is_golden else " "
+            label = (
+                f"{entry.trace_id[:12]}{golden} score={score_text} "
+                f"status={entry.status} steps={entry.steps} agent={entry.agent_name}"
+            )
+
+            haystack = f"{entry.trace_id} {entry.status} {entry.agent_name}".lower()
+            if q and q not in haystack:
+                continue
+
+            option_list.add_option(Option(label, id=entry.trace_id))
+
         if option_list.option_count > 0:
             option_list.highlighted = 0
 

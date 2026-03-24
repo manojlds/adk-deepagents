@@ -60,8 +60,12 @@ INTERACTIVE_HELP_TEXT = (
     "  /trajectories golden       List golden trajectories\n"
     "  /trajectories show <id> [--detail] Show trajectory flow (brief by default)\n"
     "  /trajectories mark <id>    Mark a trajectory as golden\n"
+    "  /trajectories unmark <id>  Remove golden mark from trajectory\n"
     "  /trajectories rate <id> <0-1> Rate a trajectory\n"
-    "  /trajectories export       Export dataset for optimization\n"
+    "  /trajectories feedback <id> <0-1> [comment] Add feedback entry\n"
+    "  /trajectories tag <id> <key> <value> Set a trajectory tag\n"
+    "  /trajectories untag <id> <key> Remove a trajectory tag\n"
+    "  /trajectories export [path] Summarize export or write JSONL dataset\n"
     "  /quit                      Exit interactive mode\n"
     "  /q                         Exit interactive mode\n"
 )
@@ -856,6 +860,25 @@ def _handle_trajectory_slash_command(
             print(f"[error] Failed to mark {resolved_trace_id[:12]}.", file=stderr)
         return "handled"
 
+    if subcommand == "unmark":
+        if len(parts) < 3:
+            print("[error] Usage: /trajectories unmark <trace_id_prefix>", file=stderr)
+            return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        if store.mark_golden(resolved_trace_id, golden=False):
+            print(f"Unmarked {resolved_trace_id[:12]} as golden.", file=stdout)
+        else:
+            print(f"[error] Failed to unmark {resolved_trace_id[:12]}.", file=stderr)
+        return "handled"
+
     if subcommand == "rate":
         if len(parts) < 4:
             print("[error] Usage: /trajectories rate <trace_id_prefix> <0-1>", file=stderr)
@@ -885,16 +908,127 @@ def _handle_trajectory_slash_command(
             print(f"[error] Failed to set score on {resolved_trace_id[:12]}.", file=stderr)
         return "handled"
 
+    if subcommand == "feedback":
+        if len(parts) < 4:
+            print(
+                "[error] Usage: /trajectories feedback <trace_id_prefix> <0-1> [comment]",
+                file=stderr,
+            )
+            return "handled"
+
+        try:
+            rating = float(parts[3])
+        except ValueError:
+            print("[error] Feedback rating must be a number between 0 and 1.", file=stderr)
+            return "handled"
+
+        if not 0.0 <= rating <= 1.0:
+            print("[error] Feedback rating must be between 0 and 1.", file=stderr)
+            return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        from adk_deepagents.optimization.trajectory import FeedbackEntry
+
+        comment = " ".join(parts[4:]).strip()
+        feedback = FeedbackEntry(source="user", rating=rating, comment=comment)
+        if store.add_feedback(resolved_trace_id, feedback):
+            print(f"Added feedback rating={rating:.2f} on {resolved_trace_id[:12]}.", file=stdout)
+        else:
+            print(f"[error] Failed to add feedback on {resolved_trace_id[:12]}.", file=stderr)
+        return "handled"
+
+    if subcommand == "tag":
+        if len(parts) < 5:
+            print("[error] Usage: /trajectories tag <trace_id_prefix> <key> <value>", file=stderr)
+            return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        key = parts[3].strip()
+        value = " ".join(parts[4:]).strip()
+        if not key or not value:
+            print("[error] Usage: /trajectories tag <trace_id_prefix> <key> <value>", file=stderr)
+            return "handled"
+
+        if store.set_tag(resolved_trace_id, key, value):
+            print(f"Set tag {key}={value} on {resolved_trace_id[:12]}.", file=stdout)
+        else:
+            print(f"[error] Failed to set tag on {resolved_trace_id[:12]}.", file=stderr)
+        return "handled"
+
+    if subcommand == "untag":
+        if len(parts) != 4:
+            print("[error] Usage: /trajectories untag <trace_id_prefix> <key>", file=stderr)
+            return "handled"
+
+        resolved_trace_id = _resolve_trajectory_id_from_prefix(
+            parts[2],
+            trace_ids=store.list_ids(),
+            stderr=stderr,
+        )
+        if resolved_trace_id is None:
+            return "handled"
+
+        key = parts[3].strip()
+        if not key:
+            print("[error] Usage: /trajectories untag <trace_id_prefix> <key>", file=stderr)
+            return "handled"
+
+        if store.remove_tag(resolved_trace_id, key):
+            print(f"Removed tag {key} from {resolved_trace_id[:12]}.", file=stdout)
+        else:
+            print(f"[error] Tag '{key}' not found on {resolved_trace_id[:12]}.", file=stderr)
+        return "handled"
+
     if subcommand == "export":
+        if len(parts) > 3:
+            print("[error] Usage: /trajectories export [path]", file=stderr)
+            return "handled"
+
+        output_path: Path | None = None
+        if len(parts) == 3:
+            output_path = Path(parts[2]).expanduser()
+
+        if output_path is None:
+            dataset = store.export_dataset()
+            if not dataset:
+                print("No trajectories to export.", file=stdout)
+                return "handled"
+
+            print(
+                f"Exported {len(dataset)} trajectory(ies):"
+                f" {sum(1 for d in dataset if d.get('is_golden'))} golden,"
+                f" {sum(1 for d in dataset if d.get('score') is not None)} scored.",
+                file=stdout,
+            )
+            print("Tip: run '/trajectories export <path>' to write JSONL.", file=stdout)
+            return "handled"
+
         dataset = store.export_dataset()
-        if not dataset:
-            print("No trajectories to export.", file=stdout)
+        golden_count = sum(1 for d in dataset if d.get("is_golden"))
+        scored_count = sum(1 for d in dataset if d.get("score") is not None)
+        try:
+            written = store.export_dataset_jsonl(output_path, dataset=dataset)
+        except OSError as exc:
+            print(f"[error] Failed to export dataset to '{output_path}': {exc}", file=stderr)
             return "handled"
 
         print(
-            f"Exported {len(dataset)} trajectory(ies):"
-            f" {sum(1 for d in dataset if d.get('is_golden'))} golden,"
-            f" {sum(1 for d in dataset if d.get('score') is not None)} scored.",
+            f"Wrote {written} trajectory(ies) to {output_path}"
+            f" ({golden_count} golden, {scored_count} scored).",
             file=stdout,
         )
         return "handled"

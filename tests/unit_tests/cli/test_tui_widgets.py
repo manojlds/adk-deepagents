@@ -28,6 +28,8 @@ from adk_deepagents.cli.tui.widgets import (
     Sidebar,
     SubmittableTextArea,
     ThemePicker,
+    TrajectoryPicker,
+    TrajectoryPickerEntry,
     _extract_at_query,
     _scan_project_files,
     invalidate_file_cache,
@@ -70,12 +72,18 @@ class TestSlashCommands:
     def test_trajectory_commands_present(self):
         cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
         assert "/trajectories" in cmd_names
+        assert any(cmd.startswith("/trajectories review") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories show <") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories show <id> --detail") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories golden") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories mark <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories unmark <") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories rate <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories feedback <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories tag <") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories untag <") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories export") for cmd, _ in SLASH_COMMANDS)
+        assert any(cmd.startswith("/trajectories export <path>") for cmd, _ in SLASH_COMMANDS)
 
     def test_descriptions_are_nonempty(self):
         for cmd, desc in SLASH_COMMANDS:
@@ -532,6 +540,39 @@ class TestAgentPickerClass:
         assert issubclass(AgentPicker, Vertical)
 
 
+class TestTrajectoryPickerClass:
+    """Test TrajectoryPicker class structure (no Textual app required)."""
+
+    def test_has_action_selected_message(self):
+        assert hasattr(TrajectoryPicker, "ActionSelected")
+
+    def test_action_selected_message(self):
+        msg = TrajectoryPicker.ActionSelected("set_score", trace_id="abc", score=0.8)
+        assert msg.action == "set_score"
+        assert msg.trace_id == "abc"
+        assert msg.score == 0.8
+
+    def test_default_css_exists(self):
+        assert TrajectoryPicker.DEFAULT_CSS is not None
+        assert isinstance(TrajectoryPicker.DEFAULT_CSS, str)
+
+    def test_entry_dataclass(self):
+        entry = TrajectoryPickerEntry(
+            trace_id="abc",
+            status="ok",
+            agent_name="demo",
+            steps=2,
+            score=0.7,
+            is_golden=True,
+        )
+        assert entry.trace_id == "abc"
+        assert entry.status == "ok"
+        assert entry.agent_name == "demo"
+        assert entry.steps == 2
+        assert entry.score == 0.7
+        assert entry.is_golden is True
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: Sidebar tests
 # ---------------------------------------------------------------------------
@@ -597,6 +638,10 @@ class TestPhase4PaletteItems:
     def test_sidebar_toggle_action_present(self):
         actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
         assert "sidebar_toggle" in actions
+
+    def test_trajectory_picker_action_present(self):
+        actions = {item.action for item in DEFAULT_PALETTE_ITEMS}
+        assert "trajectory_picker" in actions
 
 
 # ---------------------------------------------------------------------------

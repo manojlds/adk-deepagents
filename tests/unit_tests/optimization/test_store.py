@@ -288,6 +288,24 @@ class TestStoreAnnotation:
         store = TrajectoryStore(tmp_path / "store")
         assert store.set_tag("missing", "k", "v") is False
 
+    def test_remove_tag(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        store.save(_sample_trajectory(tags={"env": "production"}))
+
+        assert store.remove_tag("abc123", "env") is True
+        loaded = store.load("abc123")
+        assert loaded is not None
+        assert "env" not in loaded.tags
+
+    def test_remove_tag_missing_key(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        store.save(_sample_trajectory(tags={"env": "production"}))
+        assert store.remove_tag("abc123", "missing") is False
+
+    def test_remove_tag_missing_trajectory(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        assert store.remove_tag("missing", "env") is False
+
     def test_add_feedback(self, tmp_path):
         store = TrajectoryStore(tmp_path / "store")
         store.save(_sample_trajectory())
@@ -443,3 +461,29 @@ class TestStoreExport:
     def test_export_empty_store(self, tmp_path):
         store = TrajectoryStore(tmp_path / "store")
         assert store.export_dataset() == []
+
+    def test_export_jsonl_writes_filtered_dataset(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        store.save(_sample_trajectory("t1", score=0.9, is_golden=True))
+        store.save(_sample_trajectory("t2", score=0.2, is_golden=False))
+
+        out_path = tmp_path / "exports" / "dataset.jsonl"
+        written = store.export_dataset_jsonl(out_path, min_score=0.5)
+
+        assert written == 1
+        assert out_path.exists()
+        lines = out_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        row = json.loads(lines[0])
+        assert row["trace_id"] == "t1"
+        assert row["score"] == 0.9
+
+    def test_export_jsonl_empty_store_creates_empty_file(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        out_path = tmp_path / "exports" / "dataset.jsonl"
+
+        written = store.export_dataset_jsonl(out_path)
+
+        assert written == 0
+        assert out_path.exists()
+        assert out_path.read_text(encoding="utf-8") == ""

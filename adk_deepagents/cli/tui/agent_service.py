@@ -25,6 +25,7 @@ from adk_deepagents.cli.interactive import (
     _format_approval_args_preview,
     _format_model_name,
     _InteractiveApprovalContext,
+    _merge_ingested_trajectory,
     _ModelCommandContext,
     _ThreadCommandContext,
     _ToolConfirmationRequest,
@@ -478,6 +479,64 @@ def _generate_unified_diff(
     return "".join(diff_lines).rstrip()
 
 
+@dataclass(frozen=True)
+class TrajectorySummary:
+    """Lightweight trajectory metadata for TUI review overlays."""
+
+    trace_id: str
+    status: str
+    agent_name: str
+    steps: int
+    score: float | None
+    is_golden: bool
+    start_time_ns: int
+
+
+def _load_trajectory_summaries(
+    *,
+    trajectories_dir: Path,
+    otel_traces_path: Path | None,
+    sync_from_otel: bool,
+) -> list[TrajectorySummary]:
+    """Load trajectory summaries, optionally syncing from OTEL traces first."""
+    from adk_deepagents.optimization.store import TrajectoryStore
+
+    store = TrajectoryStore(trajectories_dir)
+
+    if sync_from_otel and otel_traces_path is not None and otel_traces_path.exists():
+        from adk_deepagents.telemetry.trace_reader import read_traces_file
+
+        new_trajectories = read_traces_file(otel_traces_path)
+        for traj in new_trajectories:
+            existing = store.load(traj.trace_id)
+            if existing is None:
+                store.save(traj)
+            else:
+                merged, changed = _merge_ingested_trajectory(existing, traj)
+                if changed:
+                    store.save(merged)
+
+    summaries: list[TrajectorySummary] = []
+    for trace_id in store.list_ids():
+        trajectory = store.load(trace_id)
+        if trajectory is None:
+            continue
+        summaries.append(
+            TrajectorySummary(
+                trace_id=trajectory.trace_id,
+                status=trajectory.status,
+                agent_name=trajectory.agent_name or "-",
+                steps=len(trajectory.steps),
+                score=trajectory.score,
+                is_golden=trajectory.is_golden,
+                start_time_ns=trajectory.start_time_ns,
+            )
+        )
+
+    summaries.sort(key=lambda item: (item.start_time_ns, item.trace_id), reverse=True)
+    return summaries
+
+
 @dataclass
 class UiUpdate:
     """Event pushed from the agent service to the TUI."""
@@ -825,6 +884,26 @@ class AgentService:
         except Exception as exc:  # noqa: BLE001
             await self.updates.put(UiUpdate(kind="error", text=f"Export error: {exc}"))
             return md
+
+    async def list_trajectory_summaries(
+        self,
+        *,
+        sync_from_otel: bool = True,
+    ) -> list[TrajectorySummary]:
+        """Return trajectory summaries for TUI trajectory review widgets."""
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
+            return []
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: _load_trajectory_summaries(
+                trajectories_dir=trajectories_dir,
+                otel_traces_path=self.otel_traces_path,
+                sync_from_otel=sync_from_otel,
+            ),
+        )
 
     async def handle_trajectory_command(self, args: str) -> None:
         """Handle /trajectories subcommands, emitting UiUpdate messages."""

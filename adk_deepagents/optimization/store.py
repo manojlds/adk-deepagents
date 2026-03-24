@@ -209,6 +209,15 @@ class TrajectoryStore:
         self.save(traj)
         return True
 
+    def remove_tag(self, trace_id: str, key: str) -> bool:
+        """Remove a tag from a trajectory. Returns False if trajectory or key is missing."""
+        traj = self.load(trace_id)
+        if traj is None or key not in traj.tags:
+            return False
+        del traj.tags[key]
+        self.save(traj)
+        return True
+
     def add_feedback(self, trace_id: str, feedback: FeedbackEntry) -> bool:
         """Append feedback to a trajectory.  Returns False if not found."""
         traj = self.load(trace_id)
@@ -263,6 +272,29 @@ class TrajectoryStore:
             dataset.append(entry)
 
         return dataset
+
+    def export_dataset_jsonl(
+        self,
+        output_path: str | Path,
+        *,
+        is_golden: bool | None = None,
+        min_score: float | None = None,
+        dataset: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Write exported dataset entries to JSONL and return the number written."""
+        rows = dataset
+        if rows is None:
+            rows = self.export_dataset(is_golden=is_golden, min_score=min_score)
+
+        path = Path(output_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with path.open("w", encoding="utf-8") as handle:
+            for entry in rows:
+                handle.write(json.dumps(entry, ensure_ascii=False))
+                handle.write("\n")
+
+        return len(rows)
 
 
 def _make_index_entry(data: dict[str, Any]) -> dict[str, Any]:
