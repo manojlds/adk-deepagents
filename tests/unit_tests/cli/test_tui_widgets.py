@@ -85,6 +85,11 @@ class TestSlashCommands:
         assert any(cmd.startswith("/trajectories export") for cmd, _ in SLASH_COMMANDS)
         assert any(cmd.startswith("/trajectories export <path>") for cmd, _ in SLASH_COMMANDS)
 
+    def test_optimize_commands_present(self):
+        cmd_names = {cmd.split()[0] for cmd, _ in SLASH_COMMANDS}
+        assert "/optimize" in cmd_names
+        assert any(cmd.startswith("/optimize gepa") for cmd, _ in SLASH_COMMANDS)
+
     def test_descriptions_are_nonempty(self):
         for cmd, desc in SLASH_COMMANDS:
             assert desc.strip(), f"Empty description for {cmd}"

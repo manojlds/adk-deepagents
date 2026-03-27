@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shlex
+import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -47,6 +50,10 @@ INTERACTIVE_INTERRUPT_ON: dict[str, bool] = {
 }
 MAX_APPROVAL_ARGS_PREVIEW = 400
 MAX_TRAJECTORY_TEXT_PREVIEW = 1200
+DEFAULT_GEPA_EXPORTS_DIRNAME = "exports"
+DEFAULT_GEPA_DATASET_FILENAME = "gepa_dataset.jsonl"
+DEFAULT_GEPA_OUTPUT_FILENAME = "gepa_optimized_prompt.txt"
+GEPA_COMMAND_TEMPLATE_ENV_VAR = "ADK_GEPA_OPTIMIZE_CMD"
 INTERACTIVE_HELP_TEXT = (
     "Interactive commands:\n"
     "  /help                      Show this help message\n"
@@ -66,6 +73,7 @@ INTERACTIVE_HELP_TEXT = (
     "  /trajectories tag <id> <key> <value> Set a trajectory tag\n"
     "  /trajectories untag <id> <key> Remove a trajectory tag\n"
     "  /trajectories export [path] Summarize export or write JSONL dataset\n"
+    "  /optimize gepa [dataset_path] [--out <path>] [--golden-only] [--min-score <0-1>] [--run]\n"
     "  /quit                      Exit interactive mode\n"
     "  /q                         Exit interactive mode\n"
 )
@@ -739,6 +747,243 @@ def _render_trajectory_details(
             )
 
 
+def _print_optimize_gepa_usage(*, stream: TextIO) -> None:
+    print(
+        "Usage: /optimize gepa [dataset_path] [--out <path>] "
+        "[--golden-only] [--min-score <0-1>] [--run]",
+        file=stream,
+    )
+    print(
+        f"Optional: set {GEPA_COMMAND_TEMPLATE_ENV_VAR} to override the GEPA command template.",
+        file=stream,
+    )
+
+
+@dataclass(frozen=True)
+class _GepaOptimizeOptions:
+    """Parsed options for `/optimize gepa`."""
+
+    dataset_path: Path
+    output_path: Path
+    run: bool
+    is_golden: bool | None
+    min_score: float | None
+
+
+def _parse_gepa_optimize_options(
+    tokens: list[str],
+    *,
+    trajectories_dir: Path,
+    stderr: TextIO,
+) -> _GepaOptimizeOptions | None:
+    dataset_path: Path | None = None
+    output_path: Path | None = None
+    run = False
+    is_golden: bool | None = None
+    min_score: float | None = None
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--run":
+            run = True
+            index += 1
+            continue
+
+        if token == "--golden-only":
+            is_golden = True
+            index += 1
+            continue
+
+        if token == "--min-score":
+            index += 1
+            if index >= len(tokens):
+                print("[error] --min-score requires a value between 0 and 1.", file=stderr)
+                return None
+            try:
+                min_score = float(tokens[index])
+            except ValueError:
+                print("[error] --min-score must be a number between 0 and 1.", file=stderr)
+                return None
+            if not 0.0 <= min_score <= 1.0:
+                print("[error] --min-score must be between 0 and 1.", file=stderr)
+                return None
+            index += 1
+            continue
+
+        if token == "--out":
+            index += 1
+            if index >= len(tokens):
+                print("[error] --out requires a file path.", file=stderr)
+                return None
+            output_path = Path(tokens[index]).expanduser()
+            index += 1
+            continue
+
+        if token.startswith("--"):
+            print(f"[error] Unknown /optimize gepa option: {token}", file=stderr)
+            return None
+
+        if dataset_path is not None:
+            print("[error] Only one dataset_path may be provided.", file=stderr)
+            return None
+
+        dataset_path = Path(token).expanduser()
+        index += 1
+
+    exports_dir = trajectories_dir / DEFAULT_GEPA_EXPORTS_DIRNAME
+    resolved_dataset_path = dataset_path or (exports_dir / DEFAULT_GEPA_DATASET_FILENAME)
+    resolved_output_path = output_path or (exports_dir / DEFAULT_GEPA_OUTPUT_FILENAME)
+
+    return _GepaOptimizeOptions(
+        dataset_path=resolved_dataset_path,
+        output_path=resolved_output_path,
+        run=run,
+        is_golden=is_golden,
+        min_score=min_score,
+    )
+
+
+def _build_gepa_command(
+    *,
+    dataset_path: Path,
+    output_path: Path,
+) -> tuple[list[str], str]:
+    template = os.environ.get(GEPA_COMMAND_TEMPLATE_ENV_VAR, "").strip()
+    if not template:
+        template = "gepa optimize --dataset {dataset} --out {output}"
+
+    try:
+        command_text = template.format(dataset=str(dataset_path), output=str(output_path))
+    except KeyError as exc:
+        missing = str(exc.args[0]) if exc.args else "?"
+        raise ValueError(
+            f"{GEPA_COMMAND_TEMPLATE_ENV_VAR} may only use {{dataset}} and {{output}}; "
+            f"unknown placeholder '{{{missing}}}'."
+        ) from exc
+
+    try:
+        command_args = shlex.split(command_text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {GEPA_COMMAND_TEMPLATE_ENV_VAR}: {exc}") from exc
+
+    if not command_args:
+        raise ValueError(f"{GEPA_COMMAND_TEMPLATE_ENV_VAR} resolved to an empty command.")
+
+    display = " ".join(shlex.quote(part) for part in command_args)
+    return command_args, display
+
+
+def _handle_optimize_slash_command(
+    raw_command: str,
+    *,
+    trajectories_dir: Path,
+    stdout: TextIO,
+    stderr: TextIO,
+) -> SlashCommandResult:
+    """Handle `/optimize` subcommands."""
+    from adk_deepagents.optimization.store import TrajectoryStore
+
+    try:
+        parts = shlex.split(raw_command)
+    except ValueError as exc:
+        print(f"[error] Failed to parse /optimize command: {exc}", file=stderr)
+        _print_optimize_gepa_usage(stream=stderr)
+        return "handled"
+
+    if len(parts) == 1:
+        _print_optimize_gepa_usage(stream=stdout)
+        return "handled"
+
+    target = parts[1].lower()
+    if target != "gepa":
+        print(f"[error] Unknown /optimize target: {target}.", file=stderr)
+        _print_optimize_gepa_usage(stream=stderr)
+        return "handled"
+
+    options = _parse_gepa_optimize_options(
+        parts[2:],
+        trajectories_dir=trajectories_dir,
+        stderr=stderr,
+    )
+    if options is None:
+        _print_optimize_gepa_usage(stream=stderr)
+        return "handled"
+
+    store = TrajectoryStore(trajectories_dir)
+    dataset = store.export_dataset(is_golden=options.is_golden, min_score=options.min_score)
+    if not dataset:
+        print("No trajectories matched the selected filters; nothing exported.", file=stdout)
+        return "handled"
+
+    golden_count = sum(1 for entry in dataset if entry.get("is_golden"))
+    scored_count = sum(1 for entry in dataset if entry.get("score") is not None)
+    try:
+        written = store.export_dataset_jsonl(options.dataset_path, dataset=dataset)
+    except OSError as exc:
+        print(
+            f"[error] Failed to write GEPA dataset to '{options.dataset_path}': {exc}", file=stderr
+        )
+        return "handled"
+
+    print(
+        f"Wrote {written} GEPA row(s) to {options.dataset_path} "
+        f"({golden_count} golden, {scored_count} scored).",
+        file=stdout,
+    )
+
+    try:
+        command_args, command_display = _build_gepa_command(
+            dataset_path=options.dataset_path,
+            output_path=options.output_path,
+        )
+    except ValueError as exc:
+        print(f"[error] {exc}", file=stderr)
+        return "handled"
+
+    print(f"GEPA command: {command_display}", file=stdout)
+
+    if not options.run:
+        print("Tip: rerun with --run to execute GEPA now.", file=stdout)
+        return "handled"
+
+    print("Running GEPA optimization...", file=stdout)
+    try:
+        result = subprocess.run(
+            command_args,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except FileNotFoundError:
+        executable = command_args[0]
+        print(
+            f"[error] Failed to execute GEPA command; executable '{executable}' was not found.",
+            file=stderr,
+        )
+        return "handled"
+    except OSError as exc:
+        print(f"[error] Failed to execute GEPA command: {exc}", file=stderr)
+        return "handled"
+
+    if result.stdout.strip():
+        print("GEPA stdout:", file=stdout)
+        for line in result.stdout.splitlines():
+            print(f"  {line}", file=stdout)
+
+    if result.stderr.strip():
+        print("GEPA stderr:", file=stderr)
+        for line in result.stderr.splitlines():
+            print(f"  {line}", file=stderr)
+
+    if result.returncode != 0:
+        print(f"[error] GEPA exited with code {result.returncode}.", file=stderr)
+        return "handled"
+
+    print(f"GEPA completed successfully. Output target: {options.output_path}", file=stdout)
+    return "handled"
+
+
 def _handle_trajectory_slash_command(
     raw_command: str,
     *,
@@ -1125,6 +1370,20 @@ def handle_slash_command(
             command,
             trajectories_dir=trajectories_dir,
             otel_traces_path=otel_traces_path,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    if command_lower == "/optimize" or command_lower.startswith("/optimize "):
+        if trajectories_dir is None:
+            print(
+                "[error] Optimization commands require an available trajectory store.", file=stderr
+            )
+            return "handled"
+
+        return _handle_optimize_slash_command(
+            command,
+            trajectories_dir=trajectories_dir,
             stdout=stdout,
             stderr=stderr,
         )

@@ -534,8 +534,15 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/trajectories feedback <id> <0-1> [comment]", "Add feedback entry"),
     ("/trajectories tag <id> <key> <value>", "Set trajectory tag"),
     ("/trajectories untag <id> <key>", "Remove trajectory tag"),
+    ("/trajectories evaluate <id>", "Evaluate trajectory with LLM judge"),
+    ("/trajectories replay <id>", "Replay trajectory with current config"),
     ("/trajectories export", "Summarize optimization dataset"),
     ("/trajectories export <path>", "Write optimization dataset JSONL"),
+    (
+        "/optimize gepa [dataset_path] [--out <path>] [--golden-only] [--min-score <0-1>] [--run]",
+        "Prepare/run GEPA optimization",
+    ),
+    ("/optimize loop [--golden-only] [--max-iter N]", "Run optimization loop"),
     ("/quit", "Exit the TUI"),
 ]
 
@@ -1597,7 +1604,7 @@ class TrajectoryPicker(Vertical):
         yield Input(placeholder="Search by id / status / agent...", id="trajectory-search")
         yield OptionList(id="trajectory-list")
         yield Static(
-            "Enter show | g mark/unmark | 0-5 score | r refresh | e export | esc close",
+            "Enter show | v eval | p replay | g golden | 0-5 score | r refresh | e export | esc close",
             id="trajectory-hint",
         )
 
@@ -1656,6 +1663,18 @@ class TrajectoryPicker(Vertical):
 
         entry = self._selected_entry()
         if entry is None:
+            return
+
+        if event.key == "v":
+            self.post_message(self.ActionSelected("evaluate", trace_id=entry.trace_id))
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "p":
+            self.post_message(self.ActionSelected("replay", trace_id=entry.trace_id))
+            event.prevent_default()
+            event.stop()
             return
 
         if event.key == "g":

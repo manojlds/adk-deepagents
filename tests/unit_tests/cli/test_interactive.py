@@ -219,6 +219,7 @@ def test_handle_slash_command_help_prints_usage() -> None:
     assert "/trajectories feedback" in out.getvalue()
     assert "/trajectories tag" in out.getvalue()
     assert "/trajectories untag" in out.getvalue()
+    assert "/optimize gepa" in out.getvalue()
     assert "--detail" in out.getvalue()
     assert err.getvalue() == ""
 
@@ -860,6 +861,133 @@ def test_handle_trajectory_unmark_usage_error(tmp_path: Path) -> None:
 
     assert result == "handled"
     assert "Usage: /trajectories unmark <trace_id_prefix>" in err.getvalue()
+
+
+def test_handle_optimize_gepa_exports_dataset_and_prints_command(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", score=0.8, is_golden=True))
+
+    out = io.StringIO()
+    err = io.StringIO()
+    result = repl.handle_slash_command(
+        "/optimize gepa",
+        stdout=out,
+        stderr=err,
+        trajectories_dir=store_dir,
+    )
+
+    assert result == "handled"
+    dataset_path = store_dir / "exports" / "gepa_dataset.jsonl"
+    assert dataset_path.exists()
+    lines = dataset_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["trace_id"] == "abc123"
+
+    rendered_out = out.getvalue()
+    assert "Wrote 1 GEPA row(s)" in rendered_out
+    assert "GEPA command:" in rendered_out
+    assert "Tip: rerun with --run to execute GEPA now." in rendered_out
+    assert err.getvalue() == ""
+
+
+def test_handle_optimize_gepa_supports_filters_and_custom_paths(tmp_path: Path) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="golden", score=0.9, is_golden=True))
+    store.save(Trajectory(trace_id="other", score=0.2, is_golden=False))
+
+    dataset_path = tmp_path / "dataset" / "filtered.jsonl"
+    output_path = tmp_path / "dataset" / "optimized.txt"
+
+    out = io.StringIO()
+    err = io.StringIO()
+    result = repl.handle_slash_command(
+        f"/optimize gepa {dataset_path} --golden-only --min-score 0.8 --out {output_path}",
+        stdout=out,
+        stderr=err,
+        trajectories_dir=store_dir,
+    )
+
+    assert result == "handled"
+    assert dataset_path.exists()
+    lines = dataset_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["trace_id"] == "golden"
+    assert str(output_path) in out.getvalue()
+    assert err.getvalue() == ""
+
+
+def test_handle_optimize_gepa_run_executes_command(tmp_path: Path, monkeypatch) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", score=0.7, is_golden=True))
+
+    monkeypatch.setenv(
+        repl.GEPA_COMMAND_TEMPLATE_ENV_VAR,
+        "gepa optimize --dataset {dataset} --out {output}",
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _Result:
+        returncode = 0
+        stdout = "optimization complete"
+        stderr = ""
+
+    def _fake_run(args: list[str], **kwargs: Any) -> _Result:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return _Result()
+
+    monkeypatch.setattr(repl.subprocess, "run", _fake_run)
+
+    out = io.StringIO()
+    err = io.StringIO()
+    result = repl.handle_slash_command(
+        "/optimize gepa --run",
+        stdout=out,
+        stderr=err,
+        trajectories_dir=store_dir,
+    )
+
+    assert result == "handled"
+    command_args = cast(list[str], captured["args"])
+    assert command_args[0] == "gepa"
+    assert "--dataset" in command_args
+    assert "--out" in command_args
+    assert cast(dict[str, Any], captured["kwargs"])["capture_output"] is True
+
+    rendered_out = out.getvalue()
+    assert "Running GEPA optimization..." in rendered_out
+    assert "GEPA stdout:" in rendered_out
+    assert "GEPA completed successfully." in rendered_out
+    assert err.getvalue() == ""
+
+
+def test_handle_optimize_gepa_run_missing_executable(tmp_path: Path, monkeypatch) -> None:
+    store_dir = tmp_path / "trajectories"
+    store = TrajectoryStore(store_dir)
+    store.save(Trajectory(trace_id="abc123", score=0.7, is_golden=True))
+
+    def _raise(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(repl.subprocess, "run", _raise)
+
+    out = io.StringIO()
+    err = io.StringIO()
+    result = repl.handle_slash_command(
+        "/optimize gepa --run",
+        stdout=out,
+        stderr=err,
+        trajectories_dir=store_dir,
+    )
+
+    assert result == "handled"
+    assert "Failed to execute GEPA command" in err.getvalue()
 
 
 def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:

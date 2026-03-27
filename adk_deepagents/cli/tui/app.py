@@ -658,6 +658,10 @@ class DeepAgentTui(App[None]):
         if value == "/trajectories review":
             self.run_worker(self._open_trajectory_picker(sync_from_otel=True))
             return
+        if value.startswith("/optimize loop") or value == "/optimize loop":
+            args = value[len("/optimize loop") :].strip()
+            self.run_worker(self._service.handle_optimize_loop_command(args))
+            return
         if value == "/trajectories" or value.startswith("/trajectories "):
             args = value[len("/trajectories") :].strip()
             self.run_worker(self._service.handle_trajectory_command(args))
@@ -712,6 +716,16 @@ class DeepAgentTui(App[None]):
         if event.action == "show":
             picker.hide()
             self.run_worker(self._service.handle_trajectory_command(f"show {trace_prefix}"))
+            return
+
+        if event.action == "evaluate":
+            picker.hide()
+            self.run_worker(self._service.handle_evaluate_command(trace_prefix))
+            return
+
+        if event.action == "replay":
+            picker.hide()
+            self.run_worker(self._service.handle_replay_command(trace_prefix))
             return
 
         if event.action == "mark":
