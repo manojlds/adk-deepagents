@@ -548,3 +548,94 @@ python -m examples.browser_skill.agent
 # Or with ADK CLI
 adk run examples/browser_skill/
 ```
+
+---
+
+## Optimization Loop
+
+**Location:** `examples/optimization_loop/`
+
+Demonstrates the full self-improving agent cycle: seed runs → LLM evaluation →
+autoresearch optimization loop with prompt improvement.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│  1. SEED RUNS                                        │
+│     Run agent on test prompts → baseline trajectories │
+├──────────────────────────────────────────────────────┤
+│  2. OPTIMIZATION LOOP (repeats N iterations)         │
+│     ┌─────────────┐  ┌────────────┐  ┌────────────┐ │
+│     │ Replay each │→ │ LLM Judge  │→ │ Reflector  │ │
+│     │ prompt with │  │ scores on  │  │ suggests   │ │
+│     │ current     │  │ completion,│  │ prompt     │ │
+│     │ config      │  │ efficiency,│  │ changes    │ │
+│     │             │  │ tool usage │  │            │ │
+│     └─────────────┘  └────────────┘  └────────────┘ │
+│                                           ↓          │
+│                                  Auto-apply prompt   │
+│                                  changes, iterate    │
+├──────────────────────────────────────────────────────┤
+│  3. RESULTS                                          │
+│     Score progression, optimized instruction,        │
+│     applied + manual suggestions                     │
+└──────────────────────────────────────────────────────┘
+```
+
+### Features Demonstrated
+
+| Feature | How |
+|---|---|
+| Evaluator (LLM judge) | Scores trajectories on task_completion, efficiency, tool_usage |
+| Replay | Re-executes prompts with current agent config |
+| User simulator | LLM-backed follow-up generator for multi-turn conversations |
+| Tool approval | Auto-approve during replay |
+| Optimization loop | Iterates replay → evaluate → reflect → apply |
+
+### Key Code
+
+```python
+from adk_deepagents import create_deep_agent
+from adk_deepagents.optimization import (
+    BuiltAgent,
+    OptimizationCandidate,
+    ReplayConfig,
+    run_optimization_loop,
+)
+
+# Agent builder that applies candidate config changes.
+def agent_factory(candidate):
+    agent = create_deep_agent(**{**candidate.agent_kwargs, "model": model})
+    return BuiltAgent(agent=agent)
+
+# Run the loop.
+result = await run_optimization_loop(
+    trajectories=seed_trajectories,
+    base_candidate=OptimizationCandidate(agent_kwargs=base_kwargs),
+    agent_builder_factory=agent_factory,
+    evaluator_model=model,
+    replay_config=ReplayConfig(
+        tool_approval="auto_approve",
+        user_simulator=build_user_simulator(model),
+    ),
+    max_iterations=2,
+    apply_mode="prompt_and_skills",
+)
+
+print(result.best_candidate.agent_kwargs["instruction"])
+```
+
+### How to Run
+
+```bash
+# With Google AI
+GOOGLE_API_KEY=... uv run python examples/optimization_loop/run.py
+
+# With OpenAI-compatible API
+OPENAI_API_KEY=... ADK_DEEPAGENTS_MODEL=openai/gpt-4o-mini \
+  uv run python examples/optimization_loop/run.py
+```
+
+See [Optimization & Trajectories](optimization.md) for the full TUI workflow
+and Python API reference.

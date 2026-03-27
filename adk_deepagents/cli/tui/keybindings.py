@@ -31,6 +31,7 @@ DEFAULT_KEYBINDS: dict[str, str] = {
     "agent_list": "<leader> a",
     # Conversation management
     "session_compact": "<leader> c",
+    "trajectory_picker": "<leader> r",
     "session_interrupt": "escape",
     # Navigation helpers
     "command_palette": "ctrl+p",

@@ -9,12 +9,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.widgets import Footer, Header
 
-from adk_deepagents.cli.tui.agent_service import AgentService, UiUpdate
+from adk_deepagents.cli.tui.agent_service import AgentService, TrajectorySummary, UiUpdate
 from adk_deepagents.cli.tui.keybindings import KeybindConfig, load_keybind_config
 from adk_deepagents.cli.tui.themes import (
     BUILTIN_THEMES,
@@ -32,10 +33,14 @@ from adk_deepagents.cli.tui.widgets import (
     PromptInput,
     Sidebar,
     ThemePicker,
+    TrajectoryPicker,
+    TrajectoryPickerEntry,
 )
 from adk_deepagents.types import DynamicTaskConfig
 
 log = logging.getLogger("adk_deepagents.tui.app")
+
+_NARROW_LAYOUT_WIDTH = 100
 
 
 @dataclass
@@ -78,6 +83,7 @@ def _build_bindings(kb: KeybindConfig) -> list[Binding]:
         "agent_cycle_reverse": ("Prev Agent", False),
         "agent_list": ("Agents", False),
         "session_compact": ("Compact", False),
+        "trajectory_picker": ("Trajectories", False),
         "help": ("Help", False),
         "tool_details_toggle": ("Toggle Details", False),
         "thinking_toggle": ("Toggle Thinking", False),
@@ -205,6 +211,7 @@ class DeepAgentTui(App[None]):
         # Leader-key state: when the leader key is pressed, we set this flag
         # and wait for the next key to form the full combo.
         self._leader_pressed = False
+        self._sidebar_preferred_visible = False
         # Dynamic bindings — must be set as instance attribute *after*
         # super().__init__() so Textual picks them up.
         for b in _build_bindings(self._keybind_config):
@@ -219,6 +226,7 @@ class DeepAgentTui(App[None]):
         yield CommandPalette(items=self._palette_items, id="command-palette")
         yield ThemePicker(id="theme-picker")
         yield AgentPicker(id="agent-picker")
+        yield TrajectoryPicker(id="trajectory-picker")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -233,6 +241,7 @@ class DeepAgentTui(App[None]):
 
         # Initialize sidebar with agent/model/session info.
         self._update_sidebar_info()
+        self._apply_responsive_sidebar()
 
         # Wire agent names to the prompt input for @agent autocomplete.
         self._sync_agent_names()
@@ -355,6 +364,8 @@ class DeepAgentTui(App[None]):
             self.run_worker(self._service.handle_input("/model"))
         elif action == "session_compact":
             self.run_worker(self._service.handle_input("/compact"))
+        elif action == "trajectory_picker":
+            self.run_worker(self._open_trajectory_picker(sync_from_otel=True))
         elif action == "help":
             self.run_worker(self._service.handle_input("/help"))
         elif action == "tool_details_toggle":
@@ -441,14 +452,55 @@ class DeepAgentTui(App[None]):
 
     def _do_toggle_sidebar(self) -> None:
         """Toggle the sidebar panel."""
+        if self.size.width < _NARROW_LAYOUT_WIDTH:
+            messages = self.query_one(MessageDisplay)
+            messages.add_system_message(
+                "Sidebar is hidden on narrow screens; widen terminal to show it."
+            )
+            return
+
         sidebar = self.query_one(Sidebar)
         visible = sidebar.toggle()
+        self._sidebar_preferred_visible = visible
         if visible:
             self._update_sidebar_info()
 
     async def _do_export(self) -> None:
         """Export the conversation to Markdown."""
         await self._service.export_conversation()
+
+    @staticmethod
+    def _to_trajectory_picker_entries(
+        summaries: list[TrajectorySummary],
+    ) -> list[TrajectoryPickerEntry]:
+        return [
+            TrajectoryPickerEntry(
+                trace_id=item.trace_id,
+                status=item.status,
+                agent_name=item.agent_name,
+                steps=item.steps,
+                score=item.score,
+                is_golden=item.is_golden,
+            )
+            for item in summaries
+        ]
+
+    async def _open_trajectory_picker(self, *, sync_from_otel: bool) -> None:
+        """Open the trajectory review overlay."""
+        entries = await self._service.list_trajectory_summaries(sync_from_otel=sync_from_otel)
+        picker = self.query_one(TrajectoryPicker)
+        picker.show(self._to_trajectory_picker_entries(entries))
+
+    async def _run_trajectory_picker_command(
+        self,
+        command_args: str,
+        *,
+        refresh_picker: bool = True,
+    ) -> None:
+        """Execute a trajectory command and optionally refresh the review overlay."""
+        await self._service.handle_trajectory_command(command_args)
+        if refresh_picker:
+            await self._open_trajectory_picker(sync_from_otel=False)
 
     def _update_sidebar_info(self) -> None:
         """Refresh sidebar labels and header subtitle with current agent/model/session info."""
@@ -474,6 +526,22 @@ class DeepAgentTui(App[None]):
         names = [(p.name, p.description) for p in registry.all_visible()]
         composer = self.query_one(PromptInput)
         composer.set_agent_names(names)
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Apply responsive layout adjustments when terminal size changes."""
+        self._apply_responsive_sidebar(width=event.size.width)
+
+    def _apply_responsive_sidebar(self, *, width: int | None = None) -> None:
+        """Hide sidebar automatically on narrow terminals (phone-friendly)."""
+        with suppress(Exception):
+            sidebar = self.query_one(Sidebar)
+            current_width = self.size.width if width is None else width
+            if current_width < _NARROW_LAYOUT_WIDTH:
+                sidebar.remove_class("visible")
+                return
+
+            if self._sidebar_preferred_visible:
+                sidebar.add_class("visible")
 
     # -----------------------------------------------------------------
     # UI update pump
@@ -587,6 +655,13 @@ class DeepAgentTui(App[None]):
         if value == "/export":
             self.run_worker(self._do_export())
             return
+        if value == "/trajectories review":
+            self.run_worker(self._open_trajectory_picker(sync_from_otel=True))
+            return
+        if value.startswith("/optimize loop") or value == "/optimize loop":
+            args = value[len("/optimize loop") :].strip()
+            self.run_worker(self._service.handle_optimize_loop_command(args))
+            return
         if value == "/trajectories" or value.startswith("/trajectories "):
             args = value[len("/trajectories") :].strip()
             self.run_worker(self._service.handle_trajectory_command(args))
@@ -620,6 +695,58 @@ class DeepAgentTui(App[None]):
     def on_command_palette_action_selected(self, event: CommandPalette.ActionSelected) -> None:
         """Handle command palette selection."""
         self._handle_action(event.action)
+
+    def on_trajectory_picker_action_selected(self, event: TrajectoryPicker.ActionSelected) -> None:
+        """Handle quick actions from the trajectory review overlay."""
+        picker = self.query_one(TrajectoryPicker)
+
+        if event.action == "refresh":
+            self.run_worker(self._open_trajectory_picker(sync_from_otel=True))
+            return
+
+        if event.action == "export":
+            picker.hide()
+            self.run_worker(self._service.handle_trajectory_command("export"))
+            return
+
+        if event.trace_id is None:
+            return
+
+        trace_prefix = event.trace_id[:12]
+        if event.action == "show":
+            picker.hide()
+            self.run_worker(self._service.handle_trajectory_command(f"show {trace_prefix}"))
+            return
+
+        if event.action == "evaluate":
+            picker.hide()
+            self.run_worker(self._service.handle_evaluate_command(trace_prefix))
+            return
+
+        if event.action == "replay":
+            picker.hide()
+            self.run_worker(self._service.handle_replay_command(trace_prefix))
+            return
+
+        if event.action == "mark":
+            self.run_worker(
+                self._run_trajectory_picker_command(f"mark {trace_prefix}", refresh_picker=True)
+            )
+            return
+
+        if event.action == "unmark":
+            self.run_worker(
+                self._run_trajectory_picker_command(f"unmark {trace_prefix}", refresh_picker=True)
+            )
+            return
+
+        if event.action == "set_score" and event.score is not None:
+            self.run_worker(
+                self._run_trajectory_picker_command(
+                    f"rate {trace_prefix} {event.score:.2f}",
+                    refresh_picker=True,
+                )
+            )
 
     def on_theme_picker_theme_selected(self, event: ThemePicker.ThemeSelected) -> None:
         """Handle theme selection from the picker."""

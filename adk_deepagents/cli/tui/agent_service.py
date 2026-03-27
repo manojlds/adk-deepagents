@@ -25,6 +25,7 @@ from adk_deepagents.cli.interactive import (
     _format_approval_args_preview,
     _format_model_name,
     _InteractiveApprovalContext,
+    _merge_ingested_trajectory,
     _ModelCommandContext,
     _ThreadCommandContext,
     _ToolConfirmationRequest,
@@ -478,6 +479,64 @@ def _generate_unified_diff(
     return "".join(diff_lines).rstrip()
 
 
+@dataclass(frozen=True)
+class TrajectorySummary:
+    """Lightweight trajectory metadata for TUI review overlays."""
+
+    trace_id: str
+    status: str
+    agent_name: str
+    steps: int
+    score: float | None
+    is_golden: bool
+    start_time_ns: int
+
+
+def _load_trajectory_summaries(
+    *,
+    trajectories_dir: Path,
+    otel_traces_path: Path | None,
+    sync_from_otel: bool,
+) -> list[TrajectorySummary]:
+    """Load trajectory summaries, optionally syncing from OTEL traces first."""
+    from adk_deepagents.optimization.store import TrajectoryStore
+
+    store = TrajectoryStore(trajectories_dir)
+
+    if sync_from_otel and otel_traces_path is not None and otel_traces_path.exists():
+        from adk_deepagents.telemetry.trace_reader import read_traces_file
+
+        new_trajectories = read_traces_file(otel_traces_path)
+        for traj in new_trajectories:
+            existing = store.load(traj.trace_id)
+            if existing is None:
+                store.save(traj)
+            else:
+                merged, changed = _merge_ingested_trajectory(existing, traj)
+                if changed:
+                    store.save(merged)
+
+    summaries: list[TrajectorySummary] = []
+    for trace_id in store.list_ids():
+        trajectory = store.load(trace_id)
+        if trajectory is None:
+            continue
+        summaries.append(
+            TrajectorySummary(
+                trace_id=trajectory.trace_id,
+                status=trajectory.status,
+                agent_name=trajectory.agent_name or "-",
+                steps=len(trajectory.steps),
+                score=trajectory.score,
+                is_golden=trajectory.is_golden,
+                start_time_ns=trajectory.start_time_ns,
+            )
+        )
+
+    summaries.sort(key=lambda item: (item.start_time_ns, item.trace_id), reverse=True)
+    return summaries
+
+
 @dataclass
 class UiUpdate:
     """Event pushed from the agent service to the TUI."""
@@ -826,8 +885,427 @@ class AgentService:
             await self.updates.put(UiUpdate(kind="error", text=f"Export error: {exc}"))
             return md
 
+    async def list_trajectory_summaries(
+        self,
+        *,
+        sync_from_otel: bool = True,
+    ) -> list[TrajectorySummary]:
+        """Return trajectory summaries for TUI trajectory review widgets."""
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
+            return []
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: _load_trajectory_summaries(
+                trajectories_dir=trajectories_dir,
+                otel_traces_path=self.otel_traces_path,
+                sync_from_otel=sync_from_otel,
+            ),
+        )
+
+    async def handle_evaluate_command(self, args: str) -> None:
+        """Evaluate a trajectory with the LLM judge."""
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
+            await self.updates.put(UiUpdate(kind="error", text="Trajectory store is unavailable."))
+            return
+
+        parts = args.split()
+        if not parts:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text="Usage: /trajectories evaluate <trace_id_prefix>",
+                )
+            )
+            return
+
+        trace_prefix = parts[0]
+
+        from adk_deepagents.optimization.store import TrajectoryStore
+
+        store = TrajectoryStore(trajectories_dir)
+        all_ids = store.list_ids()
+        matches = [tid for tid in all_ids if tid.startswith(trace_prefix)]
+        if not matches:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=f"No trajectory matching '{trace_prefix}'.",
+                )
+            )
+            return
+        if len(matches) > 1:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=(
+                        f"Ambiguous prefix '{trace_prefix}', "
+                        f"matches: {len(matches)}. Be more specific."
+                    ),
+                )
+            )
+            return
+
+        trace_id = matches[0]
+        trajectory = store.load(trace_id)
+        if trajectory is None:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=f"Failed to load trajectory '{trace_id[:12]}'.",
+                )
+            )
+            return
+
+        await self.updates.put(UiUpdate(kind="system", text=f"Evaluating {trace_id[:12]}..."))
+
+        try:
+            from adk_deepagents.optimization.evaluator import (
+                evaluate_trajectory,
+            )
+
+            model = self.model or "gemini-2.5-flash"
+            feedback = await evaluate_trajectory(trajectory, model=model)
+        except Exception as exc:  # noqa: BLE001
+            await self.updates.put(UiUpdate(kind="error", text=f"Evaluation failed: {exc}"))
+            return
+
+        # Save feedback and score.
+        store.add_feedback(trace_id, feedback)
+        if feedback.rating is not None:
+            store.set_score(trace_id, feedback.rating)
+
+        # Display results.
+        score_str = f"{feedback.rating:.3f}" if feedback.rating is not None else "N/A"
+        await self.updates.put(UiUpdate(kind="system", text=f"Score: {score_str}"))
+        await self.updates.put(UiUpdate(kind="system", text=f"Summary: {feedback.comment}"))
+
+        criteria = feedback.metadata.get("criteria", [])
+        for c in criteria:
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=(f"  {c['name']}: {c['score']:.2f} — {c['reasoning'][:100]}"),
+                )
+            )
+
+        strengths = feedback.metadata.get("strengths", [])
+        if strengths:
+            await self.updates.put(UiUpdate(kind="system", text="Strengths:"))
+            for s in strengths:
+                await self.updates.put(UiUpdate(kind="system", text=f"  + {s}"))
+
+        issues = feedback.metadata.get("issues", [])
+        if issues:
+            await self.updates.put(UiUpdate(kind="system", text="Issues:"))
+            for issue in issues:
+                await self.updates.put(UiUpdate(kind="system", text=f"  - {issue}"))
+
+    async def handle_replay_command(self, args: str) -> None:
+        """Replay a trajectory with the current agent configuration."""
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
+            await self.updates.put(UiUpdate(kind="error", text="Trajectory store is unavailable."))
+            return
+
+        parts = args.split()
+        if not parts:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text="Usage: /trajectories replay <trace_id_prefix>",
+                )
+            )
+            return
+
+        trace_prefix = parts[0]
+
+        from adk_deepagents.optimization.store import TrajectoryStore
+
+        store = TrajectoryStore(trajectories_dir)
+        all_ids = store.list_ids()
+        matches = [tid for tid in all_ids if tid.startswith(trace_prefix)]
+        if not matches:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=f"No trajectory matching '{trace_prefix}'.",
+                )
+            )
+            return
+        if len(matches) > 1:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=(f"Ambiguous prefix '{trace_prefix}', matches: {len(matches)}."),
+                )
+            )
+            return
+
+        trace_id = matches[0]
+        trajectory = store.load(trace_id)
+        if trajectory is None:
+            await self.updates.put(
+                UiUpdate(
+                    kind="error",
+                    text=f"Failed to load trajectory '{trace_id[:12]}'.",
+                )
+            )
+            return
+
+        await self.updates.put(UiUpdate(kind="system", text=f"Replaying {trace_id[:12]}..."))
+
+        try:
+            from adk_deepagents import create_deep_agent
+            from adk_deepagents.optimization.replay import (
+                BuiltAgent,
+                ReplayConfig,
+                replay_trajectory,
+            )
+
+            model = self.model or "gemini-2.5-flash"
+
+            def builder() -> BuiltAgent:
+                agent = create_deep_agent(
+                    model=model,
+                    name=self.agent_name,
+                    instruction=None,
+                    execution="local",
+                    memory=(list(self.memory_sources) if self.memory_sources else None),
+                    skills=(list(self.skills_dirs) if self.skills_dirs else None),
+                )
+                return BuiltAgent(agent=agent)
+
+            config = ReplayConfig(tool_approval="auto_approve")
+            result = await replay_trajectory(
+                trajectory,
+                agent_builder=builder,
+                config=config,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self.updates.put(UiUpdate(kind="error", text=f"Replay failed: {exc}"))
+            return
+
+        # Save replay trajectory.
+        if result.replay_trajectory is not None:
+            store.save(result.replay_trajectory)
+            store.set_tag(
+                result.replay_trajectory.trace_id,
+                "optimization_role",
+                "replay",
+            )
+            store.set_tag(
+                result.replay_trajectory.trace_id,
+                "optimization_parent_trace_id",
+                trace_id,
+            )
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=(f"Replay saved: {result.replay_trajectory.trace_id[:12]}"),
+                )
+            )
+
+        # Display results.
+        await self.updates.put(
+            UiUpdate(
+                kind="system",
+                text=f"Turns: {len(result.per_turn_outputs)}",
+            )
+        )
+        await self.updates.put(UiUpdate(kind="system", text=f"Events: {len(result.events)}"))
+        for i, turn_output in enumerate(result.per_turn_outputs):
+            preview = turn_output[:200].replace("\n", " ")
+            await self.updates.put(UiUpdate(kind="system", text=f"  Turn {i + 1}: {preview}"))
+
+    async def handle_optimize_loop_command(self, args: str) -> None:
+        """Run the optimization loop on stored trajectories."""
+        trajectories_dir = self.trajectories_dir
+        if trajectories_dir is None:
+            await self.updates.put(UiUpdate(kind="error", text="Trajectory store is unavailable."))
+            return
+
+        # Parse arguments.
+        parts = args.split()
+        golden_only = "--golden-only" in parts
+        max_iter = 2
+        for i, p in enumerate(parts):
+            if p == "--max-iter" and i + 1 < len(parts):
+                try:
+                    max_iter = int(parts[i + 1])
+                except ValueError:
+                    await self.updates.put(
+                        UiUpdate(
+                            kind="error",
+                            text="--max-iter must be an integer.",
+                        )
+                    )
+                    return
+
+        from adk_deepagents.optimization.store import TrajectoryStore
+
+        store = TrajectoryStore(trajectories_dir)
+
+        # Get trajectories.
+        if golden_only:
+            trajs = store.list_trajectories(is_golden=True)
+        else:
+            trajs = store.list_trajectories()
+
+        if not trajs:
+            label = "golden trajectories" if golden_only else "trajectories"
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=(
+                        f"No {label} found. Use /trajectories mark <id>"
+                        " to mark golden trajectories first."
+                    ),
+                )
+            )
+            return
+
+        await self.updates.put(
+            UiUpdate(
+                kind="system",
+                text=(
+                    f"Starting optimization loop: {len(trajs)}"
+                    f" trajectories, max {max_iter} iterations"
+                ),
+            )
+        )
+
+        try:
+            from adk_deepagents import create_deep_agent
+            from adk_deepagents.optimization import (
+                BuiltAgent,
+                OptimizationCandidate,
+                ReplayConfig,
+                run_optimization_loop,
+            )
+
+            model = self.model or "gemini-2.5-flash"
+
+            base_kwargs: dict[str, Any] = {
+                "name": self.agent_name,
+                "execution": "local",
+            }
+            if self.memory_sources:
+                base_kwargs["memory"] = list(self.memory_sources)
+            if self.skills_dirs:
+                base_kwargs["skills"] = list(self.skills_dirs)
+
+            base_candidate = OptimizationCandidate(
+                agent_kwargs=base_kwargs,
+            )
+
+            def agent_builder_factory(
+                candidate: OptimizationCandidate,
+            ) -> BuiltAgent:
+                kwargs = {**candidate.agent_kwargs, "model": model}
+                agent = create_deep_agent(**kwargs)
+                return BuiltAgent(agent=agent)
+
+            updates_queue = self.updates
+
+            def on_iteration(iteration_result: Any) -> None:
+                it = iteration_result
+                msgs = [f"--- Iteration {it.iteration} ---"]
+                if it.average_score is not None:
+                    msgs.append(f"  Avg score: {it.average_score:.3f}")
+                if it.average_delta is not None:
+                    msgs.append(f"  Avg delta: {it.average_delta:+.3f}")
+                msgs.append(f"  Regressions: {it.regressions}")
+                for s in it.suggestions:
+                    tag = " [auto]" if s.auto_applicable else " [manual]"
+                    msgs.append(f"  • {s.kind}{tag}: {s.rationale[:80]}")
+                for msg in msgs:
+                    with suppress(Exception):
+                        updates_queue.put_nowait(UiUpdate(kind="system", text=msg))
+
+            replay_config = ReplayConfig(tool_approval="auto_approve")
+
+            result = await run_optimization_loop(
+                trajectories=trajs,
+                base_candidate=base_candidate,
+                agent_builder_factory=agent_builder_factory,
+                evaluator_model=model,
+                replay_config=replay_config,
+                store=store,
+                max_iterations=max_iter,
+                apply_mode="prompt_and_skills",
+                on_iteration=on_iteration,
+            )
+
+        except Exception as exc:  # noqa: BLE001
+            await self.updates.put(UiUpdate(kind="error", text=f"Optimization failed: {exc}"))
+            return
+
+        # Report results.
+        await self.updates.put(
+            UiUpdate(
+                kind="system",
+                text=f"Optimization complete: {result.stopped_reason}",
+            )
+        )
+        await self.updates.put(
+            UiUpdate(
+                kind="system",
+                text=f"Iterations: {len(result.iterations)}",
+            )
+        )
+
+        for it in result.iterations:
+            score = f"{it.average_score:.3f}" if it.average_score is not None else "N/A"
+            delta = f"{it.average_delta:+.3f}" if it.average_delta is not None else "N/A"
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=(f"  Iter {it.iteration}: score={score} delta={delta}"),
+                )
+            )
+
+        optimized_instruction = result.best_candidate.agent_kwargs.get("instruction", "")
+        if optimized_instruction:
+            await self.updates.put(UiUpdate(kind="system", text="Optimized instruction:"))
+            for line in optimized_instruction.split("\n"):
+                await self.updates.put(UiUpdate(kind="system", text=f"  {line}"))
+
+        all_suggestions = [s for it in result.iterations for s in it.suggestions]
+        manual = [s for s in all_suggestions if not s.auto_applicable]
+        if manual:
+            await self.updates.put(
+                UiUpdate(
+                    kind="system",
+                    text=f"Manual suggestions ({len(manual)}):",
+                )
+            )
+            for s in manual:
+                await self.updates.put(
+                    UiUpdate(
+                        kind="system",
+                        text=(f"  [{s.kind}] {s.target}: {s.proposal[:100]}"),
+                    )
+                )
+
     async def handle_trajectory_command(self, args: str) -> None:
         """Handle /trajectories subcommands, emitting UiUpdate messages."""
+        parts = args.strip().split(None, 1)
+        subcommand = parts[0] if parts else ""
+
+        if subcommand == "evaluate":
+            rest = parts[1] if len(parts) > 1 else ""
+            await self.handle_evaluate_command(rest)
+            return
+
+        if subcommand == "replay":
+            rest = parts[1] if len(parts) > 1 else ""
+            await self.handle_replay_command(rest)
+            return
+
         trajectories_dir = self.trajectories_dir
         if trajectories_dir is None:
             await self.updates.put(UiUpdate(kind="error", text="Trajectory store is unavailable."))
@@ -940,6 +1418,8 @@ class AgentService:
                 stderr=err,
                 thread_context=self._thread_context,
                 model_context=self._model_context,
+                trajectories_dir=self.trajectories_dir,
+                otel_traces_path=self.otel_traces_path,
             ),
         )
 
