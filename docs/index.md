@@ -99,6 +99,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Sub-Agent Delegation](subagents.md) | Static `AgentTool` delegation, `SubAgentSpec`, general-purpose sub-agent behavior |
 | [Skills Integration](skills.md) | Root-agent and sub-agent skills, `add_skills_tools`, prompt injection |
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
+| [Optimization & Trajectories](optimization.md) | LLM judge, trajectory replay, autoresearch optimization loop, TUI workflow |
 | [Temporal Backend](temporal.md) | Configure Temporal-backed dynamic tasks, workers, and devenv services |
 
 ## Project Structure
@@ -131,6 +132,12 @@ adk_deepagents/
 │   ├── __init__.py      # Browser module exports
 │   ├── playwright_mcp.py # Playwright MCP integration
 │   └── prompts.py       # Browser agent system prompts
+├── optimization/
+│   ├── trajectory.py    # Trajectory, AgentStep, ModelCall, ToolCall, FeedbackEntry
+│   ├── store.py         # TrajectoryStore (JSON-backed persistence)
+│   ├── evaluator.py     # LLM-based trajectory judge
+│   ├── replay.py        # Session replay with multi-turn + user simulator
+│   └── loop.py          # Autoresearch-style optimization loop
 ├── skills/
 │   └── integration.py   # adk-skills registry integration
 ├── temporal/
