@@ -262,6 +262,7 @@ async def run_example():
         BuiltAgent,
         OptimizationCandidate,
         ReplayConfig,
+        TrajectoryFilter,
         TrajectoryStore,
         run_optimization_loop,
     )
@@ -401,11 +402,25 @@ async def run_example():
         agent = create_deep_agent(**kwargs)
         return BuiltAgent(agent=agent)
 
-    # ReplayConfig with user simulator for multi-turn trajectories.
+    # ReplayConfig with user simulator and ephemeral instruction.
     replay_cfg = ReplayConfig(
         tool_approval="auto_approve",
         user_simulator=_build_user_simulator(model),
+        ephemeral_instruction=(
+            "Think step by step about what the user needs. "
+            "Focus on producing high-quality, well-structured content."
+        ),
     )
+
+    # Trajectory filter: discard empty or trivially short outputs.
+    traj_filter = TrajectoryFilter(
+        min_steps=1,
+        min_output_chars=10,
+    )
+
+    # Number of independent judge votes for majority voting.
+    # Set to 3 for production use; 1 is faster for demos.
+    num_votes = int(os.environ.get("JUDGE_VOTES", "1"))
 
     result = await run_optimization_loop(
         trajectories=seed_trajs,
@@ -417,6 +432,8 @@ async def run_example():
         max_iterations=MAX_ITERATIONS,
         apply_mode="prompt_and_skills",
         on_iteration=on_iteration,
+        trajectory_filter=traj_filter,
+        num_judge_votes=num_votes,
     )
 
     # -----------------------------------------------------------------------

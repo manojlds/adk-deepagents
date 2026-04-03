@@ -6,9 +6,12 @@ on configurable criteria.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import statistics
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
@@ -121,42 +124,10 @@ def extract_original_prompt(trajectory: Trajectory) -> str | None:
     Supports both Vertex-style ``contents`` and chat-style ``messages``
     formats.  Returns None if no prompt can be extracted.
     """
-    for step in trajectory.steps:
-        if step.model_call is None or step.model_call.request is None:
-            continue
+    from adk_deepagents.optimization.replay import extract_all_user_prompts
 
-        request = step.model_call.request
-
-        # Vertex-style: {"contents": [{"role": "user", "parts": [...]}]}
-        contents = request.get("contents")
-        if isinstance(contents, list):
-            for content in contents:
-                if not isinstance(content, dict):
-                    continue
-                if content.get("role") != "user":
-                    continue
-                parts = content.get("parts", [])
-                if isinstance(parts, list):
-                    texts = []
-                    for part in parts:
-                        if isinstance(part, dict) and "text" in part:
-                            texts.append(part["text"])
-                    if texts:
-                        return " ".join(texts)
-
-        # Chat-style: {"messages": [{"role": "user", "content": ...}]}
-        messages = request.get("messages")
-        if isinstance(messages, list):
-            for msg in messages:
-                if not isinstance(msg, dict):
-                    continue
-                if msg.get("role") != "user":
-                    continue
-                content = msg.get("content")
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
-
-    return None
+    prompts = extract_all_user_prompts(trajectory)
+    return prompts[0] if prompts else None
 
 
 def _extract_final_response(trajectory: Trajectory) -> str | None:
@@ -307,6 +278,66 @@ def _compute_weighted_score(
 
 
 # ---------------------------------------------------------------------------
+# Trajectory quality filter
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TrajectoryFilter:
+    """Configurable filter for discarding low-quality trajectories."""
+
+    min_steps: int = 0
+    """Minimum number of steps required."""
+
+    require_tool_calls: bool = False
+    """If True, at least one tool call must be present."""
+
+    max_tool_error_rate: float = 1.0
+    """Maximum fraction of tool calls that may have errors (0.0-1.0)."""
+
+    min_output_chars: int = 0
+    """Minimum character count for the final response."""
+
+    custom: Callable[[Trajectory], bool] | None = None
+    """Optional custom predicate. Return True to keep, False to discard."""
+
+
+def filter_trajectories(
+    trajectories: Sequence[Trajectory],
+    tf: TrajectoryFilter,
+) -> list[Trajectory]:
+    """Apply a TrajectoryFilter to a sequence of trajectories."""
+    result: list[Trajectory] = []
+    for traj in trajectories:
+        if len(traj.steps) < tf.min_steps:
+            continue
+
+        if tf.require_tool_calls:
+            has_tool_calls = any(step.tool_calls for step in traj.steps)
+            if not has_tool_calls:
+                continue
+
+        total_tool_calls = sum(len(step.tool_calls) for step in traj.steps)
+        if total_tool_calls > 0:
+            error_count = sum(1 for step in traj.steps for tc in step.tool_calls if tc.error)
+            error_rate = error_count / total_tool_calls
+            if error_rate > tf.max_tool_error_rate:
+                continue
+
+        if tf.min_output_chars > 0:
+            final_resp = _extract_final_response(traj)
+            char_count = len(final_resp) if final_resp else 0
+            if char_count < tf.min_output_chars:
+                continue
+
+        if tf.custom is not None and not tf.custom(traj):
+            continue
+
+        result.append(traj)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -376,6 +407,7 @@ async def evaluate_trajectory(
 
     # Parse the structured output
     judgment: TrajectoryJudgment
+    parse_failed = False
     try:
         data = json.loads(raw_output)
         judgment = TrajectoryJudgment.model_validate(data)
@@ -389,8 +421,11 @@ async def evaluate_trajectory(
             summary=f"Evaluation parse error: {exc}",
             criteria=[],
         )
+        parse_failed = True
 
-    overall_score = _compute_weighted_score(judgment, resolved_rubric)
+    overall_score: float | None = None
+    if not parse_failed:
+        overall_score = _compute_weighted_score(judgment, resolved_rubric)
 
     return FeedbackEntry(
         source="evaluator",
@@ -410,3 +445,49 @@ async def evaluate_trajectory(
             "judge_model": model,
         },
     )
+
+
+async def evaluate_trajectory_majority(
+    trajectory: Trajectory,
+    *,
+    model: str = "gemini-2.5-flash",
+    rubric: EvaluationRubric | None = None,
+    num_votes: int = 3,
+) -> FeedbackEntry:
+    """Run multiple independent judge evaluations and aggregate via median.
+
+    Inspired by Hermes agent's ``prm_votes=3`` pattern.  Runs *num_votes*
+    concurrent calls to :func:`evaluate_trajectory`, filters out parse
+    failures (``rating is None``), and picks the entry closest to the median
+    score as the representative result.
+    """
+    entries = await asyncio.gather(
+        *(evaluate_trajectory(trajectory, model=model, rubric=rubric) for _ in range(num_votes))
+    )
+
+    valid = [e for e in entries if e.rating is not None]
+
+    if not valid:
+        return FeedbackEntry(
+            source="evaluator",
+            rating=None,
+            comment="All judge votes failed to parse.",
+            timestamp_ns=time.time_ns(),
+            metadata={
+                "num_votes": num_votes,
+                "all_scores": [],
+                "voting_method": "median",
+            },
+        )
+
+    all_scores: list[float] = [e.rating for e in valid if e.rating is not None]
+    median_score = statistics.median(all_scores)
+
+    representative = min(valid, key=lambda e: abs((e.rating or 0.0) - median_score))
+
+    representative.metadata["num_votes"] = num_votes
+    representative.metadata["all_scores"] = all_scores
+    representative.metadata["voting_method"] = "median"
+    representative.rating = median_score
+
+    return representative

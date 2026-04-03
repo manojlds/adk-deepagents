@@ -221,6 +221,61 @@ class TestExtractAllUserPrompts:
         traj = Trajectory(trace_id="empty")
         assert extract_all_user_prompts(traj) == []
 
+    def test_repeated_user_message_preserved(self):
+        """Legitimate repeated messages like 'yes' should not be dropped."""
+        traj = Trajectory(
+            trace_id="repeated",
+            steps=[
+                AgentStep(
+                    agent_name="a",
+                    model_call=ModelCall(
+                        model="m",
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=0,
+                        request={
+                            "contents": [
+                                {"role": "user", "parts": [{"text": "Do something"}]},
+                            ]
+                        },
+                    ),
+                ),
+                AgentStep(
+                    agent_name="a",
+                    model_call=ModelCall(
+                        model="m",
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=0,
+                        request={
+                            "contents": [
+                                {"role": "user", "parts": [{"text": "Do something"}]},
+                                {"role": "user", "parts": [{"text": "yes"}]},
+                            ]
+                        },
+                    ),
+                ),
+                AgentStep(
+                    agent_name="a",
+                    model_call=ModelCall(
+                        model="m",
+                        input_tokens=0,
+                        output_tokens=0,
+                        duration_ms=0,
+                        request={
+                            "contents": [
+                                {"role": "user", "parts": [{"text": "Do something"}]},
+                                {"role": "user", "parts": [{"text": "yes"}]},
+                                {"role": "user", "parts": [{"text": "yes"}]},
+                            ]
+                        },
+                    ),
+                ),
+            ],
+        )
+        prompts = extract_all_user_prompts(traj)
+        assert prompts == ["Do something", "yes", "yes"]
+
     def test_chat_style_multi_turn(self):
         traj = Trajectory(
             trace_id="chat-multi",
@@ -351,3 +406,18 @@ class TestOriginalToolNames:
     def test_empty_trajectory(self):
         traj = Trajectory(trace_id="empty")
         assert _original_tool_names_from_trajectory(traj) == set()
+
+
+# ---------------------------------------------------------------------------
+# ReplayConfig.ephemeral_instruction
+# ---------------------------------------------------------------------------
+
+
+class TestEphemeralInstruction:
+    def test_default_is_none(self):
+        config = ReplayConfig()
+        assert config.ephemeral_instruction is None
+
+    def test_can_set_ephemeral_instruction(self):
+        config = ReplayConfig(ephemeral_instruction="Think step by step")
+        assert config.ephemeral_instruction == "Think step by step"

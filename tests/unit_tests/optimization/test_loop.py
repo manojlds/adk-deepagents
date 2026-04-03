@@ -87,16 +87,25 @@ class TestResolveBaselineScore:
         traj = _sample_trajectory(score=0.85)
         assert _resolve_baseline_score(traj) == 0.85
 
-    def test_falls_back_to_feedback_average(self):
+    def test_falls_back_to_evaluator_feedback_average(self):
         traj = _sample_trajectory(
             feedback=[
-                FeedbackEntry(source="user", rating=0.6),
-                FeedbackEntry(source="auto", rating=0.8),
+                FeedbackEntry(source="evaluator", rating=0.6),
+                FeedbackEntry(source="evaluator", rating=0.8),
             ]
         )
         score = _resolve_baseline_score(traj)
         assert score is not None
         assert abs(score - 0.7) < 1e-9
+
+    def test_ignores_non_evaluator_feedback(self):
+        traj = _sample_trajectory(
+            feedback=[
+                FeedbackEntry(source="user", rating=0.9),
+                FeedbackEntry(source="auto", rating=0.8),
+            ]
+        )
+        assert _resolve_baseline_score(traj) is None
 
     def test_golden_returns_one(self):
         traj = _sample_trajectory(is_golden=True)
@@ -113,10 +122,10 @@ class TestResolveBaselineScore:
         )
         assert _resolve_baseline_score(traj) == 0.5
 
-    def test_feedback_takes_precedence_over_golden(self):
+    def test_evaluator_feedback_takes_precedence_over_golden(self):
         traj = _sample_trajectory(
             is_golden=True,
-            feedback=[FeedbackEntry(source="user", rating=0.6)],
+            feedback=[FeedbackEntry(source="evaluator", rating=0.6)],
         )
         score = _resolve_baseline_score(traj)
         assert score is not None
@@ -332,3 +341,150 @@ class TestBuildReflectorPayload:
         iteration = self._make_iteration()
         payload = _build_reflector_payload(iteration.candidate, iteration)
         assert "Minor inefficiency" in payload
+
+
+# ---------------------------------------------------------------------------
+# _build_reflector_payload with hindsight hints
+# ---------------------------------------------------------------------------
+
+
+class TestReflectorPayloadHindsight:
+    def test_includes_tool_outcomes(self):
+        from adk_deepagents.optimization.loop import ExampleResult
+        from adk_deepagents.optimization.replay import ReplayResult
+
+        traj = _sample_trajectory()
+        replay_traj = Trajectory(
+            trace_id="replay-123",
+            steps=[
+                AgentStep(
+                    agent_name="test_agent",
+                    tool_calls=[
+                        ToolCall(
+                            name="write_file",
+                            args={"path": "/out.txt"},
+                            response={"status": "ok"},
+                            duration_ms=5.0,
+                        ),
+                    ],
+                ),
+            ],
+        )
+        feedback = FeedbackEntry(
+            source="evaluator",
+            rating=0.8,
+            comment="good",
+            metadata={"criteria": [], "issues": []},
+        )
+        example = ExampleResult(
+            source_trajectory=traj,
+            replay=ReplayResult(
+                source_trace_id=traj.trace_id,
+                replay_session_id="sess-1",
+                prompts=["Write hello world"],
+                output_text="Hello!",
+                replay_trajectory=replay_traj,
+            ),
+            feedback=feedback,
+            baseline_score=0.6,
+            delta=0.2,
+        )
+        iteration = IterationResult(
+            iteration=1,
+            candidate=OptimizationCandidate(agent_kwargs={"instruction": "Be helpful."}),
+            examples=[example],
+            average_score=0.8,
+            average_delta=0.2,
+            regressions=0,
+        )
+
+        payload = _build_reflector_payload(iteration.candidate, iteration)
+        assert "Tool call outcomes" in payload
+        assert "write_file" in payload
+        assert "OK" in payload
+
+    def test_includes_error_status(self):
+        from adk_deepagents.optimization.loop import ExampleResult
+        from adk_deepagents.optimization.replay import ReplayResult
+
+        traj = _sample_trajectory()
+        replay_traj = Trajectory(
+            trace_id="replay-err",
+            steps=[
+                AgentStep(
+                    agent_name="test_agent",
+                    tool_calls=[
+                        ToolCall(
+                            name="bad_tool",
+                            args={},
+                            response=None,
+                            duration_ms=5.0,
+                            error="permission denied",
+                        ),
+                    ],
+                ),
+            ],
+        )
+        feedback = FeedbackEntry(
+            source="evaluator",
+            rating=0.3,
+            comment="failed",
+            metadata={"criteria": [], "issues": []},
+        )
+        example = ExampleResult(
+            source_trajectory=traj,
+            replay=ReplayResult(
+                source_trace_id=traj.trace_id,
+                replay_session_id="sess-1",
+                prompts=["Write hello world"],
+                output_text="",
+                replay_trajectory=replay_traj,
+            ),
+            feedback=feedback,
+            baseline_score=0.6,
+            delta=-0.3,
+        )
+        iteration = IterationResult(
+            iteration=1,
+            candidate=OptimizationCandidate(agent_kwargs={}),
+            examples=[example],
+            average_score=0.3,
+            average_delta=-0.3,
+            regressions=1,
+        )
+
+        payload = _build_reflector_payload(iteration.candidate, iteration)
+        assert "ERROR" in payload
+        assert "bad_tool" in payload
+
+    def test_no_tool_outcomes_without_replay_trajectory(self):
+        from adk_deepagents.optimization.loop import ExampleResult
+        from adk_deepagents.optimization.replay import ReplayResult
+
+        traj = _sample_trajectory()
+        feedback = FeedbackEntry(
+            source="evaluator",
+            rating=0.7,
+            comment="ok",
+            metadata={"criteria": [], "issues": []},
+        )
+        example = ExampleResult(
+            source_trajectory=traj,
+            replay=ReplayResult(
+                source_trace_id=traj.trace_id,
+                replay_session_id="sess-1",
+                prompts=["Write hello world"],
+                output_text="Hello!",
+            ),
+            feedback=feedback,
+            baseline_score=0.6,
+            delta=0.1,
+        )
+        iteration = IterationResult(
+            iteration=1,
+            candidate=OptimizationCandidate(agent_kwargs={}),
+            examples=[example],
+        )
+
+        payload = _build_reflector_payload(iteration.candidate, iteration)
+        assert "Tool call outcomes" not in payload
