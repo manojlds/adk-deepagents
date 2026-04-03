@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from adk_deepagents.optimization.store import (
     TrajectoryStore,
     _make_index_entry,
@@ -139,6 +141,19 @@ class TestIndexEntry:
 # ---------------------------------------------------------------------------
 # Store: save / load / delete
 # ---------------------------------------------------------------------------
+
+
+class TestStorePathTraversal:
+    def test_rejects_path_traversal(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        traj = _sample_trajectory("../../etc/passwd")
+        with pytest.raises(ValueError, match="Invalid trace_id"):
+            store.save(traj)
+
+    def test_rejects_slash_in_trace_id(self, tmp_path):
+        store = TrajectoryStore(tmp_path / "store")
+        with pytest.raises(ValueError, match="Invalid trace_id"):
+            store.load("sub/dir")
 
 
 class TestStoreBasicOps:

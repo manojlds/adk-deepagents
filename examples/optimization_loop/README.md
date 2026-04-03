@@ -11,14 +11,18 @@ judge, and applying the suggested improvements.
 │ 1. SEED RUNS                                            │
 │    Run the agent on test prompts → baseline trajectories │
 ├─────────────────────────────────────────────────────────┤
+│ 1b. FILTER (TrajectoryFilter)                           │
+│    Discard low-quality trajectories (too short, empty,  │
+│    too many errors) before optimization begins           │
+├─────────────────────────────────────────────────────────┤
 │ 2. OPTIMIZATION LOOP (repeats N iterations)             │
 │    ┌─────────────┐  ┌──────────────┐  ┌──────────────┐ │
 │    │ Replay each │→ │ LLM Judge    │→ │ Reflector    │ │
-│    │ prompt with │  │ scores the   │  │ suggests     │ │
-│    │ current     │  │ replay on    │  │ prompt/skill │ │
-│    │ config      │  │ task quality,│  │ improvements │ │
-│    │             │  │ efficiency,  │  │              │ │
-│    │             │  │ tool usage   │  │              │ │
+│    │ prompt with │  │ majority     │  │ suggests     │ │
+│    │ current     │  │ voting (N    │  │ prompt/skill │ │
+│    │ config +    │  │ votes) for   │  │ improvements │ │
+│    │ ephemeral   │  │ robust       │  │ w/ hindsight │ │
+│    │ instruction │  │ scoring      │  │ hints        │ │
 │    └─────────────┘  └──────────────┘  └──────────────┘ │
 │                                            ↓            │
 │                                   Auto-apply prompt     │
@@ -35,6 +39,9 @@ judge, and applying the suggested improvements.
 ```bash
 # With Google AI (Gemini)
 GOOGLE_API_KEY=... uv run python examples/optimization_loop/run.py
+
+# With majority voting (3 judge votes for robust scoring)
+GOOGLE_API_KEY=... JUDGE_VOTES=3 uv run python examples/optimization_loop/run.py
 
 # With OpenAI-compatible API
 OPENAI_API_KEY=... ADK_DEEPAGENTS_MODEL=openai/gpt-4o-mini \

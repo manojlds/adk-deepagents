@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -78,7 +79,10 @@ class TrajectoryStore:
         return self._dir / _INDEX_FILE
 
     def _trajectory_path(self, trace_id: str) -> Path:
-        return self._dir / f"{trace_id}.json"
+        safe_name = Path(trace_id).name
+        if not safe_name or safe_name != trace_id:
+            raise ValueError(f"Invalid trace_id (must be a simple filename): {trace_id!r}")
+        return self._dir / f"{safe_name}.json"
 
     def _load_index(self) -> dict[str, dict[str, Any]]:
         idx_path = self._index_path()
@@ -91,10 +95,15 @@ class TrajectoryStore:
             return self._rebuild_index()
 
     def _save_index(self) -> None:
-        self._index_path().write_text(
-            json.dumps(self._index, separators=(",", ":")),
-            encoding="utf-8",
-        )
+        idx_path = self._index_path()
+        fd, tmp_path = tempfile.mkstemp(dir=self._dir, suffix=".tmp")
+        try:
+            with open(fd, "w", encoding="utf-8") as f:
+                json.dump(self._index, f, separators=(",", ":"))
+            Path(tmp_path).replace(idx_path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
 
     def _rebuild_index(self) -> dict[str, dict[str, Any]]:
         index: dict[str, dict[str, Any]] = {}

@@ -83,6 +83,15 @@ class ReplayConfig:
     max_approval_rounds: int = 10
     """Safety limit on approval round-trips per turn."""
 
+    ephemeral_instruction: str | None = None
+    """Optional instruction prepended to the agent's instruction during replay.
+
+    This instruction guides the agent's behavior during replay but is NOT
+    saved to the replay trajectory — useful for steering behavior without
+    contaminating training data. Inspired by Hermes agent's ephemeral
+    system prompt pattern.
+    """
+
 
 @dataclass
 class ReplayResult:
@@ -155,21 +164,32 @@ def extract_all_user_prompts(trajectory: Trajectory) -> list[str]:
 
     In a multi-turn conversation the model-call request for step *N*
     typically contains *all* prior user messages.  This function
-    de-duplicates so that each unique user message appears exactly once,
-    in order of first occurrence.
+    strips the known prefix (messages already collected) from each
+    step and appends only truly new messages.  This preserves
+    legitimately repeated user messages (e.g. "yes", "continue")
+    while still de-duplicating the chat-history prefix.
 
     Returns an empty list when no user messages are found.
     """
-    seen: set[str] = set()
     ordered: list[str] = []
 
     for step in trajectory.steps:
         if step.model_call is None or step.model_call.request is None:
             continue
-        for text in _extract_user_messages_from_request(step.model_call.request):
-            if text not in seen:
-                seen.add(text)
-                ordered.append(text)
+        step_messages = _extract_user_messages_from_request(step.model_call.request)
+
+        # Determine how many leading messages match the already-collected list.
+        # Those are the chat-history prefix; only messages after the prefix
+        # are new for this step.
+        prefix_len = 0
+        for i, msg in enumerate(step_messages):
+            if i < len(ordered) and msg == ordered[i]:
+                prefix_len = i + 1
+            else:
+                break
+
+        for msg in step_messages[prefix_len:]:
+            ordered.append(msg)
 
     return ordered
 
@@ -573,6 +593,14 @@ async def replay_trajectory(
         built = await result  # type: ignore[misc]
     else:
         built = result  # type: ignore[assignment]
+
+    if resolved_config.ephemeral_instruction:
+        original_instruction = str(built.agent.instruction or "")
+        built.agent.instruction = (
+            resolved_config.ephemeral_instruction + "\n\n" + original_instruction
+            if original_instruction
+            else resolved_config.ephemeral_instruction
+        )
 
     cleanup = built.cleanup
     try:

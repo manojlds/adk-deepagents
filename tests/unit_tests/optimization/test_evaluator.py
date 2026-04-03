@@ -278,3 +278,104 @@ class TestDefaultRubric:
             "efficiency",
             "tool_usage_quality",
         }
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryFilter and filter_trajectories
+# ---------------------------------------------------------------------------
+
+
+class TestTrajectoryFilter:
+    def test_default_passes_everything(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter()
+        trajs = [_sample_trajectory(), _sample_trajectory("t2")]
+        assert len(filter_trajectories(trajs, tf)) == 2
+
+    def test_min_steps_filters(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(min_steps=5)
+        trajs = [_sample_trajectory()]  # has 1 step
+        assert filter_trajectories(trajs, tf) == []
+
+    def test_min_steps_passes(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(min_steps=1)
+        trajs = [_sample_trajectory()]
+        assert len(filter_trajectories(trajs, tf)) == 1
+
+    def test_require_tool_calls(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(require_tool_calls=True)
+        # _sample_trajectory has a tool call
+        assert len(filter_trajectories([_sample_trajectory()], tf)) == 1
+        # trajectory with no tool calls
+        traj = Trajectory(trace_id="no-tools", steps=[AgentStep(agent_name="a")])
+        assert filter_trajectories([traj], tf) == []
+
+    def test_max_tool_error_rate(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(max_tool_error_rate=0.0)
+        # _sample_trajectory has tool calls with no errors
+        assert len(filter_trajectories([_sample_trajectory()], tf)) == 1
+        # trajectory with all errors
+        traj = Trajectory(
+            trace_id="all-errors",
+            steps=[
+                AgentStep(
+                    agent_name="a",
+                    tool_calls=[
+                        ToolCall(name="t", args={}, response=None, duration_ms=0, error="fail")
+                    ],
+                )
+            ],
+        )
+        assert filter_trajectories([traj], tf) == []
+
+    def test_min_output_chars(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(min_output_chars=100)
+        # _sample_trajectory response is "Hello, World!" (13 chars)
+        assert filter_trajectories([_sample_trajectory()], tf) == []
+        tf2 = TrajectoryFilter(min_output_chars=5)
+        assert len(filter_trajectories([_sample_trajectory()], tf2)) == 1
+
+    def test_custom_filter(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(custom=lambda t: t.trace_id.startswith("keep"))
+        trajs = [_sample_trajectory("keep-1"), _sample_trajectory("drop-2")]
+        result = filter_trajectories(trajs, tf)
+        assert len(result) == 1
+        assert result[0].trace_id == "keep-1"
+
+    def test_combined_filters(self):
+        from adk_deepagents.optimization.evaluator import TrajectoryFilter, filter_trajectories
+
+        tf = TrajectoryFilter(min_steps=1, require_tool_calls=True, min_output_chars=5)
+        assert len(filter_trajectories([_sample_trajectory()], tf)) == 1
+
+
+# ---------------------------------------------------------------------------
+# evaluate_trajectory_majority (unit test for aggregation logic)
+# ---------------------------------------------------------------------------
+
+
+class TestMajorityVotingHelpers:
+    def test_median_of_odd_scores(self):
+        import statistics
+
+        scores = [0.3, 0.7, 0.5]
+        assert statistics.median(scores) == 0.5
+
+    def test_median_of_even_scores(self):
+        import statistics
+
+        scores = [0.3, 0.5, 0.7, 0.9]
+        assert statistics.median(scores) == 0.6

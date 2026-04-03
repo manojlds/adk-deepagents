@@ -5,7 +5,10 @@ from __future__ import annotations
 from adk_deepagents.optimization.evaluator import (
     EvaluationCriterion,
     EvaluationRubric,
+    TrajectoryFilter,
     evaluate_trajectory,
+    evaluate_trajectory_majority,
+    filter_trajectories,
 )
 from adk_deepagents.optimization.loop import (
     ImprovementSuggestion,
@@ -42,8 +45,11 @@ __all__ = [
     "ReplayResult",
     "ToolCall",
     "Trajectory",
+    "TrajectoryFilter",
     "TrajectoryStore",
     "evaluate_trajectory",
+    "evaluate_trajectory_majority",
+    "filter_trajectories",
     "replay_trajectory",
     "run_optimization_loop",
 ]

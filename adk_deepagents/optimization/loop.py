@@ -7,8 +7,10 @@ skills, and tool definitions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -17,7 +19,10 @@ from pydantic import BaseModel, Field
 
 from adk_deepagents.optimization.evaluator import (
     EvaluationRubric,
+    TrajectoryFilter,
     evaluate_trajectory,
+    evaluate_trajectory_majority,
+    filter_trajectories,
 )
 from adk_deepagents.optimization.replay import (
     BuiltAgent,
@@ -151,9 +156,11 @@ def _resolve_baseline_score(trajectory: Trajectory) -> float | None:
     if trajectory.score is not None:
         return trajectory.score
 
-    evaluator_feedback = [fb for fb in trajectory.feedback if fb.rating is not None]
-    if evaluator_feedback:
-        return sum(fb.rating for fb in evaluator_feedback) / len(evaluator_feedback)  # type: ignore[misc]
+    rated_feedback = [
+        fb for fb in trajectory.feedback if fb.rating is not None and fb.source == "evaluator"
+    ]
+    if rated_feedback:
+        return sum(fb.rating for fb in rated_feedback) / len(rated_feedback)  # type: ignore[misc]
 
     if trajectory.is_golden:
         return 1.0
@@ -238,6 +245,24 @@ def _build_reflector_payload(
             for issue in issues:
                 lines.append(f"  - {issue}")
 
+        # Per-step tool call outcomes (hindsight hints)
+        replay_traj = ex.replay.replay_trajectory
+        if replay_traj is not None and replay_traj.steps:
+            tool_steps = [s for s in replay_traj.steps if s.tool_calls]
+            if tool_steps:
+                lines.append("- Tool call outcomes (for hindsight analysis):")
+                for step_idx, step in enumerate(tool_steps[:5], 1):  # cap at 5
+                    for tc in step.tool_calls[:3]:  # cap at 3 per step
+                        status = "ERROR" if tc.error else "OK"
+                        resp_preview = ""
+                        if tc.response is not None:
+                            resp_text = json.dumps(tc.response, ensure_ascii=False)
+                            resp_preview = resp_text[:120]
+                        lines.append(
+                            f"  - Step {step_idx}: {tc.name}() → {status}"
+                            f"{': ' + resp_preview if resp_preview else ''}"
+                        )
+
     return "\n".join(lines)
 
 
@@ -267,6 +292,10 @@ Guidelines:
 - If scores are already high (>0.9) and no regressions, suggest nothing
 - Prefer instruction_append over instruction_replace when possible
 - Keep instruction changes concise and targeted
+- When tool call outcomes are provided, analyze them for **hindsight hints**:
+  patterns where a tool result reveals information the agent should have
+  incorporated earlier (e.g., errors that could have been avoided, results
+  that should have informed the next step differently)
 """
 
 
@@ -363,6 +392,8 @@ async def run_optimization_loop(
     convergence_delta: float = 0.02,
     apply_mode: Literal["prompt_only", "prompt_and_skills", "suggest_only"] = "prompt_only",
     on_iteration: Callable[[IterationResult], None] | None = None,
+    trajectory_filter: TrajectoryFilter | None = None,
+    num_judge_votes: int = 1,
 ) -> OptimizationResult:
     """Run an autoresearch-style optimization loop.
 
@@ -396,12 +427,26 @@ async def run_optimization_loop(
         ``"suggest_only"`` — no auto-application.
     on_iteration:
         Optional callback invoked after each iteration completes.
+    trajectory_filter:
+        Optional filter to discard low-quality trajectories before
+        optimization. Trajectories that fail the filter are skipped.
+    num_judge_votes:
+        Number of independent judge evaluations to run per trajectory.
+        When > 1, uses majority voting (median score) for more robust
+        evaluation. Default is 1 (single judge call).
 
     Returns
     -------
     OptimizationResult
         The best candidate found and all iteration results.
     """
+    if trajectory_filter is not None:
+        trajectories = filter_trajectories(trajectories, trajectory_filter)
+        logger.info(
+            "Trajectory filter applied: %d trajectories remaining",
+            len(trajectories),
+        )
+
     if not trajectories:
         return OptimizationResult(
             best_candidate=base_candidate,
@@ -416,37 +461,34 @@ async def run_optimization_loop(
     for iteration_num in range(1, max_iterations + 1):
         logger.info("Optimization iteration %d/%d", iteration_num, max_iterations)
 
-        examples: list[ExampleResult] = []
-
-        for traj in trajectories:
-            # 1. Resolve baseline score
-            baseline = _resolve_baseline_score(traj)
-
-            # 2. Replay
-            def _make_builder(
-                cand: OptimizationCandidate,
-            ) -> Callable[[], BuiltAgent | Awaitable[BuiltAgent]]:
+        async def _process_trajectory(
+            traj: Trajectory,
+            *,
+            candidate: OptimizationCandidate = current_candidate,
+            iter_num: int = iteration_num,
+        ) -> ExampleResult | None:
+            def _make_builder() -> Callable[[], BuiltAgent | Awaitable[BuiltAgent]]:
                 def builder() -> BuiltAgent | Awaitable[BuiltAgent]:
-                    return agent_builder_factory(cand)
+                    return agent_builder_factory(candidate)
 
                 return builder
+
+            baseline = _resolve_baseline_score(traj)
 
             try:
                 replay_result = await replay_trajectory(
                     traj,
-                    agent_builder=_make_builder(current_candidate),
+                    agent_builder=_make_builder(),
                     config=replay_config,
                 )
             except Exception as exc:
                 logger.warning("Replay failed for %s: %s", traj.trace_id, exc)
-                continue
+                return None
 
-            # 3. Evaluate the replay
-            # Build a minimal trajectory from replay events for evaluation.
             eval_trajectory = replay_result.replay_trajectory
             if eval_trajectory is None:
                 eval_trajectory = Trajectory(
-                    trace_id=f"replay-{traj.trace_id[:8]}-{iteration_num}",
+                    trace_id=f"replay-{traj.trace_id[:8]}-{iter_num}",
                     session_id=replay_result.replay_session_id,
                     agent_name=traj.agent_name,
                     steps=traj.steps,
@@ -454,54 +496,70 @@ async def run_optimization_loop(
                 )
 
             try:
-                feedback = await evaluate_trajectory(
-                    eval_trajectory,
-                    model=evaluator_model,
-                    rubric=rubric,
-                )
+                if num_judge_votes > 1:
+                    feedback = await evaluate_trajectory_majority(
+                        eval_trajectory,
+                        model=evaluator_model,
+                        rubric=rubric,
+                        num_votes=num_judge_votes,
+                    )
+                else:
+                    feedback = await evaluate_trajectory(
+                        eval_trajectory,
+                        model=evaluator_model,
+                        rubric=rubric,
+                    )
             except Exception as exc:
                 logger.warning(
                     "Evaluation failed for replay of %s: %s",
                     traj.trace_id,
                     exc,
                 )
-                continue
+                return None
 
-            # 4. Compute delta
             delta: float | None = None
             if baseline is not None and feedback.rating is not None:
                 delta = feedback.rating - baseline
 
-            example = ExampleResult(
+            return ExampleResult(
                 source_trajectory=traj,
                 replay=replay_result,
                 feedback=feedback,
                 baseline_score=baseline,
                 delta=delta,
             )
-            examples.append(example)
 
-            # 5. Persist if store is available
-            if store is not None and eval_trajectory.trace_id:
-                store.save(eval_trajectory)
-                if feedback.rating is not None:
-                    store.set_score(eval_trajectory.trace_id, feedback.rating)
-                store.add_feedback(eval_trajectory.trace_id, feedback)
-                store.set_tag(
-                    eval_trajectory.trace_id,
-                    "optimization_parent_trace_id",
-                    traj.trace_id,
+        raw_results = await asyncio.gather(
+            *(_process_trajectory(traj) for traj in trajectories),
+            return_exceptions=True,
+        )
+        examples: list[ExampleResult] = []
+        for i, raw_result in enumerate(raw_results):
+            if isinstance(raw_result, BaseException):
+                logger.warning(
+                    "Trajectory processing failed for %s: %s",
+                    trajectories[i].trace_id,
+                    raw_result,
                 )
-                store.set_tag(
-                    eval_trajectory.trace_id,
-                    "optimization_iteration",
-                    str(iteration_num),
-                )
-                store.set_tag(
-                    eval_trajectory.trace_id,
-                    "optimization_role",
-                    "replay",
-                )
+                continue
+            result: ExampleResult | None = raw_result
+            if result is None:
+                continue
+            examples.append(result)
+
+            # Persist if store is available
+            source_traj = result.source_trajectory
+            eval_traj = result.replay.replay_trajectory
+            if store is not None and eval_traj is not None and eval_traj.trace_id:
+                if result.feedback.rating is not None:
+                    eval_traj.score = result.feedback.rating
+                if result.feedback.timestamp_ns == 0:
+                    result.feedback.timestamp_ns = time.time_ns()
+                eval_traj.feedback.append(result.feedback)
+                eval_traj.tags["optimization_parent_trace_id"] = source_traj.trace_id
+                eval_traj.tags["optimization_iteration"] = str(iteration_num)
+                eval_traj.tags["optimization_role"] = "replay"
+                store.save(eval_traj)
 
         # 6. Aggregate iteration metrics
         scores = [ex.feedback.rating for ex in examples if ex.feedback.rating is not None]
@@ -521,6 +579,7 @@ async def run_optimization_loop(
             regressions=regressions,
         )
 
+        reflector_failed = False
         try:
             suggestions = await _suggest_improvements(
                 candidate=current_candidate,
@@ -530,6 +589,7 @@ async def run_optimization_loop(
         except Exception as exc:
             logger.warning("Reflector failed at iteration %d: %s", iteration_num, exc)
             suggestions = []
+            reflector_failed = True
 
         iteration_result.suggestions = suggestions
         all_iterations.append(iteration_result)
@@ -543,12 +603,19 @@ async def run_optimization_loop(
             best_candidate = current_candidate
 
         # 8. Check convergence
-        if not suggestions:
+        if not suggestions and not reflector_failed:
             return OptimizationResult(
                 best_candidate=best_candidate,
                 iterations=all_iterations,
                 stopped_reason="no_suggestions",
             )
+
+        if not suggestions and reflector_failed:
+            logger.info(
+                "Iteration %d: reflector failed, continuing with current candidate",
+                iteration_num,
+            )
+            continue
 
         if avg_delta is not None and abs(avg_delta) < convergence_delta:
             return OptimizationResult(
