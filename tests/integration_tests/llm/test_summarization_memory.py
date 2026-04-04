@@ -143,6 +143,68 @@ async def test_memory_loading():
 
 
 @pytest.mark.timeout(180)
+async def test_summarization_offload_readable_by_agent():
+    """After summarization, the agent can read the offloaded history file.
+
+    Regression test: StateBackend.write() returns files_update but does not
+    mutate internal state. offload_messages_to_backend() must apply the
+    update so the file is actually persisted and readable via read_file.
+    """
+    model = make_litellm_model()
+
+    summarization = SummarizationConfig(
+        model=os.environ.get("ADK_DEEPAGENTS_MODEL")
+        or os.environ.get("LITELLM_MODEL", "openai/gpt-4o-mini"),
+        context_window=500,
+        trigger=("fraction", 0.5),
+        keep=("messages", 2),
+        use_llm_summary=False,
+    )
+
+    agent = create_deep_agent(
+        model=model,
+        name="offload_test_agent",
+        instruction=(
+            "You are a test agent. Remember all facts the user tells you. "
+            "When asked to read a file, use read_file. "
+            "Always respond concisely."
+        ),
+        summarization=summarization,
+    )
+
+    # Turn 1: Establish facts (will be summarized away)
+    texts, runner, session = await run_agent(
+        agent,
+        "Remember: the secret passphrase is FOXTROT-99 and the city is Berlin.",
+    )
+
+    # Turn 2: Add more content to push past the summarization threshold
+    await send_followup(
+        runner,
+        session,
+        "Also remember: the project is called Nebula and the budget is $50,000. "
+        "The deadline is June 1st and the sponsor is Dr. Martinez.",
+    )
+
+    # Turn 3: Ask the agent to read the offloaded history file
+    texts3, fn_calls, fn_responses = await send_followup_with_events(
+        runner,
+        session,
+        "Use read_file to read /conversation_history/session_history.md "
+        "and tell me what it contains.",
+    )
+
+    assert "read_file" in fn_calls, f"Expected read_file call, got: {fn_calls}"
+
+    response = " ".join(texts3).lower()
+    # The file should exist and contain our earlier facts.
+    # If offload failed, the agent will report "file not found" from read_file.
+    assert "file not found" not in response and "not found" not in response, (
+        f"History file not found — offload failed to persist: {response}"
+    )
+
+
+@pytest.mark.timeout(180)
 async def test_compact_conversation_tool_forces_summarization_pass():
     """Manual compact tool call triggers one forced summarization pass."""
     model = make_litellm_model()

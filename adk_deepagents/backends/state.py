@@ -121,6 +121,7 @@ class StateBackend(Backend):
             )
 
         file_data = create_file_data(content)
+        files[normalized] = file_data
         files_update = {normalized: file_data}
         return WriteResult(
             path=normalized,
@@ -150,6 +151,7 @@ class StateBackend(Backend):
 
         new_content, count = result
         new_file_data = update_file_data(file_data, new_content)
+        files[normalized] = new_file_data
         files_update = {normalized: new_file_data}
         return EditResult(
             path=normalized,

@@ -204,6 +204,27 @@ class TestOffloadToBackend:
         assert "First batch" in content
         assert "Second batch" in content
 
+    def test_offload_to_state_backend_persists(self):
+        """Offloaded history must be readable from a StateBackend.
+
+        Regression test: StateBackend.write() returns files_update but
+        offload_messages_to_backend() must ensure the file is actually
+        persisted in the backend's state so the agent can read it later.
+        """
+        from adk_deepagents.backends.state import StateBackend
+
+        state: dict = {"files": {}}
+        backend = StateBackend(state)
+        messages = [_make_text_content("user", "Important context to preserve")]
+        path = offload_messages_to_backend(messages, backend)
+
+        assert path == "/conversation_history/session_history.md"
+
+        # The file must be readable via the backend
+        content = backend.read("/conversation_history/session_history.md")
+        assert "Error" not in content, f"File not found after offload: {content}"
+        assert "Important context to preserve" in content
+
 
 # ---------------------------------------------------------------------------
 # maybe_summarize
@@ -262,6 +283,45 @@ class TestMaybeSummarize:
         ss = ctx.state["_summarization_state"]
         assert ss["summaries_performed"] == 1
         assert ss["total_tokens_summarized"] > 0
+
+    async def test_maybe_summarize_offload_persists_in_state_backend(self):
+        """Summarization with a StateBackend must persist the offloaded history.
+
+        Regression test: offload_messages_to_backend calls backend.write()
+        but StateBackend.write() does not mutate internal state — it returns
+        the data in files_update which the caller must apply. Without fixing
+        this, the offloaded history file is silently lost.
+        """
+        from adk_deepagents.backends.state import StateBackend
+
+        state: dict = {"files": {}}
+
+        big_text = "Remember the secret code: ZULU-42. " * 500
+        messages = [_make_text_content("user", big_text) for _ in range(10)]
+        ctx = _make_callback_context(state=state)
+        req = _make_llm_request(contents=messages)
+
+        def backend_factory(s):
+            return StateBackend(s)
+
+        result = await maybe_summarize(
+            ctx,
+            req,
+            context_window=100,
+            trigger_fraction=0.5,
+            keep_messages=2,
+            backend_factory=backend_factory,
+            use_llm_summary=False,
+        )
+        assert result is True
+
+        # The offloaded history file must exist in state and be readable
+        history_backend = StateBackend(ctx.state)
+        content = history_backend.read("/conversation_history/session_history.md")
+        assert "Error" not in content, (
+            f"Offloaded history file not found in state after summarization: {content}"
+        )
+        assert "ZULU-42" in content
 
 
 # ---------------------------------------------------------------------------

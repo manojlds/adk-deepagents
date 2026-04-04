@@ -182,6 +182,7 @@ class StoreBackend(Backend):
             )
 
         file_data = create_file_data(content)
+        files[ns_path] = file_data
         files_update = {ns_path: file_data}
         return WriteResult(
             path=normalize_path(file_path),
@@ -210,6 +211,7 @@ class StoreBackend(Backend):
 
         new_content, count = result
         new_file_data = update_file_data(file_data, new_content)
+        files[ns_path] = new_file_data
         files_update = {ns_path: new_file_data}
         return EditResult(
             path=normalize_path(file_path),
