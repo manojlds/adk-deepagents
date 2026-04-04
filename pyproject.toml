@@ -1,6 +1,6 @@
 [project]
 name = "adk-deepagents"
-version = "0.1.0"
+version = "0.2.0"
 description = "Re-implementation of deepagents using Google ADK primitives"
 readme = "README.md"
 license = "MIT"
