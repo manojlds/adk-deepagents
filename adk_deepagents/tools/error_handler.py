@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 import traceback
 from collections.abc import Callable
@@ -65,6 +66,11 @@ def wrap_tool_with_error_handler(
 
     # Skip tools that already handle errors internally
     if tool_name in TOOLS_WITH_INTERNAL_ERROR_HANDLING:
+        return fn
+
+    # Skip class-based tools (e.g. ADK MCPTool) that don't support
+    # functools.wraps — they lack __globals__ and manage errors internally.
+    if not callable(fn) or (not hasattr(fn, "__globals__") and not inspect.isfunction(fn)):
         return fn
 
     if asyncio.iscoroutinefunction(fn):

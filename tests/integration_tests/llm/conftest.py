@@ -6,11 +6,15 @@ import asyncio
 import os
 import shutil
 import signal
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import suppress
+from typing import Any
 
 import pytest
+from google.adk.agents import LlmAgent
 
+from adk_deepagents import BrowserConfig, create_deep_agent
+from adk_deepagents.browser.playwright_mcp import get_playwright_browser_tools
 from adk_deepagents.types import TemporalTaskConfig
 from tests.integration_tests.conftest import (
     backend_factory,
@@ -160,6 +164,57 @@ async def ensure_temporal_server() -> AsyncGenerator[TemporalTaskConfig, None]:
         await _terminate_process_tree(process)
 
 
+@pytest.fixture
+async def ensure_browser_tools() -> AsyncGenerator[tuple[list[Any], Callable], None]:
+    """Provide Playwright MCP browser tools for integration tests.
+
+    Skips the test if ``npx`` is not available.  Yields ``(tools, cleanup)``
+    and awaits the cleanup coroutine during teardown.
+    """
+    if shutil.which("npx") is None:
+        pytest.skip("npx not found — cannot run Playwright MCP")
+
+    tools, cleanup = await get_playwright_browser_tools(config=BrowserConfig(headless=True))
+    try:
+        yield tools, cleanup
+    finally:
+        await cleanup()
+
+
+@pytest.fixture
+async def browser_agent_factory(
+    ensure_browser_tools: tuple[list[Any], Callable],
+) -> Callable[..., LlmAgent]:
+    """Factory fixture that creates browser-enabled agents.
+
+    The Playwright MCP lifecycle (startup & cleanup) is managed by the
+    ``ensure_browser_tools`` fixture — callers only need to create agents.
+
+    Usage::
+
+        agent = browser_agent_factory("my_agent", "Do browser things.")
+    """
+    tools, _cleanup = ensure_browser_tools
+
+    def _factory(
+        name: str,
+        instruction: str,
+        extra_tools: Sequence[Any] | None = None,
+    ) -> LlmAgent:
+        all_tools: list[Any] = list(tools)
+        if extra_tools:
+            all_tools.extend(extra_tools)
+        return create_deep_agent(
+            model=make_litellm_model(),
+            name=name,
+            tools=all_tools,
+            instruction=instruction,
+            browser="_resolved",
+        )
+
+    return _factory
+
+
 __all__ = [
     "backend_factory",
     "get_file_content",
@@ -169,4 +224,6 @@ __all__ = [
     "send_followup",
     "send_followup_with_events",
     "ensure_temporal_server",
+    "ensure_browser_tools",
+    "browser_agent_factory",
 ]

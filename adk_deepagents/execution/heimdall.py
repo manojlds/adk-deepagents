@@ -88,7 +88,9 @@ async def get_heimdall_tools(
     try:
         from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
     except ImportError as e:
-        raise ImportError("MCP toolset not available. Ensure google-adk[mcp] is installed.") from e
+        raise ImportError(
+            "MCP toolset not available. Ensure google-adk>=1.21.0 and mcp are installed."
+        ) from e
 
     server_args = args or ["@heimdall-ai/heimdall"]
     server_env = {"HEIMDALL_WORKSPACE": workspace_path}
@@ -155,7 +157,9 @@ async def get_heimdall_tools_from_config(
             StdioServerParameters,
         )
     except ImportError as e:
-        raise ImportError("MCP toolset not available. Ensure google-adk[mcp] is installed.") from e
+        raise ImportError(
+            "MCP toolset not available. Ensure google-adk>=1.21.0 and mcp are installed."
+        ) from e
 
     if "uri" in config:
         # SSE transport

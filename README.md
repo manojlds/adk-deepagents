@@ -39,11 +39,11 @@ uv add adk-deepagents
 uv pip install "adk-deepagents[skills]"
 
 # For Heimdall MCP sandboxed execution
-uv pip install "google-adk[mcp]"
+uv pip install google-adk
 npm i -g @heimdall-ai/heimdall
 
 # For browser automation via Playwright MCP
-uv pip install "adk-deepagents[browser]"
+uv pip install adk-deepagents
 
 # For Temporal-backed dynamic task delegation
 uv pip install "adk-deepagents[temporal]"

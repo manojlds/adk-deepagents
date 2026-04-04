@@ -19,9 +19,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-browser = [
-    { name = "google-adk" },
-]
 http = [
     { name = "markdownify" },
 ]
@@ -47,15 +44,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "adk-skills-agent", marker = "extra == 'skills'", specifier = ">=0.1.0" },
-    { name = "google-adk", specifier = ">=1.0.0" },
-    { name = "google-adk", extras = ["mcp"], marker = "extra == 'browser'", specifier = ">=1.0.0" },
+    { name = "google-adk", specifier = ">=1.21.0" },
     { name = "markdownify", marker = "extra == 'http'", specifier = ">=0.11" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.23,<2" },
     { name = "textual", specifier = ">=1.0.0" },
     { name = "wcmatch", specifier = ">=8.5" },
 ]
-provides-extras = ["skills", "browser", "http", "temporal"]
+provides-extras = ["skills", "http", "temporal"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -14,7 +14,7 @@ Both approaches use **accessibility tree snapshots** (not screenshots) for token
 ### For Playwright MCP (Approach 1)
 
 ```bash
-pip install adk-deepagents[browser]
+pip install adk-deepagents
 ```
 
 Node.js >= 18 is required — `@playwright/mcp` is launched automatically via `npx`.
