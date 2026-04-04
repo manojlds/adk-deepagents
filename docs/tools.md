@@ -651,7 +651,7 @@ Tool call: execute(command="ls -la /workspace")
 
 ### Heimdall MCP Tools
 
-Sandboxed Python and Bash execution via the [Heimdall MCP](https://github.com/heimdall-ai/heimdall) server. Requires `google-adk[mcp]` and `@heimdall-ai/heimdall`.
+Sandboxed Python and Bash execution via the [Heimdall MCP](https://github.com/heimdall-ai/heimdall) server. Requires `google-adk>=1.21.0` and `@heimdall-ai/heimdall`.
 
 Heimdall exposes these tools via MCP (Model Context Protocol):
 
@@ -664,7 +664,7 @@ Heimdall exposes these tools via MCP (Model Context Protocol):
 **Prerequisites:**
 
 ```bash
-pip install google-adk[mcp]
+pip install google-adk
 npm i -g @heimdall-ai/heimdall
 ```
 

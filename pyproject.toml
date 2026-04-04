@@ -6,7 +6,7 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
-    "google-adk>=1.0.0",
+    "google-adk>=1.21.0",
     "python-dotenv>=1.0",
     "textual>=1.0.0",
     "wcmatch>=8.5",
@@ -15,9 +15,6 @@ dependencies = [
 [project.optional-dependencies]
 skills = [
     "adk-skills-agent>=0.1.0",
-]
-browser = [
-    "google-adk[mcp]>=1.0.0",
 ]
 http = [
     "markdownify>=0.11",
