@@ -129,7 +129,7 @@ def fetch_image_as_part(url: str) -> types.Part | None:
             return types.Part(
                 inline_data=types.Blob(
                     mime_type=media_type,
-                    data=base64.b64encode(data).decode("ascii"),
+                    data=base64.b64encode(data),
                 ),
             )
 

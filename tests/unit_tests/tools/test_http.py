@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.error
+from email.message import Message
 from unittest.mock import MagicMock, patch
 
 from adk_deepagents.tools.http import fetch_url, http_request
@@ -52,7 +53,7 @@ class TestFetchUrl:
 
     @patch(
         "adk_deepagents.tools.http.urllib.request.urlopen",
-        side_effect=urllib.error.HTTPError("url", 404, "Not Found", {}, None),
+        side_effect=urllib.error.HTTPError("url", 404, "Not Found", Message(), None),
     )
     @patch("adk_deepagents.tools.http.is_url_safe", return_value=(True, ""))
     def test_http_error(self, mock_safe, mock_urlopen):

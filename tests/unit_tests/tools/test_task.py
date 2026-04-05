@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +19,11 @@ from adk_deepagents.tools.task import (
     build_subagent_tools,
 )
 from adk_deepagents.types import SubAgentSpec
+
+
+def _agent_tool_agent(tools: list[AgentTool], index: int = 0) -> LlmAgent:
+    return cast(LlmAgent, tools[index].agent)
+
 
 # ---------------------------------------------------------------------------
 # _sanitize_agent_name
@@ -127,7 +133,7 @@ class TestBuildSubagentTools:
             include_general_purpose=False,
         )
         assert len(tools) == 1
-        assert tools[0].agent.model == "gemini-2.5-pro"
+        assert _agent_tool_agent(tools).model == "gemini-2.5-pro"
 
     def test_spec_custom_model(self):
         """Sub-agent with model= overrides the default."""
@@ -138,7 +144,7 @@ class TestBuildSubagentTools:
             default_tools=[],
             include_general_purpose=False,
         )
-        assert tools[0].agent.model == "gpt-4o"
+        assert _agent_tool_agent(tools).model == "gpt-4o"
 
     def test_spec_custom_system_prompt(self):
         """Sub-agent with system_prompt uses it as instruction."""
@@ -153,7 +159,7 @@ class TestBuildSubagentTools:
             default_tools=[],
             include_general_purpose=False,
         )
-        assert tools[0].agent.instruction == "You are a coder."
+        assert _agent_tool_agent(tools).instruction == "You are a coder."
 
     def test_spec_default_system_prompt(self):
         """Sub-agent without system_prompt falls back to DEFAULT_SUBAGENT_PROMPT."""
@@ -164,7 +170,7 @@ class TestBuildSubagentTools:
             default_tools=[],
             include_general_purpose=False,
         )
-        assert tools[0].agent.instruction == DEFAULT_SUBAGENT_PROMPT
+        assert _agent_tool_agent(tools).instruction == DEFAULT_SUBAGENT_PROMPT
 
     def test_spec_inherits_default_tools(self):
         """Sub-agent without tools= inherits default_tools."""
@@ -180,7 +186,7 @@ class TestBuildSubagentTools:
             default_tools=[my_tool],
             include_general_purpose=False,
         )
-        assert my_tool in tools[0].agent.tools
+        assert my_tool in _agent_tool_agent(tools).tools
 
     def test_spec_custom_tools_override_defaults(self):
         """Sub-agent with tools= uses those instead of default_tools."""
@@ -204,8 +210,8 @@ class TestBuildSubagentTools:
             default_tools=[default_tool],
             include_general_purpose=False,
         )
-        assert custom_tool in tools[0].agent.tools
-        assert default_tool not in tools[0].agent.tools
+        assert custom_tool in _agent_tool_agent(tools).tools
+        assert default_tool not in _agent_tool_agent(tools).tools
 
     def test_name_sanitization(self):
         """Agent names with hyphens are sanitized."""
@@ -332,6 +338,7 @@ class TestBuildSubagentToolsCallbacks:
             after_tool_callback=at_cb,
         )
         agent = tools[0].agent
+        agent = cast(LlmAgent, agent)
         assert agent.before_agent_callback is ba_cb
         assert agent.before_model_callback is bm_cb
         assert agent.after_tool_callback is at_cb
@@ -349,7 +356,7 @@ class TestBuildSubagentToolsCallbacks:
             default_tools=[],
             include_general_purpose=False,
         )
-        assert tools[0].agent.before_tool_callback is not None
+        assert _agent_tool_agent(tools).before_tool_callback is not None
 
     def test_no_interrupt_on_no_before_tool_callback(self):
         """Sub-agent without interrupt_on gets no before_tool_callback (None)."""
@@ -360,7 +367,7 @@ class TestBuildSubagentToolsCallbacks:
             default_tools=[],
             include_general_purpose=False,
         )
-        assert tools[0].agent.before_tool_callback is None
+        assert _agent_tool_agent(tools).before_tool_callback is None
 
     def test_default_interrupt_on_fallback(self):
         """Sub-agent without interrupt_on inherits default_interrupt_on."""
@@ -372,7 +379,7 @@ class TestBuildSubagentToolsCallbacks:
             include_general_purpose=False,
             default_interrupt_on={"execute": True},
         )
-        assert tools[0].agent.before_tool_callback is not None
+        assert _agent_tool_agent(tools).before_tool_callback is not None
 
     def test_spec_interrupt_on_overrides_default(self):
         """Sub-agent's own interrupt_on takes precedence over default."""
@@ -388,7 +395,7 @@ class TestBuildSubagentToolsCallbacks:
             include_general_purpose=False,
             default_interrupt_on={"execute": True},
         )
-        assert tools[0].agent.before_tool_callback is not None
+        assert _agent_tool_agent(tools).before_tool_callback is not None
 
 
 class TestBuildSubagentToolsSkills:
@@ -443,7 +450,7 @@ class TestBuildSubagentToolsGeneralPurpose:
         )
         gp = [t for t in tools if t.agent.name == "general_purpose"]
         assert len(gp) == 1
-        assert gp[0].agent.instruction == "Custom GP prompt."
+        assert cast(LlmAgent, gp[0].agent).instruction == "Custom GP prompt."
 
     def test_general_purpose_with_hyphenated_name(self):
         """Hyphenated general-purpose is sanitized and deduplication still works."""

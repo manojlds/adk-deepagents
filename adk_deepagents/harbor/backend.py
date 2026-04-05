@@ -11,7 +11,7 @@ import base64
 import json
 import shlex
 
-from harbor.environments.base import BaseEnvironment
+from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-import]
 
 from adk_deepagents.backends.protocol import (
     Backend,

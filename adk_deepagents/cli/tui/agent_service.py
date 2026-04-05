@@ -1206,7 +1206,7 @@ class AgentService:
                 candidate: OptimizationCandidate,
             ) -> BuiltAgent:
                 kwargs = {**candidate.agent_kwargs, "model": model}
-                agent = create_deep_agent(**kwargs)
+                agent = create_deep_agent(**kwargs)  # ty: ignore[invalid-argument-type]
                 return BuiltAgent(agent=agent)
 
             updates_queue = self.updates

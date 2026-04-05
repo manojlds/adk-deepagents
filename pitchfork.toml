@@ -1,0 +1,18 @@
+#:schema https://pitchfork.jdx.dev/schema.json
+
+[daemons.temporal-server]
+run = "bash -lc 'mkdir -p .adk/state/temporal && exec temporal server start-dev --ip 127.0.0.1 --port 7233 --ui-port 8233 --namespace default --db-filename .adk/state/temporal/temporal.db'"
+mise = true
+ready_port = 7233
+
+[daemons.temporal-worker]
+run = "uv run python -m adk_deepagents.temporal.dev_worker --health-port 17451"
+mise = true
+depends = ["temporal-server"]
+ready_port = 17451
+env = { PYTHONUNBUFFERED = "1" }
+
+[daemons.otel-collector]
+run = "bash -lc 'mkdir -p .adk/state/otel && cat > .adk/state/otel/collector-config.yaml <<\"EOF\"\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\n\nprocessors:\n  batch: {}\n\nexporters:\n  debug:\n    verbosity: basic\n  file:\n    path: .adk/state/otel/traces.json\n\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch]\n      exporters: [debug, file]\nEOF\nexec otelcol-contrib --config .adk/state/otel/collector-config.yaml'"
+mise = true
+ready_port = 4318

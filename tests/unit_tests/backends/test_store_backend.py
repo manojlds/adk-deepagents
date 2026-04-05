@@ -135,6 +135,7 @@ class TestStoreBackendWrite:
         shared_store["files"].update(result.files_update)
         result = backend.read("/created.txt")
         assert result.error is None
+        assert result.content is not None
         assert "hello" in result.content
 
 
@@ -258,6 +259,7 @@ class TestStoreBackendCrossThread:
         # Read via backend_b
         result = backend_b.read("/data.txt")
         assert result.error is None
+        assert result.content is not None
         assert "shared data" in result.content
 
     def test_namespace_isolation(self):
@@ -276,6 +278,7 @@ class TestStoreBackendCrossThread:
         # ns1 should see it
         result_ns1 = backend_ns1.read("/secret.txt")
         assert result_ns1.error is None
+        assert result_ns1.content is not None
         assert "ns1 data" in result_ns1.content
 
     def test_no_namespace_shared(self):
@@ -289,6 +292,7 @@ class TestStoreBackendCrossThread:
 
         result = backend_b.read("/global.txt")
         assert result.error is None
+        assert result.content is not None
         assert "global data" in result.content
 
     def test_empty_store_initializes_files(self):
@@ -323,6 +327,7 @@ class TestStoreBackendCompositeRouting:
         # Read back via composite
         result_read = composite.read("/store/data.txt")
         assert result_read.error is None
+        assert result_read.content is not None
         assert "stored content" in result_read.content
 
         # Write to default → StateBackend

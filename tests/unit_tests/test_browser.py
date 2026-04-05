@@ -133,10 +133,12 @@ class TestCreateDeepAgentBrowser:
         with warnings.catch_warnings(record=True):
             warnings.simplefilter("always")
             agent = create_deep_agent(browser="playwright")
+        assert isinstance(agent.instruction, str)
         assert BROWSER_SYSTEM_PROMPT in agent.instruction
 
     def test_no_browser_no_prompt(self):
         agent = create_deep_agent()
+        assert isinstance(agent.instruction, str)
         assert BROWSER_SYSTEM_PROMPT not in agent.instruction
 
     def test_resolved_browser_injects_prompt(self):
@@ -148,6 +150,7 @@ class TestCreateDeepAgentBrowser:
             browser_warnings = [x for x in w if "browser" in str(x.message).lower()]
             assert len(browser_warnings) == 0
         # But prompt should still be injected
+        assert isinstance(agent.instruction, str)
         assert BROWSER_SYSTEM_PROMPT in agent.instruction
 
 

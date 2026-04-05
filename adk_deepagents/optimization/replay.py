@@ -23,7 +23,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from google.adk.agents import LlmAgent
 
@@ -656,6 +656,7 @@ async def replay_trajectory(
         while remaining_prompts or resolved_config.user_simulator:
             turn_index += 1
             agent_last_output = turn_output
+            next_prompt = ""
 
             # Determine the next user message.
             if resolved_config.user_simulator is not None:
@@ -665,10 +666,10 @@ async def replay_trajectory(
                     list(sent_prompts),
                     agent_last_output,
                 )
-                if asyncio.iscoroutine(sim_result):
-                    next_prompt = await sim_result  # type: ignore[misc]
+                if isinstance(sim_result, str):
+                    next_prompt = sim_result
                 else:
-                    next_prompt = sim_result  # type: ignore[assignment]
+                    next_prompt = await cast(Awaitable[str], sim_result)
 
                 # Simulator returning empty string signals end of conversation.
                 if not next_prompt or not next_prompt.strip():

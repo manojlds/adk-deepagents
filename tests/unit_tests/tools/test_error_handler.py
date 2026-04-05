@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from adk_deepagents.tools.error_handler import (
@@ -58,7 +60,7 @@ class TestWrapSyncTool:
         assert wrapped(5) == 10
 
     def test_preserves_name_and_doc(self):
-        wrapped = wrap_tool_with_error_handler(_sync_tool)
+        wrapped = cast(Any, wrap_tool_with_error_handler(_sync_tool))
         assert wrapped.__name__ == "_sync_tool"
         assert wrapped.__doc__ == "A simple sync tool."
 
@@ -88,7 +90,7 @@ class TestWrapAsyncTool:
 
     @pytest.mark.asyncio
     async def test_preserves_name_and_doc(self):
-        wrapped = wrap_tool_with_error_handler(_async_tool)
+        wrapped = cast(Any, wrap_tool_with_error_handler(_async_tool))
         assert wrapped.__name__ == "_async_tool"
         assert wrapped.__doc__ == "A simple async tool."
 

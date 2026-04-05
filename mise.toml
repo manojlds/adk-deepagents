@@ -1,0 +1,23 @@
+[tools]
+uv = "latest"
+pitchfork = "2.3.0"
+"github:temporalio/cli" = "1.6.2"
+"github:open-telemetry/opentelemetry-collector-releases" = "0.149.0"
+
+[env]
+ADK_DEEPAGENTS_TEMPORAL_TARGET_HOST = "127.0.0.1:7233"
+ADK_DEEPAGENTS_TEMPORAL_NAMESPACE = "default"
+ADK_DEEPAGENTS_TEMPORAL_TASK_QUEUE = "adk-deepagents-tasks"
+ADK_DEEPAGENTS_TEMPORAL_WORKER_HEALTH_PORT = "17451"
+OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318"
+OTEL_EXPORTER_OTLP_PROTOCOL = "http/protobuf"
+OTEL_SERVICE_NAME = "adk-deepagents"
+OTEL_TRACES_FILE = ".adk/state/otel/traces.json"
+
+[tasks.temporal-reset]
+run = "rm -rf .adk/state/temporal && mkdir -p .adk/state/temporal && echo 'Temporal state reset: .adk/state/temporal'"
+description = "Reset local Temporal dev state"
+
+[tasks.otel-reset]
+run = "rm -rf .adk/state/otel && mkdir -p .adk/state/otel && echo 'OTEL state reset: .adk/state/otel'"
+description = "Reset local OTEL collector state"

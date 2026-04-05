@@ -223,6 +223,7 @@ class TestOffloadToBackend:
         # The file must be readable via the backend
         result = backend.read("/conversation_history/session_history.md")
         assert result.error is None, f"File not found after offload: {result.error}"
+        assert result.content is not None
         assert "Important context to preserve" in result.content
 
 
@@ -321,6 +322,7 @@ class TestMaybeSummarize:
         assert result.error is None, (
             f"Offloaded history file not found in state after summarization: {result.error}"
         )
+        assert result.content is not None
         assert "ZULU-42" in result.content
 
 

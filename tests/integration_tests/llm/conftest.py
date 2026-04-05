@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import signal
 from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -61,14 +61,11 @@ async def _wait_for_temporal_port(
     *,
     target_host: str,
     timeout_seconds: float,
-    process: asyncio.subprocess.Process | None = None,
 ) -> bool:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
 
     while loop.time() < deadline:
-        if process is not None and process.returncode is not None:
-            return False
         if await _can_connect_temporal_port(target_host):
             return True
         await asyncio.sleep(0.5)
@@ -76,30 +73,14 @@ async def _wait_for_temporal_port(
     return False
 
 
-async def _terminate_process_tree(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
-        return
-
-    with suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGTERM)
-
-    try:
-        await asyncio.wait_for(process.wait(), timeout=15.0)
-    except TimeoutError:
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-        with suppress(Exception):
-            await process.wait()
-
-
-@pytest.fixture
+@pytest.fixture(scope="session")
 async def ensure_temporal_server() -> AsyncGenerator[TemporalTaskConfig, None]:
     """Ensure Temporal dev server is reachable for LLM Temporal tests.
 
     Behavior:
     - If server is already reachable at configured host: use it as-is.
-    - Otherwise, try `devenv up temporal-server`, wait until reachable, and
-      tear it down after the test.
+    - Otherwise, try `pitchfork start temporal-server`, wait until reachable,
+      and tear it down after the test.
     - If neither is possible, skip the test with guidance.
     """
     config = TemporalTaskConfig(
@@ -112,13 +93,13 @@ async def ensure_temporal_server() -> AsyncGenerator[TemporalTaskConfig, None]:
         yield config
         return
 
-    if shutil.which("devenv") is None:
+    if shutil.which("pitchfork") is None:
         # Fall back to the SDK-bundled Temporal test server.
         try:
             from temporalio.testing import WorkflowEnvironment
         except ImportError:
             pytest.skip(
-                "Temporal server is not reachable, `devenv` is not installed, "
+                "Temporal server is not reachable, `pitchfork` is not installed, "
                 "and `temporalio` is not available. Start Temporal manually at "
                 f"{config.target_host} or install the temporal extra."
             )
@@ -137,31 +118,61 @@ async def ensure_temporal_server() -> AsyncGenerator[TemporalTaskConfig, None]:
             await env.shutdown()
         return
 
-    process = await asyncio.create_subprocess_exec(
-        "devenv",
-        "up",
+    repo_root = Path(__file__).resolve().parents[3]
+
+    start = await asyncio.create_subprocess_exec(
+        "pitchfork",
+        "start",
         "temporal-server",
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
+        cwd=str(repo_root),
     )
+    start_returncode = await start.wait()
+
+    if start_returncode != 0 and not await _wait_for_temporal_port(
+        target_host=config.target_host,
+        timeout_seconds=5.0,
+    ):
+        pytest.skip(
+            "`pitchfork start temporal-server` failed and Temporal is still unreachable. "
+            "Start Temporal manually and retry."
+        )
 
     ready = await _wait_for_temporal_port(
         target_host=config.target_host,
         timeout_seconds=60.0,
-        process=process,
     )
     if not ready:
-        await _terminate_process_tree(process)
+        with suppress(Exception):
+            await asyncio.create_subprocess_exec(
+                "pitchfork",
+                "stop",
+                "temporal-server",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=str(repo_root),
+            )
         pytest.skip(
-            "Failed to auto-start Temporal with `devenv up temporal-server`. "
+            "Failed to auto-start Temporal with `pitchfork start temporal-server`. "
             "Start Temporal manually and retry."
         )
 
     try:
         yield config
     finally:
-        await _terminate_process_tree(process)
+        # Under xdist each worker has its own session fixture; stopping the
+        # shared daemon from one worker can flap other workers.
+        if "PYTEST_XDIST_WORKER" not in os.environ:
+            with suppress(Exception):
+                await asyncio.create_subprocess_exec(
+                    "pitchfork",
+                    "stop",
+                    "temporal-server",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    cwd=str(repo_root),
+                )
 
 
 @pytest.fixture

@@ -33,7 +33,7 @@ The TUI (`adk-deepagents --tui`) provides the full workflow interactively.
 ### Step 1: Chat and collect trajectories
 
 Chat with the agent normally. OTEL traces are captured automatically when
-the OTEL collector is configured (via `devenv` or `OTEL_TRACES_FILE` env var).
+the OTEL collector is configured (via `pitchfork` or `OTEL_TRACES_FILE` env var).
 
 ```
 you> Write a blog post about Python for beginners

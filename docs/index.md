@@ -100,7 +100,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Skills Integration](skills.md) | Root-agent and sub-agent skills, `add_skills_tools`, prompt injection |
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
 | [Optimization & Trajectories](optimization.md) | LLM judge, trajectory replay, autoresearch optimization loop, TUI workflow |
-| [Temporal Backend](temporal.md) | Configure Temporal-backed dynamic tasks, workers, and devenv services |
+| [Temporal Backend](temporal.md) | Configure Temporal-backed dynamic tasks, workers, and mise + pitchfork services |
 
 ## Project Structure
 

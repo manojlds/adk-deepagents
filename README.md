@@ -348,7 +348,7 @@ agent = create_deep_agent(
 )
 ```
 
-See [docs/temporal.md](docs/temporal.md) for worker setup, `devenv` services,
+See [docs/temporal.md](docs/temporal.md) for worker setup, `mise + pitchfork` services,
 and integration test instructions.
 
 When the CLI runs in an environment with `ADK_DEEPAGENTS_TEMPORAL_*` variables,
@@ -515,26 +515,36 @@ uv run ruff format .
 uv run ty check
 ```
 
-### devenv (Temporal + OTEL collector)
+### mise + pitchfork (Temporal + OTEL collector)
 
-The repo includes a `devenv.nix` that can run local support services for
-Temporal workflows and OTEL trace collection.
+The repo includes `mise.toml` and `pitchfork.toml` to run local support
+services for Temporal workflows and OTEL trace collection.
+
+`mise.toml` also exports the `ADK_DEEPAGENTS_TEMPORAL_*` and OTEL environment
+variables used by the CLI and dev worker.
 
 ```bash
-# Start services (temporal-server + temporal-worker + otel-collector)
-devenv up
+# Install/update local tools pinned in mise.toml
+mise trust
+mise install
 
-# Enter shell with devenv-provided environment variables
-devenv shell
+# Start services (temporal-server + temporal-worker + otel-collector)
+pitchfork start temporal-server temporal-worker otel-collector
 
 # Start only Temporal stack processes
-devenv up temporal-server temporal-worker
+pitchfork start temporal-server temporal-worker
+
+# Start only OTEL collector
+pitchfork start otel-collector
+
+# Stop all local dev daemons in this repo
+pitchfork stop --all
 
 # Reset local OTEL state file
-otel-reset
+mise run otel-reset
 
 # Reset local Temporal dev state
-temporal-reset
+mise run temporal-reset
 ```
 
 `temporal-worker` runs `uv run python -m adk_deepagents.temporal.dev_worker`
@@ -551,14 +561,7 @@ same `task_id` can resume; they auto-complete after idle timeout
 Trace collector output is written to:
 
 ```text
-.devenv/state/otel/traces.json
-```
-
-The lockfile (`devenv.lock`) pins devenv inputs for reproducible environments.
-Update it with:
-
-```bash
-devenv update
+.adk/state/otel/traces.json
 ```
 
 ### Testing

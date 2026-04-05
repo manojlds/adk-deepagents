@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from unittest.mock import MagicMock, patch
 
 from google.genai import types
@@ -116,7 +117,9 @@ class TestProcessMultimodalContent:
 
     @patch("adk_deepagents.tools.multimodal.fetch_image_as_part")
     def test_image_attached(self, mock_fetch):
-        mock_part = types.Part(inline_data=types.Blob(mime_type="image/png", data="aW1hZ2U="))
+        mock_part = types.Part(
+            inline_data=types.Blob(mime_type="image/png", data=base64.b64decode("aW1hZ2U="))
+        )
         mock_fetch.return_value = mock_part
 
         contents = [
@@ -127,11 +130,14 @@ class TestProcessMultimodalContent:
         ]
         result = process_multimodal_content(contents)
         assert result is True
+        assert contents[0].parts is not None
         assert len(contents[0].parts) == 2
 
     @patch("adk_deepagents.tools.multimodal.fetch_image_as_part")
     def test_cache_used(self, mock_fetch):
-        cached_part = types.Part(inline_data=types.Blob(mime_type="image/png", data="Y2FjaGVk"))
+        cached_part = types.Part(
+            inline_data=types.Blob(mime_type="image/png", data=base64.b64decode("Y2FjaGVk"))
+        )
         cache = {"https://example.com/img.png": cached_part}
 
         contents = [
@@ -142,6 +148,7 @@ class TestProcessMultimodalContent:
         ]
         process_multimodal_content(contents, fetched_cache=cache)
         mock_fetch.assert_not_called()
+        assert contents[0].parts is not None
         assert len(contents[0].parts) == 2
 
     @patch("adk_deepagents.tools.multimodal.fetch_image_as_part", return_value=None)
@@ -155,4 +162,5 @@ class TestProcessMultimodalContent:
         ]
         process_multimodal_content(contents, fetched_cache=cache)
         assert cache["https://example.com/broken.png"] is None
+        assert contents[0].parts is not None
         assert len(contents[0].parts) == 1

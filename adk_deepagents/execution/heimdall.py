@@ -1,7 +1,7 @@
 """Heimdall MCP integration — sandboxed code execution.
 
 Integrates the Heimdall MCP server for sandboxed Python (Pyodide/WASM)
-and Bash (just-bash) execution via ADK's ``MCPToolset``.
+and Bash (just-bash) execution via ADK's ``McpToolset``.
 
 Heimdall provides:
 - ``execute_python``: Sandboxed Python via Pyodide WebAssembly
@@ -23,10 +23,21 @@ Usage::
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _import_mcp_toolset_module() -> Any:
+    try:
+        return importlib.import_module("google.adk.tools.mcp_tool.mcp_toolset")
+    except ImportError as e:
+        raise ImportError(
+            "MCP toolset not available. Ensure google-adk>=1.21.0 and mcp are installed."
+        ) from e
+
 
 # Tool names exposed by Heimdall that we want to include
 HEIMDALL_TOOL_NAMES = frozenset(
@@ -85,31 +96,68 @@ async def get_heimdall_tools(
     RuntimeError
         If connection to the Heimdall MCP server fails.
     """
-    try:
-        from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset, StdioServerParameters
-    except ImportError as e:
-        raise ImportError(
-            "MCP toolset not available. Ensure google-adk>=1.21.0 and mcp are installed."
-        ) from e
+    mcp_module = _import_mcp_toolset_module()
 
     server_args = args or ["@heimdall-ai/heimdall"]
     server_env = {"HEIMDALL_WORKSPACE": workspace_path}
     if env:
         server_env.update(env)
 
-    try:
-        tools, exit_stack = await MCPToolset.from_server(
-            connection_params=StdioServerParameters(
-                command=command,
-                args=server_args,
-                env=server_env,
-            ),
-        )
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to connect to Heimdall MCP server: {e}. "
-            "Ensure @heimdall-ai/heimdall is installed (npm i -g @heimdall-ai/heimdall)."
-        ) from e
+    legacy_toolset = getattr(mcp_module, "MCPToolset", None)
+    legacy_from_server = getattr(legacy_toolset, "from_server", None)
+
+    if callable(legacy_from_server):
+        try:
+            stdio_server_parameters = mcp_module.StdioServerParameters
+            tools, exit_stack = await legacy_from_server(
+                connection_params=stdio_server_parameters(
+                    command=command,
+                    args=server_args,
+                    env=server_env,
+                )
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to connect to Heimdall MCP server: {e}. "
+                "Ensure @heimdall-ai/heimdall is installed (npm i -g @heimdall-ai/heimdall)."
+            ) from e
+
+        async def cleanup() -> None:
+            """Close the MCP server connection."""
+            try:
+                await exit_stack.aclose()
+            except Exception:
+                logger.exception("Error closing Heimdall MCP connection")
+
+    else:
+        try:
+            mcp_toolset = mcp_module.McpToolset
+            stdio_connection_params = mcp_module.StdioConnectionParams
+            stdio_server_parameters = mcp_module.StdioServerParameters
+
+            toolset = mcp_toolset(
+                connection_params=stdio_connection_params(
+                    server_params=stdio_server_parameters(
+                        command=command,
+                        args=server_args,
+                        env=server_env,
+                    ),
+                    timeout=60.0,
+                )
+            )
+            tools = await toolset.get_tools()
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to connect to Heimdall MCP server: {e}. "
+                "Ensure @heimdall-ai/heimdall is installed (npm i -g @heimdall-ai/heimdall)."
+            ) from e
+
+        async def cleanup() -> None:
+            """Close the MCP server connection."""
+            try:
+                await toolset.close()
+            except Exception:
+                logger.exception("Error closing Heimdall MCP connection")
 
     if filter_tools:
         allowed_names = HEIMDALL_TOOL_NAMES | HEIMDALL_WORKSPACE_TOOL_NAMES
@@ -121,13 +169,6 @@ async def get_heimdall_tools(
         [getattr(t, "name", "?") for t in tools],
     )
 
-    async def cleanup() -> None:
-        """Close the MCP server connection."""
-        try:
-            await exit_stack.aclose()
-        except Exception:
-            logger.exception("Error closing Heimdall MCP connection")
-
     return tools, cleanup
 
 
@@ -136,8 +177,8 @@ async def get_heimdall_tools_from_config(
 ) -> tuple[list[Any], Any]:
     """Connect to a Heimdall MCP server using a custom configuration dict.
 
-    The *config* dict is passed to ``MCPToolset.from_server()`` as keyword
-    arguments. Supports both stdio and SSE transports.
+    The *config* dict configures an ADK ``McpToolset`` instance.
+    Supports stdio, SSE, and streamable HTTP transports.
 
     Parameters
     ----------
@@ -150,46 +191,78 @@ async def get_heimdall_tools_from_config(
     tuple[list, Any]
         ``(tools, cleanup)`` — same as ``get_heimdall_tools()``.
     """
-    try:
-        from google.adk.tools.mcp_tool.mcp_toolset import (
-            MCPToolset,
-            SseServerParams,
-            StdioServerParameters,
-        )
-    except ImportError as e:
-        raise ImportError(
-            "MCP toolset not available. Ensure google-adk>=1.21.0 and mcp are installed."
-        ) from e
+    mcp_module = _import_mcp_toolset_module()
 
-    if "uri" in config:
-        # SSE transport
-        connection_params = SseServerParams(url=config["uri"])
+    legacy_toolset = getattr(mcp_module, "MCPToolset", None)
+    legacy_from_server = getattr(legacy_toolset, "from_server", None)
+
+    if callable(legacy_from_server):
+        try:
+            stdio_server_parameters = mcp_module.StdioServerParameters
+            if "uri" in config:
+                sse_server_params = mcp_module.SseServerParams
+                connection_params = sse_server_params(url=config["uri"])
+            else:
+                connection_params = stdio_server_parameters(
+                    command=config.get("command", "npx"),
+                    args=config.get("args", ["@heimdall-ai/heimdall"]),
+                    env=config.get("env", {}),
+                )
+
+            tools, exit_stack = await legacy_from_server(connection_params=connection_params)
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to MCP server: {e}") from e
+
+        async def cleanup() -> None:
+            """Close the MCP server connection."""
+            try:
+                await exit_stack.aclose()
+            except Exception:
+                logger.exception("Error closing MCP connection")
+
     else:
-        # Stdio transport
-        connection_params = StdioServerParameters(
-            command=config.get("command", "npx"),
-            args=config.get("args", ["@heimdall-ai/heimdall"]),
-            env=config.get("env", {}),
-        )
+        if "uri" in config:
+            # Supports both /sse and streamable HTTP endpoints.
+            uri = str(config["uri"])
+            if uri.rstrip("/").endswith("/sse"):
+                sse_connection_params = mcp_module.SseConnectionParams
+                connection_params = sse_connection_params(url=uri, timeout=60.0)
+            else:
+                streamable_http_connection_params = mcp_module.StreamableHTTPConnectionParams
+                connection_params = streamable_http_connection_params(url=uri, timeout=60.0)
+        else:
+            # Stdio transport
+            stdio_connection_params = mcp_module.StdioConnectionParams
+            stdio_server_parameters = mcp_module.StdioServerParameters
+            connection_params = stdio_connection_params(
+                server_params=stdio_server_parameters(
+                    command=config.get("command", "npx"),
+                    args=config.get("args", ["@heimdall-ai/heimdall"]),
+                    env=config.get("env", {}),
+                ),
+                timeout=60.0,
+            )
 
-    try:
-        tools, exit_stack = await MCPToolset.from_server(
-            connection_params=connection_params,
-        )
-    except Exception as e:
-        raise RuntimeError(f"Failed to connect to MCP server: {e}") from e
+        try:
+            mcp_toolset = mcp_module.McpToolset
+            toolset = mcp_toolset(
+                connection_params=connection_params,
+            )
+            tools = await toolset.get_tools()
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to MCP server: {e}") from e
+
+        async def cleanup() -> None:
+            """Close the MCP server connection."""
+            try:
+                await toolset.close()
+            except Exception:
+                logger.exception("Error closing MCP connection")
 
     logger.info(
         "Connected to MCP server with %d tools: %s",
         len(tools),
         [getattr(t, "name", "?") for t in tools],
     )
-
-    async def cleanup() -> None:
-        """Close the MCP server connection."""
-        try:
-            await exit_stack.aclose()
-        except Exception:
-            logger.exception("Error closing MCP connection")
 
     return tools, cleanup

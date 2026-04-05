@@ -159,5 +159,13 @@ def inject_skills_into_prompt(
     try:
         return registry.inject_skills_prompt(instruction, format=format)
     except Exception:
-        logger.exception("Failed to inject skills prompt")
+        logger.exception("Failed to inject skills prompt; falling back to get_skills_prompt")
+
+    try:
+        prompt = registry.get_skills_prompt(format=format)
+        if not isinstance(prompt, str):
+            raise TypeError("skills prompt must be a string")
+        return f"{instruction}\n\n{prompt}"
+    except Exception:
+        logger.exception("Failed to build skills prompt")
         return instruction

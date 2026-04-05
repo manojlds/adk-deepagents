@@ -41,9 +41,9 @@ honor custom descriptions/prompts/models/tool selections. The client also
 tracks a stable spec hash and avoids re-sending unchanged full spec payloads
 on every workflow update.
 
-## Run Temporal services with devenv
+## Run Temporal services with mise + pitchfork
 
-This repository includes a `devenv.nix` profile with:
+This repository includes `mise.toml` and `pitchfork.toml` with:
 
 - `temporal-server`
 - `temporal-worker`
@@ -52,11 +52,18 @@ This repository includes a `devenv.nix` profile with:
 Quick start:
 
 ```bash
+# Install/update local tools pinned in mise.toml
+mise trust
+mise install
+
 # Start Temporal server + worker
-devenv up temporal-server temporal-worker
+pitchfork start temporal-server temporal-worker
 
 # Or start all local support services
-devenv up
+pitchfork start temporal-server temporal-worker otel-collector
+
+# Stop all local dev daemons in this repo
+pitchfork stop --all
 ```
 
 Defaults:
@@ -66,7 +73,7 @@ Defaults:
 - namespace: `default`
 - task queue: `adk-deepagents-tasks`
 - worker health probe: `127.0.0.1:17451`
-- SQLite DB: `.devenv/state/temporal/temporal.db`
+- SQLite DB: `.adk/state/temporal/temporal.db`
 
 The `temporal-worker` process runs:
 
@@ -74,8 +81,15 @@ The `temporal-worker` process runs:
 uv run python -m adk_deepagents.temporal.dev_worker
 ```
 
-The devenv process passes `--health-port 17451` so local supervisors can do a
+The pitchfork process passes `--health-port 17451` so local supervisors can do a
 simple liveness probe.
+
+Helper reset tasks are available via mise:
+
+```bash
+mise run temporal-reset
+mise run otel-reset
+```
 
 and picks model in this order:
 
@@ -95,6 +109,9 @@ If you use vaibhav, one command starts the same stack:
 
 ```bash
 vaibhav dev start adk-deepagents
+
+# optional: include OTEL collector too
+vaibhav dev start adk-deepagents otel-collector
 ```
 
 ## Run a custom Temporal worker
@@ -147,6 +164,6 @@ uv run pytest -m llm tests/integration_tests/llm/test_temporal_dynamic_task_dele
 ```
 
 The test first checks if Temporal is reachable at the configured host. If not,
-it attempts to auto-start `devenv up temporal-server` for the test duration and
+it attempts to auto-start `pitchfork start temporal-server` for the test duration and
 cleans it up afterwards. If neither is possible (e.g., no reachable server and
-no `devenv`), the test is skipped with guidance.
+no `pitchfork`), the test is skipped with guidance.

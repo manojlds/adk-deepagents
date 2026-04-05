@@ -27,6 +27,7 @@ class TestRouteResolution:
         composite = CompositeBackend(default=default)
         result = composite.read("/file.txt")
         assert result.error is None
+        assert result.content is not None
         assert "hello" in result.content
 
     def test_route_matches_exact_prefix(self):
@@ -35,6 +36,7 @@ class TestRouteResolution:
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = composite.read("/workspace/file.txt")
         assert result.error is None
+        assert result.content is not None
         assert "ws content" in result.content
 
     def test_route_matches_subpath(self):
@@ -43,6 +45,7 @@ class TestRouteResolution:
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = composite.read("/workspace/sub/file.txt")
         assert result.error is None
+        assert result.content is not None
         assert "deep" in result.content
 
     def test_longer_prefix_wins(self):
@@ -58,6 +61,7 @@ class TestRouteResolution:
         )
         result = composite.read("/workspace/data/f.txt")
         assert result.error is None
+        assert result.content is not None
         assert "ws_data" in result.content
 
     def test_fallback_to_default(self):
@@ -66,6 +70,7 @@ class TestRouteResolution:
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = composite.read("/other.txt")
         assert result.error is None
+        assert result.content is not None
         assert "default" in result.content
 
 
@@ -207,6 +212,7 @@ class TestCompositeAsyncDelegation:
         composite = CompositeBackend(default=default)
         result = await composite.aread("/file.txt")
         assert result.error is None
+        assert result.content is not None
         assert "hello" in result.content
 
     async def test_aread_route(self):
@@ -215,6 +221,7 @@ class TestCompositeAsyncDelegation:
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = await composite.aread("/workspace/file.txt")
         assert result.error is None
+        assert result.content is not None
         assert "ws content" in result.content
 
     async def test_awrite(self):

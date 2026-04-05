@@ -29,7 +29,7 @@ DEFAULT_TIMEOUT = 30
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to Markdown, falling back to raw HTML if markdownify is unavailable."""
     try:
-        from markdownify import markdownify
+        from markdownify import markdownify  # ty: ignore[unresolved-import]
 
         return markdownify(html, heading_style="ATX", strip=["img", "script", "style"])
     except ImportError:

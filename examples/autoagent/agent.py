@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harbor.environments.base import BaseEnvironment
+from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-import]
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.harbor import HarborAdapter, HarborBackend, create_harbor_execute_tool
@@ -42,7 +42,7 @@ def _build_instruction() -> str:
     dirs = [str(Path(__file__).parent / d) for d in SKILLS_DIRS]
     discovered = registry.discover(dirs)
     if discovered > 0:
-        return registry.inject_skills_prompt(SYSTEM_PROMPT, format="xml")
+        return f"{SYSTEM_PROMPT}\n\n{registry.get_skills_prompt(format='xml')}"
     return SYSTEM_PROMPT
 
 

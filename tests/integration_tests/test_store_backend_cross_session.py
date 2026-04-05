@@ -32,6 +32,7 @@ class TestCrossSessionSharing:
 
         result = backend_b.read("/readme.md")
         assert result.error is None
+        assert result.content is not None
         assert "# Hello" in result.content
 
 
@@ -50,10 +51,12 @@ class TestNamespaceIsolation:
 
         alpha_result = backend_alpha.read("/secret.txt")
         assert alpha_result.error is None
+        assert alpha_result.content is not None
         assert "alpha data" in alpha_result.content
 
         beta_result = backend_beta.read("/secret.txt")
         assert beta_result.error is None
+        assert beta_result.content is not None
         assert "beta data" in beta_result.content
 
 
@@ -73,6 +76,7 @@ class TestNamespacePathPrefixing:
 
         result = backend.read("/file.txt")
         assert result.error is None
+        assert result.content is not None
         assert "content" in result.content
 
 

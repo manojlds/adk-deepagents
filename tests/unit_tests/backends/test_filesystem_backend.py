@@ -272,10 +272,12 @@ class TestNonVirtualMode:
         file_path = str(tmp_root / "hello.txt")
         result = backend.read(file_path)
         assert result.error is None
+        assert result.content is not None
         assert "Hello, World!" in result.content
 
     def test_relative_path(self, tmp_root):
         backend = FilesystemBackend(root_dir=tmp_root, virtual_mode=False)
         result = backend.read("hello.txt")
         assert result.error is None
+        assert result.content is not None
         assert "Hello, World!" in result.content

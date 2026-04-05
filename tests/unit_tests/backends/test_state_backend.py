@@ -73,6 +73,7 @@ class TestStateBackendWrite:
         populated_state["files"].update(result.files_update)
         result = backend.read("/created.txt")
         assert result.error is None
+        assert result.content is not None
         assert "hello" in result.content
 
 

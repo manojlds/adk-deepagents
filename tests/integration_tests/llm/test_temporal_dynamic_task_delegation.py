@@ -5,8 +5,8 @@ Run with:
 
 Requires:
 - valid LLM credentials for ``make_litellm_model()``
-- Temporal server reachable **or** `devenv` available to auto-start
-  `devenv up temporal-server` for the duration of the test
+- Temporal server reachable **or** `pitchfork` available to auto-start
+  `pitchfork start temporal-server` for the duration of the test
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from google.adk.agents import LlmAgent
 
 from adk_deepagents import create_deep_agent
 from adk_deepagents.cli.resources import MemoryMappedFilesystemBackend
@@ -55,7 +56,7 @@ async def _temporal_worker(
     temporal_config: TemporalTaskConfig,
     dynamic_task_config: DynamicTaskConfig,
     *,
-    subagents: list[SubAgentSpec] | None = None,
+    subagents: list[SubAgentSpec | LlmAgent] | None = None,
     default_tools: list | None = None,
 ):
     """Context manager that starts a Temporal worker and tears it down."""

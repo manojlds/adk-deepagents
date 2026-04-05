@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from harbor.environments.base import BaseEnvironment
+from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-import]
 
 
 def create_harbor_execute_tool(environment: BaseEnvironment) -> Callable:

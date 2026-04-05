@@ -431,9 +431,9 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     if otel_env:
         otel_traces_path = Path(otel_env)
     else:
-        devenv_traces = Path.cwd() / ".devenv" / "state" / "otel" / "traces.json"
-        if devenv_traces.exists():
-            otel_traces_path = devenv_traces
+        local_state_traces = Path.cwd() / ".adk" / "state" / "otel" / "traces.json"
+        if local_state_traces.exists():
+            otel_traces_path = local_state_traces
 
     resolved_model = resolve_model(args.model, defaults)
     dynamic_task_config = build_cli_dynamic_task_config(defaults)

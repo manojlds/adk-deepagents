@@ -567,7 +567,7 @@ def create_deep_agent(
         name=name,
         model=model,
         instruction=full_instruction,
-        tools=all_tools,  # type: ignore[invalid-argument-type]
+        tools=all_tools,
         output_schema=output_schema,
         before_agent_callback=callbacks["before_agent"],
         before_model_callback=callbacks["before_model"],

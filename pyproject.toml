@@ -46,7 +46,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build]
-exclude = [".devenv/**"]
+exclude = [".adk/**", ".devenv/**"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["adk_deepagents"]

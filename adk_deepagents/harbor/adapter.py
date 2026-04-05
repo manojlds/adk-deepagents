@@ -17,9 +17,9 @@ from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-from harbor.agents.base import BaseAgent
-from harbor.environments.base import BaseEnvironment
-from harbor.models.agent.context import AgentContext
+from harbor.agents.base import BaseAgent  # ty: ignore[unresolved-import]
+from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-import]
+from harbor.models.agent.context import AgentContext  # ty: ignore[unresolved-import]
 
 # ---------------------------------------------------------------------------
 # ATIF serialization
