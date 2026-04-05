@@ -26,21 +26,24 @@ class TestRouteResolution:
         default = _make_backend({"/file.txt": create_file_data("hello")})
         composite = CompositeBackend(default=default)
         result = composite.read("/file.txt")
-        assert "hello" in result
+        assert result.error is None
+        assert "hello" in result.content
 
     def test_route_matches_exact_prefix(self):
         default = _make_backend()
         ws = _make_backend({"/workspace/file.txt": create_file_data("ws content")})
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = composite.read("/workspace/file.txt")
-        assert "ws content" in result
+        assert result.error is None
+        assert "ws content" in result.content
 
     def test_route_matches_subpath(self):
         default = _make_backend()
         ws = _make_backend({"/workspace/sub/file.txt": create_file_data("deep")})
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = composite.read("/workspace/sub/file.txt")
-        assert "deep" in result
+        assert result.error is None
+        assert "deep" in result.content
 
     def test_longer_prefix_wins(self):
         default = _make_backend()
@@ -54,14 +57,16 @@ class TestRouteResolution:
             },
         )
         result = composite.read("/workspace/data/f.txt")
-        assert "ws_data" in result
+        assert result.error is None
+        assert "ws_data" in result.content
 
     def test_fallback_to_default(self):
         default = _make_backend({"/other.txt": create_file_data("default")})
         ws = _make_backend()
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = composite.read("/other.txt")
-        assert "default" in result
+        assert result.error is None
+        assert "default" in result.content
 
 
 # ---------------------------------------------------------------------------
@@ -201,14 +206,16 @@ class TestCompositeAsyncDelegation:
         default = _make_backend({"/file.txt": create_file_data("hello")})
         composite = CompositeBackend(default=default)
         result = await composite.aread("/file.txt")
-        assert "hello" in result
+        assert result.error is None
+        assert "hello" in result.content
 
     async def test_aread_route(self):
         default = _make_backend()
         ws = _make_backend({"/workspace/file.txt": create_file_data("ws content")})
         composite = CompositeBackend(default=default, routes={"/workspace": ws})
         result = await composite.aread("/workspace/file.txt")
-        assert "ws content" in result
+        assert result.error is None
+        assert "ws content" in result.content
 
     async def test_awrite(self):
         default = _make_backend()
@@ -253,7 +260,9 @@ class TestCompositeAsyncDelegation:
 
         mock_backend = MagicMock(spec=Backend)
         mock_backend.als_info = AsyncMock(return_value=[])
-        mock_backend.aread = AsyncMock(return_value="content")
+        mock_backend.aread = AsyncMock(
+            return_value=MagicMock(content="content", error=None, path="/file.txt")
+        )
         mock_backend.awrite = AsyncMock(return_value=MagicMock(error=None))
         mock_backend.aedit = AsyncMock(return_value=MagicMock(error=None))
 

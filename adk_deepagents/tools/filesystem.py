@@ -145,12 +145,12 @@ def read_file(
             "content": {"type": "image", "media_type": media_type, "data": encoded},
         }
 
-    content = backend.read(validated, offset=offset, limit=limit)
+    result = backend.read(validated, offset=offset, limit=limit)
 
-    if content.startswith("Error:"):
-        return {"status": "error", "message": content}
+    if result.error:
+        return {"status": "error", "message": f"Error: {result.error}: {result.path}"}
 
-    return {"status": "success", "content": content}
+    return {"status": "success", "content": result.content}
 
 
 def write_file(file_path: str, content: str, tool_context: ToolContext) -> dict:
@@ -265,10 +265,6 @@ def grep(
 
     backend = _get_backend(tool_context)
     raw_result = backend.grep_raw(pattern, validated_path, glob)
-
-    if isinstance(raw_result, str):
-        # Already formatted (e.g., from ripgrep backend)
-        return {"status": "success", "result": truncate_if_too_long(raw_result)}
 
     formatted = format_grep_matches(raw_result, output_mode)
     return {"status": "success", "result": truncate_if_too_long(formatted)}

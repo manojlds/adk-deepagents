@@ -68,32 +68,35 @@ class TestLs:
 
 class TestRead:
     def test_read_existing(self, fs_backend):
-        content = fs_backend.read("/hello.txt")
-        assert "Hello, World!" in content
+        result = fs_backend.read("/hello.txt")
+        assert result.error is None
+        assert "Hello, World!" in result.content
 
     def test_read_with_line_numbers(self, fs_backend):
-        content = fs_backend.read("/src/main.py")
-        # Should contain line numbers
-        assert "1" in content
-        assert "def main" in content
+        result = fs_backend.read("/src/main.py")
+        assert result.error is None
+        assert "1" in result.content
+        assert "def main" in result.content
 
     def test_read_nonexistent(self, fs_backend):
-        content = fs_backend.read("/missing.txt")
-        assert "Error" in content
+        result = fs_backend.read("/missing.txt")
+        assert result.error is not None
 
     def test_read_with_offset(self, fs_backend):
-        content = fs_backend.read("/src/main.py", offset=1, limit=1)
-        assert "print" in content
+        result = fs_backend.read("/src/main.py", offset=1, limit=1)
+        assert result.error is None
+        assert "print" in result.content
 
     def test_read_directory_gives_error(self, fs_backend):
-        content = fs_backend.read("/src")
-        assert "Error" in content
+        result = fs_backend.read("/src")
+        assert result.error is not None
 
     def test_read_empty_file(self, tmp_root):
         (tmp_root / "empty.txt").write_text("")
         backend = FilesystemBackend(root_dir=tmp_root, virtual_mode=True)
-        content = backend.read("/empty.txt")
-        assert "empty" in content.lower() or "System reminder" in content
+        result = backend.read("/empty.txt")
+        assert result.error is None
+        assert result.content is not None
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +270,12 @@ class TestNonVirtualMode:
     def test_absolute_path(self, tmp_root):
         backend = FilesystemBackend(root_dir=tmp_root, virtual_mode=False)
         file_path = str(tmp_root / "hello.txt")
-        content = backend.read(file_path)
-        assert "Hello, World!" in content
+        result = backend.read(file_path)
+        assert result.error is None
+        assert "Hello, World!" in result.content
 
     def test_relative_path(self, tmp_root):
         backend = FilesystemBackend(root_dir=tmp_root, virtual_mode=False)
-        content = backend.read("hello.txt")
-        assert "Hello, World!" in content
+        result = backend.read("hello.txt")
+        assert result.error is None
+        assert "Hello, World!" in result.content

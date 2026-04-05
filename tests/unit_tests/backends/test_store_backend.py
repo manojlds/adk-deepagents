@@ -92,20 +92,23 @@ class TestStoreBackendLs:
 
 class TestStoreBackendRead:
     def test_read_existing(self, store_backend):
-        content = store_backend.read("/hello.txt")
-        assert "Hello, World!" in content
+        result = store_backend.read("/hello.txt")
+        assert result.error is None
+        assert "Hello, World!" in result.content
 
     def test_read_with_line_numbers(self, store_backend):
-        content = store_backend.read("/src/main.py")
-        assert "1\t" in content or "1" in content
+        result = store_backend.read("/src/main.py")
+        assert result.error is None
+        assert "1\t" in result.content or "1" in result.content
 
     def test_read_nonexistent(self, store_backend):
-        content = store_backend.read("/missing.txt")
-        assert "Error" in content or "not found" in content
+        result = store_backend.read("/missing.txt")
+        assert result.error is not None
 
     def test_read_with_offset(self, store_backend):
-        content = store_backend.read("/src/main.py", offset=1, limit=1)
-        assert "print" in content
+        result = store_backend.read("/src/main.py", offset=1, limit=1)
+        assert result.error is None
+        assert "print" in result.content
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +133,9 @@ class TestStoreBackendWrite:
         assert result.files_update is not None
         # Apply update
         shared_store["files"].update(result.files_update)
-        content = backend.read("/created.txt")
-        assert "hello" in content
+        result = backend.read("/created.txt")
+        assert result.error is None
+        assert "hello" in result.content
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +256,9 @@ class TestStoreBackendCrossThread:
         shared["files"].update(result.files_update)
 
         # Read via backend_b
-        content = backend_b.read("/data.txt")
-        assert "shared data" in content
+        result = backend_b.read("/data.txt")
+        assert result.error is None
+        assert "shared data" in result.content
 
     def test_namespace_isolation(self):
         """Different namespaces cannot see each other's files."""
@@ -265,12 +270,13 @@ class TestStoreBackendCrossThread:
         shared["files"].update(result.files_update)
 
         # ns2 should not see ns1's file
-        content = backend_ns2.read("/secret.txt")
-        assert "not found" in content
+        result_ns2 = backend_ns2.read("/secret.txt")
+        assert result_ns2.error is not None
 
         # ns1 should see it
-        content = backend_ns1.read("/secret.txt")
-        assert "ns1 data" in content
+        result_ns1 = backend_ns1.read("/secret.txt")
+        assert result_ns1.error is None
+        assert "ns1 data" in result_ns1.content
 
     def test_no_namespace_shared(self):
         """Without namespace, files are in the global scope."""
@@ -281,8 +287,9 @@ class TestStoreBackendCrossThread:
         result = backend_a.write("/global.txt", "global data")
         shared["files"].update(result.files_update)
 
-        content = backend_b.read("/global.txt")
-        assert "global data" in content
+        result = backend_b.read("/global.txt")
+        assert result.error is None
+        assert "global data" in result.content
 
     def test_empty_store_initializes_files(self):
         """An empty store dict gets a 'files' key automatically."""
@@ -314,8 +321,9 @@ class TestStoreBackendCompositeRouting:
         shared_store["files"].update(result.files_update)
 
         # Read back via composite
-        content = composite.read("/store/data.txt")
-        assert "stored content" in content
+        result_read = composite.read("/store/data.txt")
+        assert result_read.error is None
+        assert "stored content" in result_read.content
 
         # Write to default → StateBackend
         result_default = composite.write("/local.txt", "local content")

@@ -221,9 +221,9 @@ class TestOffloadToBackend:
         assert path == "/conversation_history/session_history.md"
 
         # The file must be readable via the backend
-        content = backend.read("/conversation_history/session_history.md")
-        assert "Error" not in content, f"File not found after offload: {content}"
-        assert "Important context to preserve" in content
+        result = backend.read("/conversation_history/session_history.md")
+        assert result.error is None, f"File not found after offload: {result.error}"
+        assert "Important context to preserve" in result.content
 
 
 # ---------------------------------------------------------------------------
@@ -317,11 +317,11 @@ class TestMaybeSummarize:
 
         # The offloaded history file must exist in state and be readable
         history_backend = StateBackend(ctx.state)
-        content = history_backend.read("/conversation_history/session_history.md")
-        assert "Error" not in content, (
-            f"Offloaded history file not found in state after summarization: {content}"
+        result = history_backend.read("/conversation_history/session_history.md")
+        assert result.error is None, (
+            f"Offloaded history file not found in state after summarization: {result.error}"
         )
-        assert "ZULU-42" in content
+        assert "ZULU-42" in result.content
 
 
 # ---------------------------------------------------------------------------

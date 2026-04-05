@@ -153,12 +153,8 @@ class MemoryMappedFilesystemBackend(FilesystemBackend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
-        result = super().grep_raw(pattern, path=path, glob=glob)
-        if isinstance(result, str):
-            return result
-
-        return self._filter_grep_matches(result)
+    ) -> list[GrepMatch]:
+        return self._filter_grep_matches(super().grep_raw(pattern, path=path, glob=glob))
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         results: list[FileDownloadResponse] = []

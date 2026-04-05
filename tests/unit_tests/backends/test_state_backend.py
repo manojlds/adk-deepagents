@@ -34,20 +34,23 @@ class TestStateBackendLs:
 
 class TestStateBackendRead:
     def test_read_existing(self, state_backend):
-        content = state_backend.read("/hello.txt")
-        assert "Hello, World!" in content
+        result = state_backend.read("/hello.txt")
+        assert result.error is None
+        assert "Hello, World!" in result.content
 
     def test_read_with_line_numbers(self, state_backend):
-        content = state_backend.read("/src/main.py")
-        assert "1\t" in content or "1" in content
+        result = state_backend.read("/src/main.py")
+        assert result.error is None
+        assert "1\t" in result.content or "1" in result.content
 
     def test_read_nonexistent(self, state_backend):
-        content = state_backend.read("/missing.txt")
-        assert "Error" in content or "not found" in content
+        result = state_backend.read("/missing.txt")
+        assert result.error is not None
 
     def test_read_with_offset(self, state_backend):
-        content = state_backend.read("/src/main.py", offset=1, limit=1)
-        assert "print" in content
+        result = state_backend.read("/src/main.py", offset=1, limit=1)
+        assert result.error is None
+        assert "print" in result.content
 
 
 class TestStateBackendWrite:
@@ -68,8 +71,9 @@ class TestStateBackendWrite:
         assert result.files_update is not None
         # Apply the update to simulate what the tool does
         populated_state["files"].update(result.files_update)
-        content = backend.read("/created.txt")
-        assert "hello" in content
+        result = backend.read("/created.txt")
+        assert result.error is None
+        assert "hello" in result.content
 
 
 class TestStateBackendEdit:
