@@ -121,12 +121,17 @@ class TrajectoryStore:
         return index
 
     def save(self, trajectory: Trajectory) -> None:
-        """Persist a trajectory to disk."""
+        """Persist a trajectory to disk (atomic write via tempfile+rename)."""
         data = _trajectory_to_dict(trajectory)
-        self._trajectory_path(trajectory.trace_id).write_text(
-            json.dumps(data, indent=2),
-            encoding="utf-8",
-        )
+        dest = self._trajectory_path(trajectory.trace_id)
+        fd, tmp_path = tempfile.mkstemp(dir=self._dir, suffix=".tmp")
+        try:
+            with open(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            Path(tmp_path).replace(dest)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
         self._index[trajectory.trace_id] = _make_index_entry(data)
         self._save_index()
 

@@ -6,593 +6,77 @@ sessions at runtime using ``task_id``.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import InMemoryRunner
 from google.adk.tools.tool_context import ToolContext
-from google.genai import types
 
 from adk_deepagents.backends.protocol import BackendFactory
 from adk_deepagents.backends.runtime import (
-    get_or_create_backend_for_session,
     get_registered_backend_factory,
     register_backend_factory,
 )
-from adk_deepagents.callbacks.before_tool import make_before_tool_callback
 from adk_deepagents.prompts import DEFAULT_SUBAGENT_PROMPT
-from adk_deepagents.tools.task import (
-    GENERAL_PURPOSE_SUBAGENT,
-    _resolve_skills_tools,
-    _sanitize_agent_name,
+from adk_deepagents.tools.task import _sanitize_agent_name
+from adk_deepagents.tools.task_dynamic_execution import (
+    _build_spec_agent,
+    _run_dynamic_task,
+    _run_dynamic_task_temporal,
+)
+from adk_deepagents.tools.task_dynamic_history import (
+    _append_task_history_entry,
+    _build_resume_prompt,
+    _dynamic_task_tool_doc,
+    _normalized_task_history,
+)
+from adk_deepagents.tools.task_dynamic_runtime import (
+    _CONCURRENCY_LOCKS,
+    _RUNNING_TASKS_KEY,
+    _RUNTIME_REGISTRY,
+    _TASK_COUNTER_KEY,
+    _TASK_DEPTH_KEY,
+    _TASK_PARENT_ID_KEY,
+    _TASK_STORE_KEY,
+    _acquire_concurrency_slot,
+    _build_dynamic_registry,
+    _build_tool_index,
+    _coerce_subagent_spec_payload,
+    _load_runtime_subagent_specs,
+    _normalize_subagent_type,
+    _persist_runtime_subagent_spec,
+    _prune_stale_running_tasks,
+    _queue_wait_metadata,
+    _release_concurrency_slot,
+    _resolve_runtime_tool_names,
+    _runtime_subagent_spec_payload,
+    _TaskRuntime,
+)
+from adk_deepagents.tools.task_dynamic_state import (
+    _coerce_backend_factory,
+    _coerce_files_state,
+    _coerce_positive_int,
+    _coerce_todos_state,
+    _extract_temporal_backend_context,
 )
 from adk_deepagents.types import DynamicTaskConfig, SkillsConfig, SubAgentSpec
 
 logger = logging.getLogger(__name__)
 
-_TASK_STORE_KEY = "_dynamic_tasks"
-_TASK_COUNTER_KEY = "_dynamic_task_counter"
-_TASK_PARENT_ID_KEY = "_dynamic_parent_session_id"
-_TASK_DEPTH_KEY = "_dynamic_delegation_depth"
-_RUNNING_TASKS_KEY = "_dynamic_running_tasks"
-_RUNTIME_SUBAGENT_STORE_KEY = "_dynamic_subagent_specs"
-_RUNTIME_REGISTRY: dict[str, _TaskRuntime] = {}
-_CONCURRENCY_LOCKS: dict[str, asyncio.Lock] = {}
-_TASK_HISTORY_MAX_ENTRIES = 12
-_TASK_HISTORY_MAX_PROMPT_CHARS = 1200
-_TASK_HISTORY_MAX_RESULT_CHARS = 2400
-
-
-@dataclass
-class _TaskRuntime:
-    runner: InMemoryRunner
-    session_id: str
-    user_id: str
-    subagent_type: str
-
-
-def _get_concurrency_lock(logical_parent_id: str) -> asyncio.Lock:
-    lock = _CONCURRENCY_LOCKS.get(logical_parent_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _CONCURRENCY_LOCKS[logical_parent_id] = lock
-    return lock
-
-
-async def _acquire_concurrency_slot(
-    *,
-    running_tasks: list[str],
-    logical_parent_id: str,
-    run_key: str,
-    task_id: str,
-    config: DynamicTaskConfig,
-) -> tuple[bool, str | None, float]:
-    policy = config.concurrency_policy
-    if policy not in {"error", "wait"}:
-        return False, f"Invalid dynamic task concurrency policy: {policy!r}", 0.0
-
-    if config.max_parallel < 1:
-        return False, "Dynamic task max_parallel must be >= 1", 0.0
-
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    queue_timeout = max(0.0, config.queue_timeout_seconds)
-
-    while True:
-        lock = _get_concurrency_lock(logical_parent_id)
-        async with lock:
-            currently_running = len(running_tasks)
-            task_already_running = run_key in running_tasks
-
-            if not task_already_running and currently_running < config.max_parallel:
-                running_tasks.append(run_key)
-                return True, None, loop.time() - started
-
-        if policy == "error":
-            if task_already_running:
-                return (
-                    False,
-                    f"Dynamic task is already running: task_id={task_id}",
-                    0.0,
-                )
-            return (
-                False,
-                (
-                    "Dynamic task concurrency limit exceeded: "
-                    f"running={currently_running}, max_parallel={config.max_parallel}"
-                ),
-                0.0,
-            )
-
-        elapsed = loop.time() - started
-        if elapsed >= queue_timeout:
-            return (
-                False,
-                (
-                    "Dynamic task queue timeout after "
-                    f"{queue_timeout:.1f}s waiting for a concurrency slot "
-                    f"(running={currently_running}, max_parallel={config.max_parallel})"
-                ),
-                elapsed,
-            )
-
-        await asyncio.sleep(min(0.05, queue_timeout - elapsed))
-
-
-async def _release_concurrency_slot(
-    *,
-    running_tasks: list[str],
-    logical_parent_id: str,
-    run_key: str,
-) -> None:
-    lock = _get_concurrency_lock(logical_parent_id)
-    async with lock:
-        if run_key in running_tasks:
-            running_tasks.remove(run_key)
-
-        if not running_tasks:
-            _CONCURRENCY_LOCKS.pop(logical_parent_id, None)
-
-
-def _queue_wait_metadata(wait_seconds: float) -> dict[str, Any]:
-    if wait_seconds <= 0:
-        return {"queued": False, "queue_wait_seconds": 0.0}
-
-    return {
-        "queued": True,
-        "queue_wait_seconds": round(wait_seconds, 3),
-    }
-
-
-def _tool_name(tool: Any) -> str | None:
-    raw_name = getattr(tool, "__name__", getattr(tool, "name", None))
-    if isinstance(raw_name, str):
-        normalized = raw_name.strip()
-        if normalized:
-            return normalized
-    return None
-
-
-def _build_tool_index(default_tools: list[Any]) -> dict[str, Any]:
-    index: dict[str, Any] = {}
-    for tool in default_tools:
-        name = _tool_name(tool)
-        if name is not None and name not in index:
-            index[name] = tool
-    return index
-
-
-def _normalize_subagent_type(subagent_type: str) -> str:
-    normalized_input = subagent_type.strip()
-    if not normalized_input:
-        return "general_purpose"
-
-    normalized = _sanitize_agent_name(normalized_input)
-    if normalized in {"general", "generalpurpose"}:
-        return "general_purpose"
-    return normalized
-
-
-def _get_runtime_subagent_store(state: Any) -> dict[str, Any]:
-    raw_store = state.setdefault(_RUNTIME_SUBAGENT_STORE_KEY, {})
-    if isinstance(raw_store, dict):
-        return raw_store
-
-    store: dict[str, Any] = {}
-    state[_RUNTIME_SUBAGENT_STORE_KEY] = store
-    return store
-
-
-def _persist_runtime_subagent_spec(
-    *,
-    state: Any,
-    name: str,
-    description: str,
-    system_prompt: str | None,
-    model: str | None,
-    tool_names: list[str] | None,
-) -> None:
-    store = _get_runtime_subagent_store(state)
-    payload: dict[str, Any] = {
-        "name": name,
-        "description": description,
-    }
-    if system_prompt:
-        payload["system_prompt"] = system_prompt
-    if model:
-        payload["model"] = model
-    if tool_names is not None:
-        payload["tool_names"] = tool_names
-
-    store[name] = payload
-
-
-def _resolve_runtime_tool_names(
-    *,
-    tool_names: list[str] | None,
-    tool_index: dict[str, Any],
-) -> tuple[list[str] | None, str | None]:
-    if tool_names is None:
-        return None, None
-
-    normalized_tool_names: list[str] = []
-    seen: set[str] = set()
-    for raw_name in tool_names:
-        if not isinstance(raw_name, str):
-            continue
-
-        name = raw_name.strip()
-        if not name:
-            continue
-
-        if name.lower() == "all":
-            return None, None
-
-        if name in seen:
-            continue
-        seen.add(name)
-        normalized_tool_names.append(name)
-
-    unknown = [name for name in normalized_tool_names if name not in tool_index]
-    if unknown:
-        available = ", ".join(sorted(tool_index))
-        return None, (
-            f"Unknown tool_names: {', '.join(sorted(unknown))}. Available tools: {available}"
-        )
-
-    return normalized_tool_names, None
-
-
-def _load_runtime_subagent_specs(
-    *,
-    state: Any,
-    tool_index: dict[str, Any],
-) -> dict[str, SubAgentSpec]:
-    raw_store = state.get(_RUNTIME_SUBAGENT_STORE_KEY, {})
-    if not isinstance(raw_store, dict):
-        return {}
-
-    runtime_registry: dict[str, SubAgentSpec] = {}
-    for raw_key, raw_spec in raw_store.items():
-        if not isinstance(raw_spec, dict):
-            continue
-
-        raw_name = raw_spec.get("name", raw_key)
-        if not isinstance(raw_name, str) or not raw_name.strip():
-            continue
-        normalized_name = _normalize_subagent_type(raw_name)
-
-        raw_description = raw_spec.get("description")
-        if not isinstance(raw_description, str):
-            continue
-        description = raw_description.strip()
-        if not description:
-            continue
-
-        spec: SubAgentSpec = SubAgentSpec(
-            name=normalized_name,
-            description=description,
-        )
-
-        raw_system_prompt = raw_spec.get("system_prompt")
-        if isinstance(raw_system_prompt, str) and raw_system_prompt.strip():
-            spec["system_prompt"] = raw_system_prompt.strip()
-
-        raw_model = raw_spec.get("model")
-        if isinstance(raw_model, str) and raw_model.strip():
-            spec["model"] = raw_model.strip()
-
-        raw_tool_names = raw_spec.get("tool_names")
-        if isinstance(raw_tool_names, list):
-            spec["tools"] = [
-                tool_index[name]
-                for name in raw_tool_names
-                if isinstance(name, str) and name in tool_index
-            ]
-
-        runtime_registry[normalized_name] = spec
-
-    return runtime_registry
-
-
-def _coerce_subagent_spec_payload(value: Any) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-
-    raw_name = value.get("name")
-    raw_description = value.get("description")
-    if not isinstance(raw_name, str) or not raw_name.strip():
-        return None
-    if not isinstance(raw_description, str) or not raw_description.strip():
-        return None
-
-    payload: dict[str, Any] = {
-        "name": _normalize_subagent_type(raw_name),
-        "description": raw_description.strip(),
-    }
-
-    raw_system_prompt = value.get("system_prompt")
-    if isinstance(raw_system_prompt, str) and raw_system_prompt.strip():
-        payload["system_prompt"] = raw_system_prompt.strip()
-
-    raw_model = value.get("model")
-    if isinstance(raw_model, str) and raw_model.strip():
-        payload["model"] = raw_model.strip()
-
-    raw_tool_names = value.get("tool_names")
-    if isinstance(raw_tool_names, list):
-        normalized_tool_names: list[str] = []
-        seen: set[str] = set()
-        for entry in raw_tool_names:
-            if not isinstance(entry, str):
-                continue
-            name = entry.strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            normalized_tool_names.append(name)
-        payload["tool_names"] = normalized_tool_names
-
-    return payload
-
-
-def _runtime_subagent_spec_payload(*, state: Any, subagent_type: str) -> dict[str, Any] | None:
-    raw_store = state.get(_RUNTIME_SUBAGENT_STORE_KEY, {})
-    if not isinstance(raw_store, dict):
-        return None
-
-    direct = _coerce_subagent_spec_payload(raw_store.get(subagent_type))
-    if direct is not None:
-        return direct
-
-    for raw_spec in raw_store.values():
-        payload = _coerce_subagent_spec_payload(raw_spec)
-        if payload is None:
-            continue
-        if _normalize_subagent_type(payload["name"]) == subagent_type:
-            return payload
-
-    return None
-
-
-def _coerce_backend_factory(value: Any) -> BackendFactory | None:
-    if callable(value):
-        return cast(BackendFactory, value)
-    return None
-
-
-def _backend_context_from_backend(backend: Any) -> dict[str, Any] | None:
-    root_value = getattr(backend, "_root", None)
-    if isinstance(root_value, Path):
-        root_dir = str(root_value)
-    elif isinstance(root_value, str) and root_value:
-        root_dir = root_value
-    else:
-        return None
-
-    context: dict[str, Any] = {
-        "kind": "filesystem",
-        "root_dir": root_dir,
-        "virtual_mode": bool(getattr(backend, "_virtual_mode", True)),
-    }
-
-    raw_mapped_sources = getattr(backend, "_memory_source_paths", None)
-    if isinstance(raw_mapped_sources, dict):
-        mapped_sources: dict[str, str] = {}
-        for raw_key, raw_path in raw_mapped_sources.items():
-            if not isinstance(raw_key, str) or not raw_key:
-                continue
-            if isinstance(raw_path, Path):
-                mapped_sources[raw_key] = str(raw_path)
-            elif isinstance(raw_path, str) and raw_path:
-                mapped_sources[raw_key] = raw_path
-
-        if mapped_sources:
-            context["memory_source_paths"] = mapped_sources
-
-    raw_respect_gitignore = getattr(backend, "_respect_gitignore", None)
-    if isinstance(raw_respect_gitignore, bool):
-        context["respect_gitignore"] = raw_respect_gitignore
-
-    raw_exclude_patterns = getattr(backend, "_exclude_patterns", None)
-    if isinstance(raw_exclude_patterns, (tuple, list)):
-        normalized_patterns = [
-            pattern
-            for pattern in raw_exclude_patterns
-            if isinstance(pattern, str) and pattern.strip()
-        ]
-        if normalized_patterns:
-            context["exclude_patterns"] = normalized_patterns
-
-    return context
-
-
-def _extract_temporal_backend_context(
-    *,
-    tool_context: ToolContext,
-    adk_parent_session_id: str | None,
-    runtime_backend_factory: BackendFactory | None,
-) -> dict[str, Any] | None:
-    state_dict = cast(dict[str, Any], tool_context.state)
-
-    backend: Any = None
-    if isinstance(adk_parent_session_id, str) and adk_parent_session_id:
-        backend = get_or_create_backend_for_session(adk_parent_session_id, state_dict)
-
-    if backend is None and runtime_backend_factory is not None:
-        try:
-            backend = runtime_backend_factory(state_dict)
-        except Exception:  # pragma: no cover - defensive
-            logger.debug(
-                "Failed to reconstruct parent backend for Temporal snapshot", exc_info=True
-            )
-
-    if backend is None:
-        backend = tool_context.state.get("_backend")
-
-    if backend is None:
-        state_backend_factory = _coerce_backend_factory(tool_context.state.get("_backend_factory"))
-        if state_backend_factory is not None:
-            try:
-                backend = state_backend_factory(state_dict)
-            except Exception:  # pragma: no cover - defensive
-                logger.debug(
-                    "Failed to build backend from tool_context state factory", exc_info=True
-                )
-
-    context = _backend_context_from_backend(backend)
-    if context is not None:
-        return context
-
-    # Final fallback: preserve the caller's current workspace root.
-    return {
-        "kind": "filesystem",
-        "root_dir": str(Path.cwd().resolve()),
-        "virtual_mode": True,
-    }
-
-
-def _coerce_files_state(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    return {}
-
-
-def _coerce_todos_state(value: Any) -> list[Any]:
-    if isinstance(value, list):
-        return value
-    return []
-
-
-def _coerce_positive_int(value: Any, fallback: int) -> int:
-    if isinstance(value, int) and value > 0:
-        return value
-    return fallback
-
-
-def _truncate_history_text(value: Any, *, max_chars: int) -> str:
-    if not isinstance(value, str):
-        return ""
-    text = value.strip()
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "..."
-
-
-def _normalized_task_history(value: Any) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        return []
-
-    normalized: list[dict[str, str]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        prompt = _truncate_history_text(
-            item.get("prompt"), max_chars=_TASK_HISTORY_MAX_PROMPT_CHARS
-        )
-        result = _truncate_history_text(
-            item.get("result"), max_chars=_TASK_HISTORY_MAX_RESULT_CHARS
-        )
-        if not prompt and not result:
-            continue
-
-        normalized.append({"prompt": prompt, "result": result})
-
-    return normalized[-_TASK_HISTORY_MAX_ENTRIES:]
-
-
-def _append_task_history_entry(*, task_state: dict[str, Any], prompt: str, result: str) -> None:
-    history = _normalized_task_history(task_state.get("history"))
-    history.append(
-        {
-            "prompt": _truncate_history_text(prompt, max_chars=_TASK_HISTORY_MAX_PROMPT_CHARS),
-            "result": _truncate_history_text(result, max_chars=_TASK_HISTORY_MAX_RESULT_CHARS),
-        }
-    )
-    task_state["history"] = history[-_TASK_HISTORY_MAX_ENTRIES:]
-
-
-def _build_resume_prompt(*, history: list[dict[str, str]], prompt: str) -> str:
-    if not history:
-        return prompt
-
-    lines = [
-        "Continue this delegated task using the prior context below.",
-        "",
-        "Previous delegated turns:",
-    ]
-
-    for index, item in enumerate(history, start=1):
-        previous_prompt = item.get("prompt", "")
-        previous_result = item.get("result", "")
-        if previous_prompt:
-            lines.append(f"{index}. User instruction: {previous_prompt}")
-        if previous_result:
-            lines.append(f"{index}. Your previous response: {previous_result}")
-
-    lines.extend(
-        [
-            "",
-            "New instruction:",
-            prompt,
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _prune_stale_running_tasks(*, running_tasks: list[str], logical_parent_id: str) -> None:
-    """Drop stale in-flight task markers left behind after process restarts."""
-    prefix = f"{logical_parent_id}:"
-    if any(run_key.startswith(prefix) for run_key in _RUNTIME_REGISTRY):
-        return
-
-    running_tasks[:] = [
-        run_key
-        for run_key in running_tasks
-        if not (isinstance(run_key, str) and run_key.startswith(prefix))
-    ]
-
-
-def _build_dynamic_registry(
-    subagents: list[SubAgentSpec | LlmAgent] | None,
-) -> dict[str, SubAgentSpec | LlmAgent]:
-    """Build lookup map for dynamic sub-agent profile resolution."""
-    registry: dict[str, SubAgentSpec | LlmAgent] = {
-        "general_purpose": GENERAL_PURPOSE_SUBAGENT,
-    }
-    if not subagents:
-        return registry
-
-    for item in subagents:
-        if isinstance(item, LlmAgent):
-            registry[_sanitize_agent_name(item.name)] = item
-        else:
-            name = item.get("name")
-            if isinstance(name, str) and name:
-                registry[_sanitize_agent_name(name)] = item
-    return registry
-
-
-def _dynamic_task_tool_doc(config: DynamicTaskConfig) -> str:
-    """Build dynamic task tool docs with live concurrency limits."""
-    return (
-        "Run a task in a dynamic sub-agent.\n\n"
-        "Dynamic concurrency limits:\n"
-        f"- max_parallel={config.max_parallel}\n"
-        f"- concurrency_policy={config.concurrency_policy}\n"
-        f"- queue_timeout_seconds={config.queue_timeout_seconds}\n\n"
-        "When delegating many tasks:\n"
-        f"- Launch in waves of <= {config.max_parallel} concurrent task calls\n"
-        "- Wait for one wave to complete before starting the next\n"
-        "- Use a stable task_id when you want continuity; first use creates it, later uses resume it"
-    )
+# Re-exports for monkeypatch compatibility and external consumers.
+__all__ = [
+    "create_dynamic_task_tool",
+    "create_register_subagent_tool",
+    "_build_resume_prompt",
+    "_run_dynamic_task",
+    "_run_dynamic_task_temporal",
+    "_RUNTIME_REGISTRY",
+    "_CONCURRENCY_LOCKS",
+    "_TaskRuntime",
+]
 
 
 def create_register_subagent_tool(
@@ -678,137 +162,6 @@ def create_register_subagent_tool(
 
     register_subagent.__name__ = "register_subagent"
     return register_subagent
-
-
-def _build_spec_agent(
-    spec: SubAgentSpec,
-    *,
-    default_model: str | Any,
-    default_tools: list,
-    skills_config: SkillsConfig | None,
-    model_override: str | None,
-    config: DynamicTaskConfig,
-    before_agent_callback: Callable | None,
-    before_model_callback: Callable | None,
-    after_tool_callback: Callable | None,
-    default_interrupt_on: dict[str, bool] | None,
-) -> LlmAgent:
-    spec_name = spec.get("name")
-    spec_description = spec.get("description")
-    if not isinstance(spec_name, str) or not spec_name:
-        raise ValueError("Dynamic sub-agent spec is missing required field: name")
-    if not isinstance(spec_description, str) or not spec_description:
-        raise ValueError("Dynamic sub-agent spec is missing required field: description")
-
-    sub_tools: list[Any] = list(spec.get("tools", default_tools))
-
-    sub_skills = spec.get("skills")
-    if sub_skills:
-        sub_tools.extend(_resolve_skills_tools(sub_skills, skills_config))
-
-    before_tool_cb = make_before_tool_callback(
-        interrupt_on=spec.get("interrupt_on", default_interrupt_on)
-    )
-
-    if model_override and not config.allow_model_override:
-        raise ValueError("Model override is disabled for dynamic task delegation")
-    resolved_model = model_override or spec.get("model", default_model)
-
-    return LlmAgent(
-        name=_sanitize_agent_name(spec_name),
-        model=resolved_model,
-        instruction=spec.get("system_prompt", DEFAULT_SUBAGENT_PROMPT),
-        description=spec_description,
-        tools=sub_tools,
-        before_agent_callback=before_agent_callback,
-        before_model_callback=before_model_callback,
-        after_tool_callback=after_tool_callback,
-        before_tool_callback=before_tool_cb,
-    )
-
-
-async def _run_dynamic_task(
-    runtime: _TaskRuntime,
-    *,
-    prompt: str,
-    timeout_seconds: float,
-) -> dict[str, Any]:
-    content = types.Content(role="user", parts=[types.Part(text=prompt)])
-    texts: list[str] = []
-    function_calls: list[str] = []
-
-    async def _collect() -> None:
-        async for event in runtime.runner.run_async(
-            session_id=runtime.session_id,
-            user_id=runtime.user_id,
-            new_message=content,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if hasattr(part, "text") and part.text:
-                        texts.append(part.text)
-                    if hasattr(part, "function_call") and part.function_call:
-                        name = part.function_call.name
-                        if isinstance(name, str) and name:
-                            function_calls.append(name)
-
-    timed_out = False
-    error: str | None = None
-
-    try:
-        await asyncio.wait_for(_collect(), timeout=timeout_seconds)
-    except TimeoutError:
-        timed_out = True
-    except Exception as exc:  # pragma: no cover - defensive path
-        logger.exception("Dynamic task run failed")
-        error = f"{type(exc).__name__}: {exc}"
-
-    session_state: dict[str, Any] = {}
-    try:
-        session = await runtime.runner.session_service.get_session(
-            app_name="dynamic_task",
-            user_id=runtime.user_id,
-            session_id=runtime.session_id,
-        )
-        if session is not None and isinstance(session.state, dict):
-            session_state = session.state
-    except Exception:  # pragma: no cover - defensive path
-        logger.debug("Unable to fetch dynamic task session state", exc_info=True)
-
-    return {
-        "result": "\n".join(texts).strip(),
-        "function_calls": function_calls,
-        "files": session_state.get("files", {}),
-        "todos": session_state.get("todos", []),
-        "timed_out": timed_out,
-        "error": error,
-    }
-
-
-async def _run_dynamic_task_temporal(
-    snapshot_data: dict[str, Any],
-    *,
-    logical_parent_id: str,
-    task_id: str,
-    task_config: DynamicTaskConfig,
-) -> dict[str, Any]:
-    """Dispatch a dynamic task turn to Temporal."""
-    try:
-        from adk_deepagents.temporal.activities import TaskSnapshot
-        from adk_deepagents.temporal.client import run_task_via_temporal
-    except ImportError:
-        raise ImportError(
-            "Temporal support requires the 'temporalio' package. "
-            "Install it with: pip install adk-deepagents[temporal]"
-        ) from None
-
-    snapshot = TaskSnapshot.from_dict(snapshot_data)
-    return await run_task_via_temporal(
-        snapshot=snapshot,
-        logical_parent_id=logical_parent_id,
-        task_id=task_id,
-        task_config=task_config,
-    )
 
 
 def create_dynamic_task_tool(

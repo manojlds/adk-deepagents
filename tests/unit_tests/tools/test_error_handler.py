@@ -35,11 +35,21 @@ async def _async_tool_that_raises(x: int) -> int:
 
 
 class TestFormatError:
-    def test_basic_format(self):
+    def test_basic_format_no_traceback_by_default(self):
         try:
             raise ValueError("test error")
         except ValueError as exc:
             result = _format_error(exc)
+        assert result["status"] == "error"
+        assert result["error_type"] == "ValueError"
+        assert result["message"] == "test error"
+        assert "traceback" not in result
+
+    def test_basic_format_with_traceback(self):
+        try:
+            raise ValueError("test error")
+        except ValueError as exc:
+            result = _format_error(exc, include_traceback=True)
         assert result["status"] == "error"
         assert result["error_type"] == "ValueError"
         assert result["message"] == "test error"
@@ -50,7 +60,7 @@ class TestFormatError:
         try:
             raise ValueError("x" * 500)
         except ValueError as exc:
-            result = _format_error(exc, max_tb_lines=3)
+            result = _format_error(exc, max_tb_lines=3, include_traceback=True)
         assert "truncated" in result["traceback"]
 
 

@@ -453,6 +453,7 @@ async def evaluate_trajectory_majority(
     model: str = "gemini-2.5-flash",
     rubric: EvaluationRubric | None = None,
     num_votes: int = 3,
+    max_concurrency: int | None = None,
 ) -> FeedbackEntry:
     """Run multiple independent judge evaluations and aggregate via median.
 
@@ -460,10 +461,26 @@ async def evaluate_trajectory_majority(
     concurrent calls to :func:`evaluate_trajectory`, filters out parse
     failures (``rating is None``), and picks the entry closest to the median
     score as the representative result.
+
+    Parameters
+    ----------
+    max_concurrency:
+        Maximum number of judge evaluations to run concurrently.
+        ``None`` means no limit (all *num_votes* run in parallel).
     """
-    entries = await asyncio.gather(
-        *(evaluate_trajectory(trajectory, model=model, rubric=rubric) for _ in range(num_votes))
+    semaphore: asyncio.Semaphore | None = (
+        asyncio.Semaphore(max_concurrency)
+        if max_concurrency is not None and max_concurrency > 0
+        else None
     )
+
+    async def _eval() -> FeedbackEntry:
+        if semaphore is not None:
+            async with semaphore:
+                return await evaluate_trajectory(trajectory, model=model, rubric=rubric)
+        return await evaluate_trajectory(trajectory, model=model, rubric=rubric)
+
+    entries = await asyncio.gather(*(_eval() for _ in range(num_votes)))
 
     valid = [e for e in entries if e.rating is not None]
 

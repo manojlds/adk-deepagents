@@ -28,27 +28,33 @@ TOOLS_WITH_INTERNAL_ERROR_HANDLING = frozenset(
 )
 
 
-def _format_error(exc: Exception, max_tb_lines: int = MAX_TRACEBACK_LINES) -> dict[str, str]:
+def _format_error(
+    exc: Exception,
+    max_tb_lines: int = MAX_TRACEBACK_LINES,
+    *,
+    include_traceback: bool = False,
+) -> dict[str, str]:
     """Format an exception into a structured error dict."""
-    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    tb_text = "".join(tb_lines)
-    # Truncate traceback if too long
-    tb_split = tb_text.split("\n")
-    if len(tb_split) > max_tb_lines:
-        tb_text = "\n".join(tb_split[:max_tb_lines]) + "\n... (truncated)"
-
-    return {
+    result: dict[str, str] = {
         "status": "error",
         "error_type": type(exc).__name__,
         "message": str(exc),
-        "traceback": tb_text,
     }
+    if include_traceback:
+        tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        tb_text = "".join(tb_lines)
+        tb_split = tb_text.split("\n")
+        if len(tb_split) > max_tb_lines:
+            tb_text = "\n".join(tb_split[:max_tb_lines]) + "\n... (truncated)"
+        result["traceback"] = tb_text
+    return result
 
 
 def wrap_tool_with_error_handler(
     fn: Callable,
     *,
     max_traceback_lines: int = MAX_TRACEBACK_LINES,
+    include_traceback: bool = False,
 ) -> Callable:
     """Wrap a tool function to catch exceptions and return error dicts.
 
@@ -61,6 +67,10 @@ def wrap_tool_with_error_handler(
         The tool function to wrap.
     max_traceback_lines:
         Maximum number of traceback lines in the error response.
+    include_traceback:
+        Whether to include the full traceback in error responses sent
+        to the LLM.  Defaults to ``False`` to avoid leaking internal
+        details.
     """
     tool_name = getattr(fn, "__name__", str(fn))
 
@@ -86,7 +96,7 @@ def wrap_tool_with_error_handler(
                     type(exc).__name__,
                     exc,
                 )
-                return _format_error(exc, max_traceback_lines)
+                return _format_error(exc, max_traceback_lines, include_traceback=include_traceback)
 
         # ADK uses typing.get_type_hints() on the wrapped function to build
         # its tool declaration.  functools.wraps copies __annotations__ and
@@ -111,7 +121,7 @@ def wrap_tool_with_error_handler(
                 type(exc).__name__,
                 exc,
             )
-            return _format_error(exc, max_traceback_lines)
+            return _format_error(exc, max_traceback_lines, include_traceback=include_traceback)
 
     sync_wrapper.__globals__.update(fn.__globals__)  # type: ignore[union-attr]
     return sync_wrapper
@@ -121,9 +131,15 @@ def wrap_tools_with_error_handler(
     tools: list[Callable],
     *,
     max_traceback_lines: int = MAX_TRACEBACK_LINES,
+    include_traceback: bool = False,
 ) -> list[Callable]:
     """Wrap a list of tools with error handlers.
 
     Returns a new list; the original is not modified.
     """
-    return [wrap_tool_with_error_handler(t, max_traceback_lines=max_traceback_lines) for t in tools]
+    return [
+        wrap_tool_with_error_handler(
+            t, max_traceback_lines=max_traceback_lines, include_traceback=include_traceback
+        )
+        for t in tools
+    ]

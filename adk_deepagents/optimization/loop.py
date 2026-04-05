@@ -394,6 +394,7 @@ async def run_optimization_loop(
     on_iteration: Callable[[IterationResult], None] | None = None,
     trajectory_filter: TrajectoryFilter | None = None,
     num_judge_votes: int = 1,
+    max_concurrency: int | None = None,
 ) -> OptimizationResult:
     """Run an autoresearch-style optimization loop.
 
@@ -434,6 +435,9 @@ async def run_optimization_loop(
         Number of independent judge evaluations to run per trajectory.
         When > 1, uses majority voting (median score) for more robust
         evaluation. Default is 1 (single judge call).
+    max_concurrency:
+        Maximum number of trajectory replay+evaluation tasks to run
+        concurrently per iteration.  ``None`` means no limit.
 
     Returns
     -------
@@ -457,6 +461,11 @@ async def run_optimization_loop(
     all_iterations: list[IterationResult] = []
     best_candidate = base_candidate
     best_avg_score: float | None = None
+    semaphore: asyncio.Semaphore | None = (
+        asyncio.Semaphore(max_concurrency)
+        if max_concurrency is not None and max_concurrency > 0
+        else None
+    )
 
     for iteration_num in range(1, max_iterations + 1):
         logger.info("Optimization iteration %d/%d", iteration_num, max_iterations)
@@ -529,8 +538,14 @@ async def run_optimization_loop(
                 delta=delta,
             )
 
+        async def _throttled(traj: Trajectory) -> ExampleResult | None:
+            if semaphore is not None:
+                async with semaphore:
+                    return await _process_trajectory(traj)
+            return await _process_trajectory(traj)
+
         raw_results = await asyncio.gather(
-            *(_process_trajectory(traj) for traj in trajectories),
+            *(_throttled(traj) for traj in trajectories),
             return_exceptions=True,
         )
         examples: list[ExampleResult] = []

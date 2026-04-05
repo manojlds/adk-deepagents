@@ -17,11 +17,11 @@ from google.adk.models import LlmRequest, LlmResponse
 from google.genai import types
 
 from adk_deepagents.backends.protocol import BackendFactory
+from adk_deepagents.memory import format_memory as _format_memory
 from adk_deepagents.prompts import (
     COMPACT_CONVERSATION_SYSTEM_PROMPT,
     EXECUTION_SYSTEM_PROMPT,
     FILESYSTEM_SYSTEM_PROMPT,
-    MEMORY_SYSTEM_PROMPT,
     TASK_CONCURRENCY_SYSTEM_PROMPT,
     TASK_RUNTIME_SUBAGENT_PROMPT,
     TASK_SYSTEM_PROMPT,
@@ -55,18 +55,6 @@ def _append_to_system_instruction(llm_request: LlmRequest, text: str) -> None:
     else:
         # Fallback: replace with combined string
         config.system_instruction = str(existing) + "\n\n" + text
-
-
-def _format_memory(memory_contents: dict[str, str], sources: list[str]) -> str:
-    """Format memory contents for system prompt injection."""
-    if not memory_contents:
-        return MEMORY_SYSTEM_PROMPT.format(agent_memory="(No memory loaded)")
-    sections = []
-    for path in sources:
-        content = memory_contents.get(path)
-        if content:
-            sections.append(f"### {path}\n{content}")
-    return MEMORY_SYSTEM_PROMPT.format(agent_memory="\n\n".join(sections) or "(No memory loaded)")
 
 
 def _format_subagent_docs(subagent_descriptions: list[dict[str, str]]) -> str:

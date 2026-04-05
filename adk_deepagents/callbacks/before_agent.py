@@ -14,23 +14,11 @@ from typing import cast
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types
 
-from adk_deepagents.backends.protocol import Backend, BackendFactory
+from adk_deepagents.backends.protocol import BackendFactory
 from adk_deepagents.backends.runtime import register_backend_factory
+from adk_deepagents.memory import load_memory as _load_memory_files
 
 logger = logging.getLogger(__name__)
-
-
-def _load_memory_files(
-    backend: Backend,
-    sources: list[str],
-) -> dict[str, str]:
-    """Load memory files from the backend."""
-    contents: dict[str, str] = {}
-    results = backend.download_files(sources)
-    for resp in results:
-        if resp.content is not None:
-            contents[resp.path] = resp.content.decode("utf-8")
-    return contents
 
 
 def _patch_dangling_tool_calls(
