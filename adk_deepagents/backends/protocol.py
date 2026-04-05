@@ -78,6 +78,15 @@ class EditResult:
 
 
 @dataclass
+class ReadResult:
+    """Result of a read operation."""
+
+    content: str | None = None
+    error: FileOperationError | str | None = None
+    path: str = ""
+
+
+@dataclass
 class FileDownloadResponse:
     """Response from downloading a file."""
 
@@ -120,7 +129,7 @@ class Backend(ABC):
         """List files/directories at *path*."""
 
     @abstractmethod
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read file content with optional pagination."""
 
     @abstractmethod
@@ -143,7 +152,7 @@ class Backend(ABC):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         """Search for *pattern* in files. Returns matches or formatted string."""
 
     @abstractmethod
@@ -164,7 +173,7 @@ class Backend(ABC):
         """Async version of :meth:`ls_info`."""
         return await asyncio.to_thread(self.ls_info, path)
 
-    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Async version of :meth:`read`."""
         return await asyncio.to_thread(self.read, file_path, offset, limit)
 
@@ -187,7 +196,7 @@ class Backend(ABC):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         """Async version of :meth:`grep_raw`."""
         return await asyncio.to_thread(self.grep_raw, pattern, path, glob)
 

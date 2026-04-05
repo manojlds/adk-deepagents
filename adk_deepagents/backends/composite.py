@@ -16,6 +16,7 @@ from adk_deepagents.backends.protocol import (
     FileInfo,
     FileUploadResponse,
     GrepMatch,
+    ReadResult,
     WriteResult,
 )
 from adk_deepagents.backends.utils import normalize_path
@@ -93,7 +94,7 @@ class CompositeBackend(Backend):
 
     # ----- read -----
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Read a file from the appropriate backend."""
         return self._resolve(file_path).read(file_path, offset, limit)
 
@@ -122,18 +123,13 @@ class CompositeBackend(Backend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         """Search across all relevant backends and merge results."""
         backends = self._resolve_all(path)
 
         all_matches: list[GrepMatch] = []
         for backend in backends:
-            result = backend.grep_raw(pattern, path, glob)
-            if isinstance(result, list):
-                all_matches.extend(result)
-            elif isinstance(result, str) and result != "No matches found." and not all_matches:
-                # Backend returned a formatted string with no prior list matches
-                return result
+            all_matches.extend(backend.grep_raw(pattern, path, glob))
 
         return all_matches
 
@@ -179,7 +175,7 @@ class CompositeBackend(Backend):
         """Async :meth:`ls_info` — delegates to resolved backend."""
         return await self._resolve(path).als_info(path)
 
-    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Async :meth:`read` — delegates to resolved backend."""
         return await self._resolve(file_path).aread(file_path, offset, limit)
 
@@ -202,17 +198,13 @@ class CompositeBackend(Backend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         """Async :meth:`grep_raw` — delegates to resolved backends and merges."""
         backends = self._resolve_all(path)
 
         all_matches: list[GrepMatch] = []
         for backend in backends:
-            result = await backend.agrep_raw(pattern, path, glob)
-            if isinstance(result, list):
-                all_matches.extend(result)
-            elif isinstance(result, str) and result != "No matches found." and not all_matches:
-                return result
+            all_matches.extend(await backend.agrep_raw(pattern, path, glob))
 
         return all_matches
 

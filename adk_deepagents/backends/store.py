@@ -20,6 +20,7 @@ from adk_deepagents.backends.protocol import (
     FileInfo,
     FileUploadResponse,
     GrepMatch,
+    ReadResult,
     WriteResult,
 )
 from adk_deepagents.backends.utils import (
@@ -163,13 +164,14 @@ class StoreBackend(Backend):
 
         return sorted(entries.values(), key=lambda e: e["path"])
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         ns_path = self._ns_path(file_path)
+        normalized = normalize_path(file_path)
         files = self._files
         file_data = files.get(ns_path)
         if file_data is None:
-            return f"Error: file not found: {normalize_path(file_path)}"
-        return format_read_response(file_data, offset, limit)
+            return ReadResult(error="file_not_found", path=normalized)
+        return ReadResult(content=format_read_response(file_data, offset, limit), path=normalized)
 
     def write(self, file_path: str, content: str) -> WriteResult:
         ns_path = self._ns_path(file_path)
@@ -224,7 +226,7 @@ class StoreBackend(Backend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         ns_files = self._ns_files()
         # Remap to external paths for grep
         external_files: dict[str, FileData] = {
@@ -307,7 +309,7 @@ class StoreBackend(Backend):
         """Async :meth:`ls_info` — direct call (in-memory, no I/O)."""
         return self.ls_info(path)
 
-    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """Async :meth:`read` — direct call (in-memory, no I/O)."""
         return self.read(file_path, offset, limit)
 
@@ -330,7 +332,7 @@ class StoreBackend(Backend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         """Async :meth:`grep_raw` — direct call (in-memory, no I/O)."""
         return self.grep_raw(pattern, path, glob)
 

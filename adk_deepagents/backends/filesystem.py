@@ -18,6 +18,7 @@ from adk_deepagents.backends.protocol import (
     FileInfo,
     FileUploadResponse,
     GrepMatch,
+    ReadResult,
     WriteResult,
 )
 from adk_deepagents.backends.utils import (
@@ -127,41 +128,47 @@ class FilesystemBackend(Backend):
 
         return entries
 
-    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         try:
             resolved = self._resolve_path(file_path)
         except ValueError as e:
-            return f"Error: {e}"
+            return ReadResult(error=f"Error: {e}", path=file_path)
 
         if not resolved.exists():
-            return f"Error: file not found: {file_path}"
+            return ReadResult(error="file_not_found", path=file_path)
         if resolved.is_dir():
-            return f"Error: is a directory: {file_path}"
+            return ReadResult(error="is_directory", path=file_path)
 
         # Check file size
         file_size = resolved.stat().st_size
         if file_size > self._max_file_size:
-            return (
-                f"Error: file too large ({file_size} bytes, "
-                f"max {self._max_file_size} bytes): {file_path}"
+            return ReadResult(
+                error=(
+                    f"Error: file too large ({file_size} bytes, "
+                    f"max {self._max_file_size} bytes): {file_path}"
+                ),
+                path=file_path,
             )
 
         try:
             content = resolved.read_text(encoding="utf-8", errors="replace")
         except PermissionError:
-            return f"Error: permission denied: {file_path}"
+            return ReadResult(error="permission_denied", path=file_path)
         except OSError as e:
-            return f"Error: {e}"
+            return ReadResult(error=f"Error: {e}", path=file_path)
 
         if not content:
-            return EMPTY_CONTENT_WARNING
+            return ReadResult(content=EMPTY_CONTENT_WARNING, path=file_path)
 
         lines = content.split("\n")
         total_lines = len(lines)
         selected = lines[offset : offset + limit]
 
         if not selected:
-            return f"No content at offset {offset} (file has {total_lines} lines)"
+            return ReadResult(
+                content=f"No content at offset {offset} (file has {total_lines} lines)",
+                path=file_path,
+            )
 
         formatted = format_content_with_line_numbers("\n".join(selected), start_line=offset + 1)
 
@@ -171,7 +178,7 @@ class FilesystemBackend(Backend):
                 f"\n\n... ({remaining} more lines. Use offset={offset + limit} to continue reading)"
             )
 
-        return formatted
+        return ReadResult(content=formatted, path=file_path)
 
     def write(self, file_path: str, content: str) -> WriteResult:
         try:
@@ -239,7 +246,7 @@ class FilesystemBackend(Backend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> list[GrepMatch]:
         search_path = self._resolve_path(path) if path else self._root
 
         # Try ripgrep first for performance

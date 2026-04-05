@@ -215,3 +215,4 @@ progress.txt
 # ralphi
 .ralphi/*
 !.ralphi/config.yaml
+.playwright-mcp/

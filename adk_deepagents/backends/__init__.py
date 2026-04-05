@@ -11,6 +11,7 @@ from adk_deepagents.backends.protocol import (
     FileInfo,
     FileUploadResponse,
     GrepMatch,
+    ReadResult,
     SandboxBackend,
     WriteResult,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "FileInfo",
     "FileUploadResponse",
     "GrepMatch",
+    "ReadResult",
     "SandboxBackend",
     "StateBackend",
     "StoreBackend",

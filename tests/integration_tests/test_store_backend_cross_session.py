@@ -30,8 +30,9 @@ class TestCrossSessionSharing:
         # Apply files_update to the shared store
         shared_store["files"].update(result.files_update)
 
-        content = backend_b.read("/readme.md")
-        assert "# Hello" in content
+        result = backend_b.read("/readme.md")
+        assert result.error is None
+        assert "# Hello" in result.content
 
 
 class TestNamespaceIsolation:
@@ -47,11 +48,13 @@ class TestNamespaceIsolation:
         result_b = backend_beta.write("/secret.txt", "beta data")
         shared_store["files"].update(result_b.files_update)
 
-        alpha_content = backend_alpha.read("/secret.txt")
-        assert "alpha data" in alpha_content
+        alpha_result = backend_alpha.read("/secret.txt")
+        assert alpha_result.error is None
+        assert "alpha data" in alpha_result.content
 
-        beta_content = backend_beta.read("/secret.txt")
-        assert "beta data" in beta_content
+        beta_result = backend_beta.read("/secret.txt")
+        assert beta_result.error is None
+        assert "beta data" in beta_result.content
 
 
 class TestNamespacePathPrefixing:
@@ -68,8 +71,9 @@ class TestNamespacePathPrefixing:
         # External API should use unprefixed path
         assert result.path == "/file.txt"
 
-        content = backend.read("/file.txt")
-        assert "content" in content
+        result = backend.read("/file.txt")
+        assert result.error is None
+        assert "content" in result.content
 
 
 class TestLsWithNamespace:
