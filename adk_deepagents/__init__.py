@@ -1,6 +1,6 @@
 """adk-deepagents — deepagents re-implemented with Google ADK primitives."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from adk_deepagents.graph import create_deep_agent, create_deep_agent_async
 from adk_deepagents.types import (

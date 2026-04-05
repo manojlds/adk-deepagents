@@ -1,0 +1,12 @@
+[project]
+name = "adk-autoagent-example"
+version = "0.1.0"
+description = "Autoagent example using adk-deepagents + Harbor"
+requires-python = ">=3.12"
+dependencies = [
+    "adk-deepagents[harbor,skills]",
+    "harbor",
+]
+
+[tool.uv.sources]
+adk-deepagents = { path = "../..", editable = true }

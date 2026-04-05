@@ -1,0 +1,4 @@
+[task]
+name = "hello-world"
+description = "Smoke test: create a file with specific content"
+timeout_sec = 60

@@ -1,0 +1,20 @@
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates git curl python3-pip \
+        ripgrep && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install project deps — harbor excluded (runs host-side only)
+COPY pyproject.toml ./
+RUN uv pip install --system google-adk adk-deepagents adk-skills-agent
+
+# Agent code and skills
+COPY agent.py ./
+COPY skills/ ./skills/
+
+RUN ln -sf $(which python3) /usr/local/bin/python
+RUN mkdir -p /logs /task

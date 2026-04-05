@@ -1,6 +1,6 @@
 [project]
 name = "adk-deepagents"
-version = "0.2.0"
+version = "0.3.0"
 description = "Re-implementation of deepagents using Google ADK primitives"
 readme = "README.md"
 license = "MIT"
@@ -21,6 +21,9 @@ http = [
 ]
 temporal = [
     "temporalio>=1.23,<2",
+]
+harbor = [
+    "harbor; python_version >= '3.12'",
 ]
 
 [project.scripts]
