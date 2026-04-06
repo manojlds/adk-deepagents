@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -17,6 +18,295 @@ from adk_deepagents.tools.task_dynamic_runtime import _TaskRuntime
 from adk_deepagents.types import DynamicTaskConfig, SkillsConfig, SubAgentSpec
 
 logger = logging.getLogger(__name__)
+
+_A2A_DYNAMIC_TASK_RESULT_SCHEMA_PREFIX = "adk_deepagents.dynamic_task_result."
+
+
+def _a2a_is_dynamic_task_schema(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return value.strip().startswith(_A2A_DYNAMIC_TASK_RESULT_SCHEMA_PREFIX)
+
+
+def _normalize_function_call_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    names: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item and item not in names:
+            names.append(item)
+    return names
+
+
+def _parse_dynamic_task_result_payload(value: Any) -> dict[str, Any] | None:
+    parsed: dict[str, Any] | None = None
+
+    if isinstance(value, dict):
+        parsed = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text.startswith("{"):
+            return None
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        parsed = loaded
+
+    if parsed is None:
+        return None
+
+    schema = parsed.get("schema")
+    payload = parsed.get("payload")
+
+    candidate = payload if isinstance(payload, dict) else parsed
+    if not isinstance(candidate, dict):
+        return None
+
+    if not _a2a_is_dynamic_task_schema(schema) and not any(
+        key in candidate for key in ("result", "function_calls", "files", "todos", "error")
+    ):
+        return None
+
+    normalized: dict[str, Any] = {}
+
+    if "result" in candidate:
+        result_raw = candidate.get("result")
+        normalized["result"] = result_raw if isinstance(result_raw, str) else ""
+
+    if "function_calls" in candidate:
+        normalized["function_calls"] = _normalize_function_call_names(
+            candidate.get("function_calls")
+        )
+
+    if "files" in candidate:
+        files_raw = candidate.get("files")
+        normalized["files"] = files_raw if isinstance(files_raw, dict) else {}
+
+    if "todos" in candidate:
+        todos_raw = candidate.get("todos")
+        normalized["todos"] = todos_raw if isinstance(todos_raw, list) else []
+
+    if "error" in candidate:
+        error_raw = candidate.get("error")
+        normalized["error"] = error_raw if isinstance(error_raw, str) else ""
+
+    return normalized or None
+
+
+def _new_structured_result_state() -> dict[str, Any]:
+    return {
+        "has_result": False,
+        "result": "",
+        "has_function_calls": False,
+        "function_calls": [],
+        "has_files": False,
+        "files": {},
+        "has_todos": False,
+        "todos": [],
+        "has_error": False,
+        "error": "",
+    }
+
+
+def _merge_structured_result_payload(*, state: dict[str, Any], payload: dict[str, Any]) -> None:
+    if "result" in payload:
+        state["has_result"] = True
+        state["result"] = payload.get("result", "")
+
+    if "function_calls" in payload:
+        state["has_function_calls"] = True
+        existing_calls = state.get("function_calls")
+        if not isinstance(existing_calls, list):
+            existing_calls = []
+            state["function_calls"] = existing_calls
+
+        for name in _normalize_function_call_names(payload.get("function_calls")):
+            if name not in existing_calls:
+                existing_calls.append(name)
+
+    if "files" in payload:
+        state["has_files"] = True
+        files_value = payload.get("files")
+        state["files"] = files_value if isinstance(files_value, dict) else {}
+
+    if "todos" in payload:
+        state["has_todos"] = True
+        todos_value = payload.get("todos")
+        state["todos"] = todos_value if isinstance(todos_value, list) else []
+
+    if "error" in payload:
+        state["has_error"] = True
+        error_value = payload.get("error")
+        state["error"] = error_value if isinstance(error_value, str) else ""
+
+
+def _append_text_if_new(*, parts: list[str], text: Any) -> None:
+    if not isinstance(text, str) or not text:
+        return
+
+    if not parts or parts[-1] != text:
+        parts.append(text)
+
+
+def _consume_a2a_part(
+    *,
+    part: Any,
+    response_text_parts: list[str],
+    structured_state: dict[str, Any],
+) -> None:
+    part_data = part.get("data") if isinstance(part, dict) else getattr(part, "data", None)
+    payload = _parse_dynamic_task_result_payload(part_data)
+    if payload is not None:
+        _merge_structured_result_payload(state=structured_state, payload=payload)
+        return
+
+    part_text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+    payload = _parse_dynamic_task_result_payload(part_text)
+    if payload is not None:
+        _merge_structured_result_payload(state=structured_state, payload=payload)
+        return
+
+    _append_text_if_new(parts=response_text_parts, text=part_text)
+
+
+def _consume_a2a_object(
+    *,
+    value: Any,
+    response_text_parts: list[str],
+    structured_state: dict[str, Any],
+    visited: set[int] | None = None,
+) -> None:
+    if value is None:
+        return
+
+    if visited is None:
+        visited = set()
+
+    value_id = id(value)
+    if value_id in visited:
+        return
+    visited.add(value_id)
+
+    payload = _parse_dynamic_task_result_payload(value)
+    if payload is not None:
+        _merge_structured_result_payload(state=structured_state, payload=payload)
+        return
+
+    if isinstance(value, dict):
+        data_value = value.get("data")
+        payload = _parse_dynamic_task_result_payload(data_value)
+        if payload is not None:
+            _merge_structured_result_payload(state=structured_state, payload=payload)
+
+        parts = value.get("parts")
+        if isinstance(parts, list):
+            for part in parts:
+                _consume_a2a_part(
+                    part=part,
+                    response_text_parts=response_text_parts,
+                    structured_state=structured_state,
+                )
+
+        artifacts = value.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                _consume_a2a_object(
+                    value=artifact,
+                    response_text_parts=response_text_parts,
+                    structured_state=structured_state,
+                    visited=visited,
+                )
+
+        artifact = value.get("artifact")
+        _consume_a2a_object(
+            value=artifact,
+            response_text_parts=response_text_parts,
+            structured_state=structured_state,
+            visited=visited,
+        )
+
+        message = value.get("message")
+        _consume_a2a_object(
+            value=message,
+            response_text_parts=response_text_parts,
+            structured_state=structured_state,
+            visited=visited,
+        )
+
+        status = value.get("status")
+        _consume_a2a_object(
+            value=status,
+            response_text_parts=response_text_parts,
+            structured_state=structured_state,
+            visited=visited,
+        )
+
+        text = value.get("text")
+        payload = _parse_dynamic_task_result_payload(text)
+        if payload is not None:
+            _merge_structured_result_payload(state=structured_state, payload=payload)
+            return
+        _append_text_if_new(parts=response_text_parts, text=text)
+        return
+
+    parts = getattr(value, "parts", None)
+    data_value = getattr(value, "data", None)
+    payload = _parse_dynamic_task_result_payload(data_value)
+    if payload is not None:
+        _merge_structured_result_payload(state=structured_state, payload=payload)
+
+    if isinstance(parts, list):
+        for part in parts:
+            _consume_a2a_part(
+                part=part,
+                response_text_parts=response_text_parts,
+                structured_state=structured_state,
+            )
+
+    artifacts = getattr(value, "artifacts", None)
+    if isinstance(artifacts, list):
+        for artifact in artifacts:
+            _consume_a2a_object(
+                value=artifact,
+                response_text_parts=response_text_parts,
+                structured_state=structured_state,
+                visited=visited,
+            )
+
+    artifact = getattr(value, "artifact", None)
+    _consume_a2a_object(
+        value=artifact,
+        response_text_parts=response_text_parts,
+        structured_state=structured_state,
+        visited=visited,
+    )
+
+    message = getattr(value, "message", None)
+    _consume_a2a_object(
+        value=message,
+        response_text_parts=response_text_parts,
+        structured_state=structured_state,
+        visited=visited,
+    )
+
+    status = getattr(value, "status", None)
+    _consume_a2a_object(
+        value=status,
+        response_text_parts=response_text_parts,
+        structured_state=structured_state,
+        visited=visited,
+    )
+
+    text = getattr(value, "text", None)
+    payload = _parse_dynamic_task_result_payload(text)
+    if payload is not None:
+        _merge_structured_result_payload(state=structured_state, payload=payload)
+        return
+    _append_text_if_new(parts=response_text_parts, text=text)
 
 
 def _build_spec_agent(
@@ -194,21 +484,16 @@ async def _run_dynamic_task_a2a(
 
     latest_task: Any | None = None
     response_text_parts: list[str] = []
+    structured_state = _new_structured_result_state()
     timed_out = False
     error: str | None = None
 
     def _collect_task_text(task_obj: Any) -> None:
-        artifacts = getattr(task_obj, "artifacts", None)
-        if not isinstance(artifacts, list):
-            return
-        for artifact in artifacts:
-            parts = getattr(artifact, "parts", None)
-            if not isinstance(parts, list):
-                continue
-            for part in parts:
-                text = getattr(part, "text", None)
-                if isinstance(text, str) and text:
-                    response_text_parts.append(text)
+        _consume_a2a_object(
+            value=task_obj,
+            response_text_parts=response_text_parts,
+            structured_state=structured_state,
+        )
 
     async def _collect() -> None:
         nonlocal latest_task
@@ -218,9 +503,11 @@ async def _run_dynamic_task_a2a(
                 latest_task = task_obj
                 _collect_task_text(task_obj)
             else:
-                text = getattr(event, "text", None)
-                if isinstance(text, str) and text:
-                    response_text_parts.append(text)
+                _consume_a2a_object(
+                    value=event,
+                    response_text_parts=response_text_parts,
+                    structured_state=structured_state,
+                )
 
     try:
         await asyncio.wait_for(_collect(), timeout=a2a_config.timeout_seconds)
@@ -235,23 +522,43 @@ async def _run_dynamic_task_a2a(
             await close()
 
     result_text = "\n".join(response_text_parts).strip()
+    if structured_state.get("has_result"):
+        result_text = structured_state.get("result", "")
+
     if not result_text and latest_task is not None:
-        status = getattr(latest_task, "status", None)
-        message = getattr(status, "message", None) if status is not None else None
-        parts = getattr(message, "parts", None) if message is not None else None
-        if isinstance(parts, list):
-            fallback_parts = [
-                part.text
-                for part in parts
-                if isinstance(getattr(part, "text", None), str) and part.text
-            ]
-            result_text = "\n".join(fallback_parts).strip()
+        _consume_a2a_object(
+            value=latest_task,
+            response_text_parts=response_text_parts,
+            structured_state=structured_state,
+        )
+        result_text = "\n".join(response_text_parts).strip()
+        if structured_state.get("has_result"):
+            result_text = structured_state.get("result", "")
+
+    function_calls = (
+        structured_state.get("function_calls") if structured_state.get("has_function_calls") else []
+    )
+    if not isinstance(function_calls, list):
+        function_calls = []
+
+    files = structured_state.get("files") if structured_state.get("has_files") else {}
+    if not isinstance(files, dict):
+        files = {}
+
+    todos = structured_state.get("todos") if structured_state.get("has_todos") else []
+    if not isinstance(todos, list):
+        todos = []
+
+    if not error and structured_state.get("has_error"):
+        structured_error = structured_state.get("error")
+        if isinstance(structured_error, str) and structured_error:
+            error = structured_error
 
     return {
         "result": result_text,
-        "function_calls": [],
-        "files": {},
-        "todos": [],
+        "function_calls": function_calls,
+        "files": files,
+        "todos": todos,
         "timed_out": timed_out,
         "error": error,
     }

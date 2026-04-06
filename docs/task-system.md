@@ -145,6 +145,10 @@ When `DynamicTaskConfig.a2a` is configured:
 3. The dynamic tool consumes streamed/non-streamed A2A responses and returns
    the final text as `result`.
 
+When the remote endpoint emits structured artifact payloads with schema
+`adk_deepagents.dynamic_task_result.v1`, dynamic execution also maps
+`function_calls`, `files`, `todos`, and `error` into the returned tool payload.
+
 See [A2A Integration](a2a.md) for setup details.
 
 ## State model (persisted vs process-local)

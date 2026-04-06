@@ -60,6 +60,45 @@ agent URL instead of creating an in-process child runtime.
 - `task_id` is mapped to A2A `context_id` for delegated turn continuity.
 - Temporal (`DynamicTaskConfig.temporal`) and A2A (`DynamicTaskConfig.a2a`) are
   both external execution backends; if both are configured, Temporal is used.
-- A2A task execution currently captures text responses and does not propagate
-  tool-level side effects (`files`, `todos`, `function_calls`) from the remote
-  endpoint.
+
+## Structured artifact contract (optional)
+
+For richer dynamic task parity, the remote A2A agent can return structured
+payloads in artifact parts using this schema key:
+
+- `schema`: `adk_deepagents.dynamic_task_result.v1`
+
+Supported fields (top-level or under `payload`) are:
+
+- `result` (string)
+- `function_calls` (list of tool names)
+- `files` (object)
+- `todos` (array)
+- `error` (string)
+
+Example:
+
+```json
+{
+  "schema": "adk_deepagents.dynamic_task_result.v1",
+  "payload": {
+    "result": "Done",
+    "function_calls": ["glob", "read_file"],
+    "files": {
+      "/summary.md": {
+        "content": "..."
+      }
+    },
+    "todos": [
+      {
+        "content": "Ship changes",
+        "status": "completed",
+        "priority": "medium"
+      }
+    ]
+  }
+}
+```
+
+If no structured payload is present, `adk-deepagents` falls back to plain-text
+artifact/message extraction for `result`.
