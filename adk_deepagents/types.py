@@ -63,6 +63,23 @@ class TemporalTaskConfig:
 
 
 @dataclass
+class A2ATaskConfig:
+    """Configuration for running dynamic tasks via an external A2A agent."""
+
+    agent_url: str = "http://localhost:8000"
+    """Base URL of the target A2A agent endpoint."""
+
+    timeout_seconds: float = 120.0
+    """Per-request timeout used by the A2A transport."""
+
+    poll_interval_seconds: float = 1.0
+    """Polling interval when waiting for async A2A task completion."""
+
+    max_polls: int = 120
+    """Maximum number of polling attempts before timing out."""
+
+
+@dataclass
 class DynamicTaskConfig:
     """Configuration for dynamic task-based sub-agent delegation."""
 
@@ -93,6 +110,13 @@ class DynamicTaskConfig:
 
     When set, ``task()`` dispatches sub-agent turns to Temporal workers
     instead of running child sessions in-process.
+    """
+
+    a2a: A2ATaskConfig | None = None
+    """Optional A2A backend for dynamic task execution.
+
+    When set, ``task()`` dispatches delegated turns to an external A2A
+    agent endpoint.
     """
 
 

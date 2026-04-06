@@ -148,3 +148,110 @@ async def _run_dynamic_task_temporal(
         task_id=task_id,
         task_config=task_config,
     )
+
+
+async def _run_dynamic_task_a2a(
+    *,
+    prompt: str,
+    task_id: str,
+    subagent_type: str,
+    task_config: DynamicTaskConfig,
+) -> dict[str, Any]:
+    """Dispatch a dynamic task turn to an external A2A agent."""
+    a2a_config = task_config.a2a
+    if a2a_config is None:
+        return {
+            "result": "",
+            "function_calls": [],
+            "files": {},
+            "todos": [],
+            "timed_out": False,
+            "error": "A2A config is None",
+        }
+
+    try:
+        from a2a.client.client import ClientConfig
+        from a2a.client.client_factory import ClientFactory
+        from a2a.types.a2a_pb2 import Message, Part, Role
+    except ImportError:
+        raise ImportError(
+            "A2A support requires the 'a2a-sdk' package. "
+            "Install it with: pip install adk-deepagents[a2a]"
+        ) from None
+
+    message_id = f"{task_id}:{subagent_type}"
+    request = Message(
+        role=Role.ROLE_USER,
+        parts=[Part(text=prompt)],
+        message_id=message_id,
+        context_id=task_id,
+    )
+
+    client = await ClientFactory.connect(
+        a2a_config.agent_url,
+        client_config=ClientConfig(streaming=True),
+    )
+
+    latest_task: Any | None = None
+    response_text_parts: list[str] = []
+    timed_out = False
+    error: str | None = None
+
+    def _collect_task_text(task_obj: Any) -> None:
+        artifacts = getattr(task_obj, "artifacts", None)
+        if not isinstance(artifacts, list):
+            return
+        for artifact in artifacts:
+            parts = getattr(artifact, "parts", None)
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                text = getattr(part, "text", None)
+                if isinstance(text, str) and text:
+                    response_text_parts.append(text)
+
+    async def _collect() -> None:
+        nonlocal latest_task
+        async for event in client.send_message(request):
+            if isinstance(event, tuple) and len(event) == 2:
+                task_obj, _update = event
+                latest_task = task_obj
+                _collect_task_text(task_obj)
+            else:
+                text = getattr(event, "text", None)
+                if isinstance(text, str) and text:
+                    response_text_parts.append(text)
+
+    try:
+        await asyncio.wait_for(_collect(), timeout=a2a_config.timeout_seconds)
+    except TimeoutError:
+        timed_out = True
+    except Exception as exc:  # pragma: no cover - defensive path
+        logger.exception("Dynamic task A2A run failed")
+        error = f"{type(exc).__name__}: {exc}"
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            await close()
+
+    result_text = "\n".join(response_text_parts).strip()
+    if not result_text and latest_task is not None:
+        status = getattr(latest_task, "status", None)
+        message = getattr(status, "message", None) if status is not None else None
+        parts = getattr(message, "parts", None) if message is not None else None
+        if isinstance(parts, list):
+            fallback_parts = [
+                part.text
+                for part in parts
+                if isinstance(getattr(part, "text", None), str) and part.text
+            ]
+            result_text = "\n".join(fallback_parts).strip()
+
+    return {
+        "result": result_text,
+        "function_calls": [],
+        "files": {},
+        "todos": [],
+        "timed_out": timed_out,
+        "error": error,
+    }

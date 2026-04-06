@@ -15,7 +15,7 @@ from adk_deepagents.tools.task_dynamic import (
     create_dynamic_task_tool,
     create_register_subagent_tool,
 )
-from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
+from adk_deepagents.types import A2ATaskConfig, DynamicTaskConfig, TemporalTaskConfig
 
 
 @dataclass
@@ -398,6 +398,102 @@ class TestDynamicTaskToolGuards:
         assert result["task_id"] == "task_1"
         assert result["recovered_runtime"] is False
         assert not any(key.startswith("parent_temporal:") for key in task_dynamic._RUNTIME_REGISTRY)
+
+    async def test_a2a_mode_skips_inprocess_runtime_for_new_tasks(self, monkeypatch):
+        async def fake_a2a_run(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        class _ForbiddenRunner:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("InMemoryRunner should not be created in A2A mode")
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task_a2a", fake_a2a_run)
+        monkeypatch.setattr(task_dynamic, "InMemoryRunner", _ForbiddenRunner)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(a2a=A2ATaskConfig()),
+        )
+
+        context = _DummyToolContext(state={})
+        result = await task_tool(
+            description="delegate",
+            prompt="delegate this",
+            subagent_type="general",
+            tool_context=cast(Any, context),
+        )
+
+        assert result["status"] == "completed"
+        logical_parent = context.state.get("_dynamic_parent_session_id")
+        assert isinstance(logical_parent, str)
+        assert not any(
+            key.startswith(f"{logical_parent}:") for key in task_dynamic._RUNTIME_REGISTRY
+        )
+
+    async def test_a2a_mode_resumes_without_runtime_registry(self, monkeypatch):
+        async def fake_a2a_run(*args, **kwargs):
+            del args, kwargs
+            return {
+                "result": "ORBIT",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        class _ForbiddenRunner:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("InMemoryRunner should not be created in A2A mode")
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task_a2a", fake_a2a_run)
+        monkeypatch.setattr(task_dynamic, "InMemoryRunner", _ForbiddenRunner)
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(a2a=A2ATaskConfig()),
+        )
+
+        context = _DummyToolContext(
+            state={
+                "_dynamic_parent_session_id": "parent_a2a",
+                "_dynamic_tasks": {
+                    "task_1": {
+                        "subagent_type": "general_purpose",
+                        "depth": 1,
+                        "files": {},
+                        "todos": [],
+                        "history": [],
+                    }
+                },
+            }
+        )
+
+        result = await task_tool(
+            description="resume",
+            prompt="resume",
+            task_id="task_1",
+            tool_context=cast(Any, context),
+        )
+
+        assert result["status"] == "completed"
+        assert result["task_id"] == "task_1"
+        assert result["recovered_runtime"] is False
+        assert not any(key.startswith("parent_a2a:") for key in task_dynamic._RUNTIME_REGISTRY)
 
     async def test_temporal_mode_forwards_runtime_subagent_spec_payload(self, monkeypatch):
         observed_snapshot: dict[str, Any] = {}

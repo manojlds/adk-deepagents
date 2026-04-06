@@ -103,6 +103,8 @@ future turns.
 - `allow_model_override`: controls whether `model=` input is honored
 - `temporal`: optional `TemporalTaskConfig`; when set, each task turn is
   dispatched to Temporal workflows/workers instead of in-process child sessions
+- `a2a`: optional `A2ATaskConfig`; when set, delegated turns are sent to an
+  external A2A agent endpoint instead of in-process child sessions
 
 Enforcement is inside `task(...)` before/around child execution.
 
@@ -133,6 +135,17 @@ worker for execution parity. Temporal update calls carry a spec hash and only
 send full spec payloads when the specialization changes.
 
 See [Temporal Backend](temporal.md) for setup details.
+
+## A2A execution path (optional)
+
+When `DynamicTaskConfig.a2a` is configured:
+
+1. `task()` sends the delegated prompt to the configured A2A endpoint.
+2. `task_id` is passed as A2A `context_id` to preserve turn continuity.
+3. The dynamic tool consumes streamed/non-streamed A2A responses and returns
+   the final text as `result`.
+
+See [A2A Integration](a2a.md) for setup details.
 
 ## State model (persisted vs process-local)
 

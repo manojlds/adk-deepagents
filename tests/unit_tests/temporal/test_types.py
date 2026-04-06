@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
+from adk_deepagents.types import A2ATaskConfig, DynamicTaskConfig, TemporalTaskConfig
 
 
 def test_temporal_task_config_defaults():
@@ -42,3 +42,9 @@ def test_dynamic_task_temporal_can_be_enabled():
     config = DynamicTaskConfig(temporal=TemporalTaskConfig(task_queue="custom"))
     assert config.temporal is not None
     assert config.temporal.task_queue == "custom"
+
+
+def test_dynamic_task_a2a_can_be_enabled():
+    config = DynamicTaskConfig(a2a=A2ATaskConfig(agent_url="https://agent.example.com"))
+    assert config.a2a is not None
+    assert config.a2a.agent_url == "https://agent.example.com"

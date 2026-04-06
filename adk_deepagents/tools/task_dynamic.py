@@ -25,6 +25,7 @@ from adk_deepagents.tools.task import _sanitize_agent_name
 from adk_deepagents.tools.task_dynamic_execution import (
     _build_spec_agent,
     _run_dynamic_task,
+    _run_dynamic_task_a2a,
     _run_dynamic_task_temporal,
 )
 from adk_deepagents.tools.task_dynamic_history import (
@@ -72,6 +73,7 @@ __all__ = [
     "create_register_subagent_tool",
     "_build_resume_prompt",
     "_run_dynamic_task",
+    "_run_dynamic_task_a2a",
     "_run_dynamic_task_temporal",
     "_RUNTIME_REGISTRY",
     "_CONCURRENCY_LOCKS",
@@ -208,6 +210,8 @@ def create_dynamic_task_tool(
         runtime: _TaskRuntime | None = None
         task_state: dict[str, Any] | None = None
         temporal_enabled = task_config.temporal is not None
+        a2a_enabled = task_config.a2a is not None
+        external_backend_enabled = temporal_enabled or a2a_enabled
         created_subagent = False
         recovered_runtime = False
         resume_with_history = False
@@ -276,7 +280,7 @@ def create_dynamic_task_tool(
 
             task_depth = _coerce_positive_int(existing.get("depth"), current_depth + 1)
             run_key = f"{logical_parent_id}:{task_id}"
-            runtime = None if temporal_enabled else _RUNTIME_REGISTRY.get(run_key)
+            runtime = None if external_backend_enabled else _RUNTIME_REGISTRY.get(run_key)
             if runtime is None:
                 selected = selected_registry.get(normalized_type)
                 subagent_spec_payload = _coerce_subagent_spec_payload(existing.get("subagent_spec"))
@@ -330,7 +334,7 @@ def create_dynamic_task_tool(
                 elif subagent_spec_payload is not None:
                     normalized_type = _normalize_subagent_type(subagent_spec_payload["name"])
 
-                if not temporal_enabled:
+                if not external_backend_enabled:
                     assert selected is not None
                     if isinstance(selected, LlmAgent):
                         child_agent = selected
@@ -451,7 +455,7 @@ def create_dynamic_task_tool(
                     "task_id": task_id,
                 }
 
-            if not temporal_enabled:
+            if not external_backend_enabled:
                 if isinstance(selected, LlmAgent):
                     child_agent = selected
                 else:
@@ -510,7 +514,7 @@ def create_dynamic_task_tool(
                 task_state["subagent_spec"] = subagent_spec_payload
             store[task_id] = task_state
 
-        if not temporal_enabled and runtime is None:
+        if not external_backend_enabled and runtime is None:
             return {"status": "error", "error": "Failed to initialize dynamic task runtime"}
 
         if task_id is None:
@@ -577,6 +581,13 @@ def create_dynamic_task_tool(
                     },
                     logical_parent_id=logical_parent_id,
                     task_id=task_id,
+                    task_config=task_config,
+                )
+            elif a2a_enabled:
+                result = await _run_dynamic_task_a2a(
+                    prompt=task_prompt,
+                    task_id=task_id,
+                    subagent_type=normalized_type,
                     task_config=task_config,
                 )
             else:

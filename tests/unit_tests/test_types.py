@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from adk_deepagents.types import (
+    A2ATaskConfig,
     BrowserConfig,
     DynamicTaskConfig,
     SkillsConfig,
@@ -48,6 +49,32 @@ class TestSubAgentSpec:
         spec = SubAgentSpec(name="x", description="y")
         assert spec.get("model") is None
         assert spec.get("system_prompt") is None
+
+
+# ---------------------------------------------------------------------------
+# A2ATaskConfig
+# ---------------------------------------------------------------------------
+
+
+class TestA2ATaskConfig:
+    def test_defaults(self):
+        cfg = A2ATaskConfig()
+        assert cfg.agent_url == "http://localhost:8000"
+        assert cfg.timeout_seconds == 120.0
+        assert cfg.poll_interval_seconds == 1.0
+        assert cfg.max_polls == 120
+
+    def test_custom_values(self):
+        cfg = A2ATaskConfig(
+            agent_url="https://agent.example.com",
+            timeout_seconds=45.0,
+            poll_interval_seconds=0.5,
+            max_polls=50,
+        )
+        assert cfg.agent_url == "https://agent.example.com"
+        assert cfg.timeout_seconds == 45.0
+        assert cfg.poll_interval_seconds == 0.5
+        assert cfg.max_polls == 50
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +127,7 @@ class TestDynamicTaskConfig:
         assert cfg.timeout_seconds == 120.0
         assert cfg.allow_model_override is False
         assert cfg.temporal is None
+        assert cfg.a2a is None
 
     def test_custom_values(self):
         temporal = TemporalTaskConfig(target_host="example:7233")
@@ -119,6 +147,11 @@ class TestDynamicTaskConfig:
         assert cfg.timeout_seconds == 300.0
         assert cfg.allow_model_override is True
         assert cfg.temporal is temporal
+
+    def test_custom_a2a(self):
+        a2a = A2ATaskConfig(agent_url="https://agent.example.com")
+        cfg = DynamicTaskConfig(a2a=a2a)
+        assert cfg.a2a is a2a
 
     def test_concurrency_policy_values(self):
         """Both valid concurrency policies are accepted."""

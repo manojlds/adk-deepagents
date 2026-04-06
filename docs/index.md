@@ -101,6 +101,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
 | [Optimization & Trajectories](optimization.md) | LLM judge, trajectory replay, autoresearch optimization loop, TUI workflow |
 | [Temporal Backend](temporal.md) | Configure Temporal-backed dynamic tasks, workers, and mise + pitchfork services |
+| [A2A Integration](a2a.md) | Expose deep agents via A2A and run dynamic tasks through A2A endpoints |
 
 ## Project Structure
 

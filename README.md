@@ -47,6 +47,9 @@ uv pip install adk-deepagents
 
 # For Temporal-backed dynamic task delegation
 uv pip install "adk-deepagents[temporal]"
+
+# For A2A server/client integrations
+uv pip install "adk-deepagents[a2a]"
 ```
 
 ## CLI Quickstart (`adk-deepagents`)
@@ -364,6 +367,41 @@ and integration test instructions.
 
 When the CLI runs in an environment with `ADK_DEEPAGENTS_TEMPORAL_*` variables,
 it auto-enables Temporal-backed dynamic tasks using those settings.
+
+#### A2A exposure and dynamic task backend
+
+Expose a deep agent as an A2A server endpoint:
+
+```python
+from adk_deepagents import create_deep_agent, to_a2a_app
+
+agent = create_deep_agent(name="deep_a2a")
+app = to_a2a_app(agent, host="0.0.0.0", port=8000)
+```
+
+Then run the Starlette app (for example with uvicorn):
+
+```bash
+uv run uvicorn my_agent_module:app --host 0.0.0.0 --port 8000
+```
+
+Use A2A as the backend for dynamic `task()` delegation:
+
+```python
+from adk_deepagents import A2ATaskConfig, DeepAgentConfig, DynamicTaskConfig, create_deep_agent
+
+agent = create_deep_agent(
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            a2a=A2ATaskConfig(agent_url="http://127.0.0.1:8000")
+        ),
+    ),
+)
+```
+
+In A2A-backed mode, delegated turns are sent to the target A2A agent and task
+continuity is preserved via `task_id`/A2A `context_id`.
 
 ### Summarization
 
