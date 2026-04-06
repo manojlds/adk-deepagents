@@ -403,6 +403,19 @@ agent = create_deep_agent(
 In A2A-backed mode, delegated turns are sent to the target A2A agent and task
 continuity is preserved via `task_id`/A2A `context_id`.
 
+End-to-end example (A2A worker + `task()` orchestrator):
+
+```bash
+# Terminal 1: start A2A worker
+uv run python -m examples.a2a_tasks.agent_server
+
+# Terminal 2: run orchestrator that delegates via DynamicTaskConfig.a2a
+export A2A_AGENT_URL=http://127.0.0.1:8000
+uv run python -m examples.a2a_tasks.agent_client
+```
+
+See `examples/a2a_tasks/README.md` and `docs/a2a.md` for the full walkthrough.
+
 ### Summarization
 
 Automatic context window management. When the conversation exceeds a configurable fraction of the context window, older messages are replaced with a condensed summary.

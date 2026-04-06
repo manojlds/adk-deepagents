@@ -117,3 +117,18 @@ ADK_DEEPAGENTS_LLM_TRANSPORT=a2a uv run pytest -m llm
 
 This keeps the same test expectations while exercising the A2A request/response
 path end-to-end in-process.
+
+## Example: A2A worker + task() orchestrator
+
+See [`examples/a2a_tasks/README.md`](../examples/a2a_tasks/README.md) for a full
+two-process example:
+
+- `agent_server.py` exposes a deep agent via `to_a2a_app(...)`
+- `agent_client.py` uses `DynamicTaskConfig.a2a` and delegates via `task()`
+
+Run flow:
+
+1. Start the worker server.
+2. Start the orchestrator client.
+3. Send prompts that use `task` and then reuse `task_id` (e.g. `task_1`) to
+   continue delegated context.
