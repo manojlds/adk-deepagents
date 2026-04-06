@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from tests.integration_tests.conftest import (
     make_litellm_model,
     run_agent,
@@ -54,7 +54,7 @@ async def test_error_handler_catches_tool_exception():
             "If the tool returns an error, explain what went wrong. "
             "Try to compute the user's request."
         ),
-        error_handling=True,
+        config=DeepAgentConfig(error_handling=True),
     )
 
     # Division by zero will raise inside eval
@@ -84,7 +84,7 @@ async def test_error_handler_agent_completes_despite_failure():
             "You are a test agent with an always_fails tool. "
             "Try calling it once. If it errors, report the error and stop."
         ),
-        error_handling=True,
+        config=DeepAgentConfig(error_handling=True),
     )
 
     texts, function_calls, function_responses, _runner, _session = await run_agent_with_events(

@@ -14,7 +14,13 @@ import pytest
 from google.adk.agents import LlmAgent
 from google.adk.tools import AgentTool
 
-from adk_deepagents import SubAgentSpec, SummarizationConfig, create_deep_agent
+from adk_deepagents import (
+    CallbackHooks,
+    DeepAgentConfig,
+    SubAgentSpec,
+    SummarizationConfig,
+    create_deep_agent,
+)
 from adk_deepagents.backends import FilesystemBackend, StateBackend
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
 
@@ -146,7 +152,7 @@ class TestDelegationModes:
     def test_dynamic_mode_adds_task_without_static_agent_tools(self):
         agent = create_deep_agent(
             subagents=[SubAgentSpec(name="researcher", description="Research agent")],
-            delegation_mode="dynamic",
+            config=DeepAgentConfig(delegation_mode="dynamic"),
         )
         names = _tool_names(agent)
         assert "register_subagent" in names
@@ -154,7 +160,7 @@ class TestDelegationModes:
         assert len(_agent_tools(agent)) == 0
 
     def test_dynamic_mode_without_subagents_adds_runtime_delegation_tools(self):
-        agent = create_deep_agent(delegation_mode="dynamic")
+        agent = create_deep_agent(config=DeepAgentConfig(delegation_mode="dynamic"))
         names = _tool_names(agent)
         assert "register_subagent" in names
         assert "task" in names
@@ -163,7 +169,7 @@ class TestDelegationModes:
     def test_both_mode_adds_task_and_static_agent_tools(self):
         agent = create_deep_agent(
             subagents=[SubAgentSpec(name="researcher", description="Research agent")],
-            delegation_mode="both",
+            config=DeepAgentConfig(delegation_mode="both"),
         )
         names = _tool_names(agent)
         assert "register_subagent" in names
@@ -172,7 +178,7 @@ class TestDelegationModes:
 
     def test_invalid_delegation_mode_raises(self):
         with pytest.raises(ValueError, match="Invalid delegation_mode"):
-            create_deep_agent(delegation_mode=cast(Any, "invalid"))
+            create_deep_agent(config=DeepAgentConfig(delegation_mode=cast(Any, "invalid")))
 
 
 class TestSubagentsGeneralPurposeIncluded:
@@ -205,13 +211,13 @@ class TestOutputSchema:
         class Result(BaseModel):
             answer: str
 
-        agent = create_deep_agent(output_schema=Result)
+        agent = create_deep_agent(config=DeepAgentConfig(output_schema=Result))
         assert agent.output_schema is Result
 
 
 class TestInterruptOnCreatesCallback:
     def test_interrupt_on_creates_callback(self):
-        agent = create_deep_agent(interrupt_on={"write_file": True})
+        agent = create_deep_agent(config=DeepAgentConfig(interrupt_on={"write_file": True}))
         assert agent.before_tool_callback is not None
 
     def test_no_interrupt_on_no_callback(self):
@@ -222,14 +228,14 @@ class TestInterruptOnCreatesCallback:
 class TestSummarizationConfig:
     def test_summarization_config(self):
         config = SummarizationConfig(model="gemini-2.5-flash")
-        agent = create_deep_agent(summarization=config)
+        agent = create_deep_agent(config=DeepAgentConfig(summarization=config))
         assert isinstance(agent, LlmAgent)
         assert agent.before_model_callback is not None
         names = _tool_names(agent)
         assert "compact_conversation" in names
 
     def test_no_summarization_excludes_compact_conversation(self):
-        agent = create_deep_agent(summarization=None)
+        agent = create_deep_agent(config=DeepAgentConfig(summarization=None))
         names = _tool_names(agent)
         assert "compact_conversation" not in names
 
@@ -257,12 +263,14 @@ class TestExtraCallbacks:
             return None
 
         agent = create_deep_agent(
-            extra_callbacks={
-                "before_agent": extra_before_agent,
-                "before_model": extra_before_model,
-                "after_tool": extra_after_tool,
-                "before_tool": extra_before_tool,
-            }
+            config=DeepAgentConfig(
+                callbacks=CallbackHooks(
+                    before_agent=extra_before_agent,
+                    before_model=extra_before_model,
+                    after_tool=extra_after_tool,
+                    before_tool=extra_before_tool,
+                )
+            )
         )
         assert agent.before_agent_callback is not None
         assert agent.before_model_callback is not None

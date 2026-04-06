@@ -26,6 +26,7 @@ from google.genai import types
 
 from adk_deepagents import (
     BrowserConfig,
+    DeepAgentConfig,
     DynamicTaskConfig,
     SubAgentSpec,
     SummarizationConfig,
@@ -93,16 +94,18 @@ async def build_agent_async(
         tools=[web_search, think],
         subagents=[browser_researcher_subagent],
         browser=BrowserConfig(headless=headless),
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=2,
-            max_depth=2,
-            timeout_seconds=180.0,
-        ),
-        summarization=SummarizationConfig(
-            model=resolved_model,
-            trigger=("fraction", 0.75),
-            keep=("messages", 8),
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=2,
+                max_depth=2,
+                timeout_seconds=180.0,
+            ),
+            summarization=SummarizationConfig(
+                model=resolved_model,
+                trigger=("fraction", 0.75),
+                keep=("messages", 8),
+            ),
         ),
     )
 

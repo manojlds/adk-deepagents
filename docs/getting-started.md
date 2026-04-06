@@ -128,12 +128,14 @@ agent = create_deep_agent(model="litellm/anthropic/claude-3.5-sonnet")
 When using summarization, the library knows context window sizes for common models (Gemini, GPT-4o, Claude 3) and uses them automatically. For unknown models, you can set the context window explicitly:
 
 ```python
-from adk_deepagents import create_deep_agent, SummarizationConfig
+from adk_deepagents import create_deep_agent, DeepAgentConfig, SummarizationConfig
 
 agent = create_deep_agent(
     model="litellm/openai/gpt-4o-mini",
-    summarization=SummarizationConfig(
-        context_window=128_000,
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(
+            context_window=128_000,
+        ),
     ),
 )
 ```
@@ -258,6 +260,7 @@ from google.adk.runners import InMemoryRunner
 
 from adk_deepagents import (
     create_deep_agent,
+    DeepAgentConfig,
     SubAgentSpec,
     SummarizationConfig,
 )
@@ -285,17 +288,19 @@ agent = create_deep_agent(
             system_prompt="You are a code research assistant. Search thoroughly.",
         ),
     ],
-    # Enable conversation summarization
-    summarization=SummarizationConfig(
-        model="gemini-2.5-flash",
-        trigger=("fraction", 0.85),
-        keep=("messages", 6),
+    config=DeepAgentConfig(
+        # Enable conversation summarization
+        summarization=SummarizationConfig(
+            model="gemini-2.5-flash",
+            trigger=("fraction", 0.85),
+            keep=("messages", 6),
+        ),
+        # Require approval before writing files or executing commands
+        interrupt_on={
+            "write_file": True,
+            "execute": True,
+        },
     ),
-    # Require approval before writing files or executing commands
-    interrupt_on={
-        "write_file": True,
-        "execute": True,
-    },
 )
 
 

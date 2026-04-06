@@ -247,22 +247,26 @@ Summarization progress is tracked in `state["_summarization_state"]`:
 ### Basic Summarization
 
 ```python
-from adk_deepagents import SummarizationConfig, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SummarizationConfig, create_deep_agent
 
 agent = create_deep_agent(
-    summarization=SummarizationConfig(),  # All defaults
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(),  # All defaults
+    ),
 )
 ```
 
 ### Custom Trigger and Keep
 
 ```python
-from adk_deepagents import SummarizationConfig, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SummarizationConfig, create_deep_agent
 
 agent = create_deep_agent(
-    summarization=SummarizationConfig(
-        trigger=("fraction", 0.75),  # Trigger at 75% of context window
-        keep=("messages", 10),       # Keep 10 most recent messages
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(
+            trigger=("fraction", 0.75),  # Trigger at 75% of context window
+            keep=("messages", 10),       # Keep 10 most recent messages
+        ),
     ),
 )
 ```
@@ -270,14 +274,16 @@ agent = create_deep_agent(
 ### With Argument Truncation
 
 ```python
-from adk_deepagents import SummarizationConfig, TruncateArgsConfig, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SummarizationConfig, TruncateArgsConfig, create_deep_agent
 
 agent = create_deep_agent(
-    summarization=SummarizationConfig(
-        truncate_args=TruncateArgsConfig(
-            trigger=("fraction", 0.6),
-            keep=("messages", 20),
-            max_length=1000,
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(
+            truncate_args=TruncateArgsConfig(
+                trigger=("fraction", 0.6),
+                keep=("messages", 20),
+                max_length=1000,
+            ),
         ),
     ),
 )
@@ -286,11 +292,13 @@ agent = create_deep_agent(
 ### Without LLM Summary
 
 ```python
-from adk_deepagents import SummarizationConfig, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SummarizationConfig, create_deep_agent
 
 agent = create_deep_agent(
-    summarization=SummarizationConfig(
-        use_llm_summary=False,  # Faster, no extra API call
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(
+            use_llm_summary=False,  # Faster, no extra API call
+        ),
     ),
 )
 ```
@@ -298,14 +306,16 @@ agent = create_deep_agent(
 ### Custom Context Window
 
 ```python
-from adk_deepagents import SummarizationConfig, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SummarizationConfig, create_deep_agent
 
 agent = create_deep_agent(
     model="openai/gpt-4o",
-    summarization=SummarizationConfig(
-        model="gemini-2.5-flash",      # Use Gemini for summaries (cheaper)
-        context_window=128_000,        # Override for gpt-4o
-        trigger=("fraction", 0.80),
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(
+            model="gemini-2.5-flash",      # Use Gemini for summaries (cheaper)
+            context_window=128_000,        # Override for gpt-4o
+            trigger=("fraction", 0.80),
+        ),
     ),
 )
 ```

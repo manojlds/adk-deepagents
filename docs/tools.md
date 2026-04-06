@@ -389,7 +389,7 @@ Tool call: read_todos()
 
 ## Conversation Compaction Tool
 
-When you pass `summarization=SummarizationConfig(...)` to `create_deep_agent()`,
+When you pass `config=DeepAgentConfig(summarization=SummarizationConfig(...))` to `create_deep_agent()`,
 the agent also gets a `compact_conversation` tool.
 
 ### `compact_conversation`

@@ -12,7 +12,7 @@ from google.adk.agents import LlmAgent
 from adk_deepagents.backends.state import StateBackend
 from adk_deepagents.graph import create_deep_agent
 from adk_deepagents.prompts import BASE_AGENT_PROMPT
-from adk_deepagents.types import SummarizationConfig
+from adk_deepagents.types import CallbackHooks, DeepAgentConfig, SummarizationConfig
 
 
 class TestCreateDeepAgent:
@@ -82,7 +82,7 @@ class TestCreateDeepAgent:
 
     def test_delegation_mode_dynamic_adds_task_tool(self):
         agent = create_deep_agent(
-            delegation_mode="dynamic",
+            config=DeepAgentConfig(delegation_mode="dynamic"),
             subagents=[{"name": "researcher", "description": "Research agent"}],
         )
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
@@ -95,14 +95,14 @@ class TestCreateDeepAgent:
         assert len(agent_tools) == 0
 
     def test_delegation_mode_dynamic_without_subagents_adds_runtime_tools(self):
-        agent = create_deep_agent(delegation_mode="dynamic")
+        agent = create_deep_agent(config=DeepAgentConfig(delegation_mode="dynamic"))
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
         assert "register_subagent" in tool_names
         assert "task" in tool_names
 
     def test_delegation_mode_both_includes_static_and_dynamic(self):
         agent = create_deep_agent(
-            delegation_mode="both",
+            config=DeepAgentConfig(delegation_mode="both"),
             subagents=[{"name": "researcher", "description": "Research agent"}],
         )
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
@@ -116,7 +116,7 @@ class TestCreateDeepAgent:
 
     def test_invalid_delegation_mode_raises(self):
         with pytest.raises(ValueError, match="Invalid delegation_mode"):
-            create_deep_agent(delegation_mode=cast(Any, "nope"))
+            create_deep_agent(config=DeepAgentConfig(delegation_mode=cast(Any, "nope")))
 
     def test_local_execution(self):
         agent = create_deep_agent(execution="local")
@@ -159,7 +159,7 @@ class TestCreateDeepAgent:
         assert isinstance(agent, LlmAgent)
 
     def test_interrupt_on(self):
-        agent = create_deep_agent(interrupt_on={"write_file": True})
+        agent = create_deep_agent(config=DeepAgentConfig(interrupt_on={"write_file": True}))
         assert agent.before_tool_callback is not None
 
     def test_no_interrupt_on(self):
@@ -168,17 +168,17 @@ class TestCreateDeepAgent:
         assert agent.before_tool_callback is None
 
     def test_summarization_config(self):
-        config = SummarizationConfig(model="gemini-2.5-flash")
-        agent = create_deep_agent(summarization=config)
+        summ_config = SummarizationConfig(model="gemini-2.5-flash")
+        agent = create_deep_agent(config=DeepAgentConfig(summarization=summ_config))
         assert isinstance(agent, LlmAgent)
 
     def test_summarization_adds_compact_conversation_tool(self):
-        agent = create_deep_agent(summarization=SummarizationConfig())
+        agent = create_deep_agent(config=DeepAgentConfig(summarization=SummarizationConfig()))
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
         assert "compact_conversation" in tool_names
 
     def test_no_summarization_no_compact_conversation_tool(self):
-        agent = create_deep_agent(summarization=None)
+        agent = create_deep_agent(config=DeepAgentConfig(summarization=None))
         tool_names = [getattr(t, "__name__", getattr(t, "name", "")) for t in agent.tools]
         assert "compact_conversation" not in tool_names
 
@@ -198,7 +198,7 @@ class TestCreateDeepAgent:
         class MyOutput(BaseModel):
             result: str
 
-        agent = create_deep_agent(output_schema=MyOutput)
+        agent = create_deep_agent(config=DeepAgentConfig(output_schema=MyOutput))
         assert agent.output_schema is MyOutput
 
     def test_skills_raises_import_error_when_not_installed(self):
@@ -221,12 +221,12 @@ class TestExtraCallbacks:
 
     def test_extra_callbacks_none(self):
         """No extra callbacks — agent is created normally."""
-        agent = create_deep_agent(extra_callbacks=None)
+        agent = create_deep_agent(config=DeepAgentConfig(callbacks=None))
         assert isinstance(agent, LlmAgent)
 
     def test_extra_callbacks_empty(self):
-        """Empty dict — agent is created normally."""
-        agent = create_deep_agent(extra_callbacks={})
+        """Empty CallbackHooks — agent is created normally."""
+        agent = create_deep_agent(config=DeepAgentConfig(callbacks=CallbackHooks()))
         assert isinstance(agent, LlmAgent)
 
     def test_before_agent_extra_called(self):
@@ -238,7 +238,7 @@ class TestExtraCallbacks:
             return None
 
         agent = create_deep_agent(
-            extra_callbacks={"before_agent": extra_before_agent},
+            config=DeepAgentConfig(callbacks=CallbackHooks(before_agent=extra_before_agent)),
         )
         # The agent's before_agent_callback should be a composed callback
         assert agent.before_agent_callback is not None
@@ -252,7 +252,7 @@ class TestExtraCallbacks:
             return None
 
         agent = create_deep_agent(
-            extra_callbacks={"before_model": extra_before_model},
+            config=DeepAgentConfig(callbacks=CallbackHooks(before_model=extra_before_model)),
         )
         assert agent.before_model_callback is not None
 
@@ -263,7 +263,7 @@ class TestExtraCallbacks:
             return None
 
         agent = create_deep_agent(
-            extra_callbacks={"after_tool": extra_after_tool},
+            config=DeepAgentConfig(callbacks=CallbackHooks(after_tool=extra_after_tool)),
         )
         assert agent.after_tool_callback is not None
 
@@ -274,7 +274,7 @@ class TestExtraCallbacks:
             return None
 
         agent = create_deep_agent(
-            extra_callbacks={"before_tool": extra_before_tool},
+            config=DeepAgentConfig(callbacks=CallbackHooks(before_tool=extra_before_tool)),
         )
         # With no interrupt_on, builtin is None, so extra is used directly
         assert agent.before_tool_callback is extra_before_tool
@@ -286,8 +286,10 @@ class TestExtraCallbacks:
             return None
 
         agent = create_deep_agent(
-            interrupt_on={"write_file": True},
-            extra_callbacks={"before_tool": extra_before_tool},
+            config=DeepAgentConfig(
+                interrupt_on={"write_file": True},
+                callbacks=CallbackHooks(before_tool=extra_before_tool),
+            ),
         )
         # Should be a composed callback (neither the builtin nor the extra alone)
         assert agent.before_tool_callback is not None
@@ -448,7 +450,7 @@ class TestSubAgentSpecFields:
     def test_subagent_inherits_parent_interrupt_on_when_unspecified(self):
         """Parent interrupt_on is used as fallback for sub-agents."""
         agent = create_deep_agent(
-            interrupt_on={"write_file": True},
+            config=DeepAgentConfig(interrupt_on={"write_file": True}),
             subagents=[
                 {
                     "name": "normal_agent",
@@ -474,7 +476,7 @@ class TestSubAgentSpecFields:
                     "description": "Researches topics",
                 }
             ],
-            summarization=SummarizationConfig(),
+            config=DeepAgentConfig(summarization=SummarizationConfig()),
         )
 
         from google.adk.tools import AgentTool

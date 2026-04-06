@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 from tests.integration_tests.conftest import make_litellm_model, run_agent
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
@@ -39,7 +39,7 @@ async def test_extra_before_model_callback():
         model=model,
         name="extra_cb_agent",
         instruction="You are a helpful test agent. Follow all system instructions.",
-        extra_callbacks={"before_model": extra_before_model},
+        config=DeepAgentConfig(callbacks=CallbackHooks(before_model=extra_before_model)),
     )
 
     texts, _runner, _session = await run_agent(
@@ -80,10 +80,12 @@ async def test_extra_before_agent_callback():
         model=model,
         name="extra_agent_cb_test",
         instruction="You are a test agent. Respond concisely.",
-        extra_callbacks={
-            "before_agent": extra_before_agent,
-            "before_model": check_flag_before_model,
-        },
+        config=DeepAgentConfig(
+            callbacks=CallbackHooks(
+                before_agent=extra_before_agent,
+                before_model=check_flag_before_model,
+            ),
+        ),
     )
 
     texts, _runner, _session = await run_agent(agent, "Say 'test complete'.")
@@ -114,7 +116,7 @@ async def test_extra_after_tool_callback():
             "You are a test agent. Use write_file to create /test.txt "
             "with content 'hello'. Do it immediately without asking questions."
         ),
-        extra_callbacks={"after_tool": extra_after_tool},
+        config=DeepAgentConfig(callbacks=CallbackHooks(after_tool=extra_after_tool)),
     )
 
     texts, _runner, _session = await run_agent(

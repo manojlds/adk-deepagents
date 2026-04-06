@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 from adk_deepagents.cli.tui.agent_service import _SharedMessageQueue
 from tests.integration_tests.conftest import (
     make_litellm_model,
@@ -30,7 +30,7 @@ async def test_message_queue_injection():
     agent = create_deep_agent(
         model=model,
         name="msg_queue_test",
-        message_queue=True,
+        config=DeepAgentConfig(message_queue=True),
         instruction=(
             "You are a test agent. Always acknowledge any injected messages "
             "you receive. If you see text containing a code word, repeat it back."
@@ -76,7 +76,7 @@ async def test_message_queue_disabled_by_default():
     agent = create_deep_agent(
         model=model,
         name="no_queue_test",
-        message_queue=False,  # Explicitly disabled
+        config=DeepAgentConfig(message_queue=False),  # Explicitly disabled
         instruction="You are a test agent. Respond concisely.",
     )
 
@@ -127,7 +127,10 @@ async def test_mid_turn_message_queue_injection():
     agent = create_deep_agent(
         model=model,
         name="mid_turn_queue_test",
-        message_queue=True,
+        config=DeepAgentConfig(
+            message_queue=True,
+            callbacks=CallbackHooks(after_tool=inject_after_first_tool),
+        ),
         instruction=(
             "You are a test agent. Use write_file to create /test.txt "
             "with content 'hello world'. After writing the file, check "
@@ -135,7 +138,6 @@ async def test_mid_turn_message_queue_injection():
             "words you see in your final response. Always include any "
             "code words from injected messages."
         ),
-        extra_callbacks={"after_tool": inject_after_first_tool},
     )
 
     texts, _runner, _session = await run_agent(
@@ -171,8 +173,7 @@ async def test_message_queue_provider_pre_loaded():
     agent = create_deep_agent(
         model=model,
         name="provider_preload_test",
-        message_queue=True,
-        message_queue_provider=queue.drain,
+        config=DeepAgentConfig(message_queue=True, message_queue_provider=queue.drain),
         instruction=(
             "You are a test agent.  If you see any injected messages "
             "containing a code word, you MUST repeat the code word in "
@@ -218,8 +219,11 @@ async def test_message_queue_provider_mid_turn():
     agent = create_deep_agent(
         model=model,
         name="provider_mid_turn_test",
-        message_queue=True,
-        message_queue_provider=queue.drain,
+        config=DeepAgentConfig(
+            message_queue=True,
+            message_queue_provider=queue.drain,
+            callbacks=CallbackHooks(after_tool=inject_via_provider),
+        ),
         instruction=(
             "You are a test agent. Use write_file to create /test.txt "
             "with content 'hello world'. After writing the file, check "
@@ -227,7 +231,6 @@ async def test_message_queue_provider_mid_turn():
             "words you see in your final response. Always include any "
             "code words from injected messages."
         ),
-        extra_callbacks={"after_tool": inject_via_provider},
     )
 
     texts, _runner, _session = await run_agent(
@@ -269,15 +272,17 @@ async def test_message_queue_provider_coexists_with_state_queue():
     agent = create_deep_agent(
         model=model,
         name="provider_state_coexist_test",
-        message_queue=True,
-        message_queue_provider=queue.drain,
+        config=DeepAgentConfig(
+            message_queue=True,
+            message_queue_provider=queue.drain,
+            callbacks=CallbackHooks(after_tool=inject_state_queue),
+        ),
         instruction=(
             "You are a test agent. Use write_file to create /test.txt "
             "with content 'hello'. After writing the file, check "
             "if you received any injected messages and repeat ALL "
             "code words you see. Always include every code word."
         ),
-        extra_callbacks={"after_tool": inject_state_queue},
     )
 
     # Pre-load a provider message.

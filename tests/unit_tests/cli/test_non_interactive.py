@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import adk_deepagents.cli.non_interactive as ni
-from adk_deepagents.types import DynamicTaskConfig
+from adk_deepagents.types import DeepAgentConfig
 
 
 class _FakeStdin(io.StringIO):
@@ -215,9 +215,11 @@ def test_build_cli_agent_enables_dynamic_delegation(monkeypatch, tmp_path: Path)
 
     assert captured["name"] == "demo_cli"
     assert captured["execution"] == "local"
-    assert captured["delegation_mode"] == "dynamic"
-    dynamic_config = cast(DynamicTaskConfig, captured["dynamic_task_config"])
-    assert dynamic_config.concurrency_policy == "wait"
+    cfg = cast(DeepAgentConfig, captured["config"])
+    assert cfg.delegation_mode == "dynamic"
+    dynamic_cfg = cfg.dynamic_task_config
+    assert dynamic_cfg is not None
+    assert dynamic_cfg.concurrency_policy == "wait"
 
 
 def test_run_non_interactive_async_streams_chunks(monkeypatch, capsys, tmp_path: Path) -> None:

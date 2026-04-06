@@ -32,7 +32,7 @@ from adk_deepagents.cli.session_store import (
     get_thread,
     list_threads,
 )
-from adk_deepagents.types import DynamicTaskConfig, SummarizationConfig
+from adk_deepagents.types import DeepAgentConfig, DynamicTaskConfig, SummarizationConfig
 
 if TYPE_CHECKING:
     from adk_deepagents.optimization.trajectory import Trajectory
@@ -185,17 +185,21 @@ def _build_cli_agent(
         memory_source_paths=memory_source_paths,
     )
 
+    cfg = DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=dynamic_task_config or build_cli_dynamic_task_config(),
+        interrupt_on=INTERACTIVE_INTERRUPT_ON,
+        message_queue=True,
+        message_queue_provider=message_queue_provider,
+        summarization=summarization,
+    )
+
     agent_kwargs: dict[str, Any] = {
         "name": f"{agent_name}_cli",
         "backend": backend,
         "execution": "local",
-        "delegation_mode": "dynamic",
-        "dynamic_task_config": dynamic_task_config or build_cli_dynamic_task_config(),
-        "interrupt_on": INTERACTIVE_INTERRUPT_ON,
-        "message_queue": True,
+        "config": cfg,
     }
-    if message_queue_provider is not None:
-        agent_kwargs["message_queue_provider"] = message_queue_provider
     if model is not None:
         agent_kwargs["model"] = model
     if memory_sources:
@@ -204,8 +208,6 @@ def _build_cli_agent(
         agent_kwargs["skills"] = list(skills_dirs)
     if instruction:
         agent_kwargs["instruction"] = instruction
-    if summarization is not None:
-        agent_kwargs["summarization"] = summarization
 
     try:
         return create_deep_agent(**agent_kwargs)

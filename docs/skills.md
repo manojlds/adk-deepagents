@@ -134,7 +134,7 @@ When building sub-agent tools, `_resolve_skills_tools` is called for sub-agents 
 
 ## Skills with Dynamic `task` Delegation
 
-Skills also work with `delegation_mode="dynamic"`:
+Skills also work with `delegation_mode="dynamic"` (set via `DeepAgentConfig`):
 
 - Dynamic child agents start from the parent `default_tools` snapshot.
 - If a dynamic `SubAgentSpec` includes `skills`, those skill tools are discovered
@@ -145,7 +145,7 @@ Skills also work with `delegation_mode="dynamic"`:
 Example:
 
 ```python
-from adk_deepagents import SubAgentSpec, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SubAgentSpec, create_deep_agent
 
 researcher = SubAgentSpec(
     name="researcher",
@@ -154,7 +154,9 @@ researcher = SubAgentSpec(
 )
 
 agent = create_deep_agent(
-    delegation_mode="dynamic",
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+    ),
     subagents=[researcher],
 )
 ```
@@ -192,12 +194,14 @@ The agent will discover all `SKILL.md` files under `./skills/` and gain `use_ski
 ### Skills with Custom Config
 
 ```python
-from adk_deepagents import SkillsConfig, create_deep_agent
+from adk_deepagents import DeepAgentConfig, SkillsConfig, create_deep_agent
 
 agent = create_deep_agent(
     skills=["./skills/"],
-    skills_config=SkillsConfig(
-        extra={"discovery_depth": 3},
+    config=DeepAgentConfig(
+        skills_config=SkillsConfig(
+            extra={"discovery_depth": 3},
+        ),
     ),
 )
 ```

@@ -9,7 +9,7 @@ import pytest
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.tools import task_dynamic
 from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec
 from tests.integration_tests.conftest import (
@@ -77,7 +77,7 @@ async def test_dynamic_task_tool_delegates_to_named_subagent():
             "and return the delegated result."
         ),
         subagents=[math_subagent],
-        delegation_mode="dynamic",
+        config=DeepAgentConfig(delegation_mode="dynamic"),
     )
 
     texts, function_calls, function_responses, _runner, _session = await run_agent_with_events(
@@ -103,7 +103,7 @@ async def test_dynamic_task_tool_reuses_task_id_session():
             "Always use the task tool for requests. "
             "If the user provides a task_id, pass that same task_id to task."
         ),
-        delegation_mode="dynamic",
+        config=DeepAgentConfig(delegation_mode="dynamic"),
     )
 
     texts1, calls1, responses1, runner, session = await run_agent_with_events(
@@ -142,7 +142,7 @@ async def test_dynamic_task_tool_recovers_task_after_runtime_registry_reset():
             "Always use the task tool for requests. "
             "If the user provides a task_id, pass that same task_id to task."
         ),
-        delegation_mode="dynamic",
+        config=DeepAgentConfig(delegation_mode="dynamic"),
     )
 
     texts1, calls1, responses1, runner, session = await run_agent_with_events(
@@ -198,11 +198,13 @@ async def test_dynamic_task_wait_policy_surfaces_queue_metadata():
         instruction=(
             "Always use the task tool for arithmetic requests, then return the delegated result."
         ),
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=1,
-            concurrency_policy="wait",
-            queue_timeout_seconds=10.0,
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=1,
+                concurrency_policy="wait",
+                queue_timeout_seconds=10.0,
+            ),
         ),
     )
 
@@ -236,11 +238,13 @@ async def test_dynamic_task_limits_are_visible_to_model_prompt():
             "Do not call tools. Reply in exactly one line using this format: "
             "max_parallel=<n>;concurrency_policy=<policy>;queue_timeout_seconds=<seconds>."
         ),
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=2,
-            concurrency_policy="wait",
-            queue_timeout_seconds=7.0,
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=2,
+                concurrency_policy="wait",
+                queue_timeout_seconds=7.0,
+            ),
         ),
     )
 

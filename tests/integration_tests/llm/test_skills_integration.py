@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.types import SubAgentSpec
 from tests.integration_tests.conftest import make_litellm_model, run_agent_with_events
 
@@ -162,7 +162,7 @@ async def test_dynamic_task_subagent_can_use_skills(tmp_path: Path):
             "subagent_type='skill_worker'. Return the delegated result unchanged."
         ),
         subagents=[skill_worker],
-        delegation_mode="dynamic",
+        config=DeepAgentConfig(delegation_mode="dynamic"),
     )
 
     texts, function_calls, function_responses, _runner, _session = await run_agent_with_events(
@@ -211,7 +211,7 @@ async def test_skill_instructions_can_trigger_dynamic_task_delegation(tmp_path: 
         ),
         skills=[str(skills_root)],
         subagents=[math_subagent],
-        delegation_mode="dynamic",
+        config=DeepAgentConfig(delegation_mode="dynamic"),
     )
 
     texts, function_calls, function_responses, _runner, _session = await run_agent_with_events(

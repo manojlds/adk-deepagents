@@ -21,7 +21,7 @@ from adk_deepagents.cli.resources import (
     build_missing_skills_dependency_error,
 )
 from adk_deepagents.cli.session_store import CLI_SESSIONS_APP_NAME
-from adk_deepagents.types import DynamicTaskConfig
+from adk_deepagents.types import CallbackHooks, DeepAgentConfig, DynamicTaskConfig
 
 SHELL_TOOL_NAMES = frozenset({"execute", "execute_bash"})
 CONFIRMATION_REQUIRED_TOOLS = frozenset({"write_file", "edit_file", "delete_file"})
@@ -193,15 +193,18 @@ def _build_cli_agent(
         shell_allow_list=shell_allow_list,
         auto_approve=auto_approve,
     )
-    extra_callbacks = {"before_tool": before_tool_callback}
+
+    cfg = DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=dynamic_task_config or build_cli_dynamic_task_config(),
+        callbacks=CallbackHooks(before_tool=before_tool_callback),
+    )
 
     agent_kwargs: dict[str, Any] = {
         "name": f"{agent_name}_cli",
         "backend": backend,
         "execution": "local",
-        "delegation_mode": "dynamic",
-        "dynamic_task_config": dynamic_task_config or build_cli_dynamic_task_config(),
-        "extra_callbacks": extra_callbacks,
+        "config": cfg,
     }
     if model is not None:
         agent_kwargs["model"] = model

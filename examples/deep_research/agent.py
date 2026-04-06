@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from google.genai import types
 
 from adk_deepagents import (
+    DeepAgentConfig,
     DynamicTaskConfig,
     SubAgentSpec,
     SummarizationConfig,
@@ -145,17 +146,19 @@ def build_agent(model: str = DEFAULT_MODEL):
         instruction=_build_orchestrator_prompt(),
         tools=[web_search, think],
         subagents=[planner_subagent, researcher_subagent, reporter_subagent, grader_subagent],
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=MAX_CONCURRENT_RESEARCH_UNITS,
-            max_depth=2,
-            timeout_seconds=240.0,
-            allow_model_override=False,
-        ),
-        summarization=SummarizationConfig(
-            model=resolved_model,
-            trigger=("fraction", 0.75),
-            keep=("messages", 8),
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=MAX_CONCURRENT_RESEARCH_UNITS,
+                max_depth=2,
+                timeout_seconds=240.0,
+                allow_model_override=False,
+            ),
+            summarization=SummarizationConfig(
+                model=resolved_model,
+                trigger=("fraction", 0.75),
+                keep=("messages", 8),
+            ),
         ),
     )
 

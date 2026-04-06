@@ -19,16 +19,18 @@ uv pip install "adk-deepagents[temporal]"
 
 ```python
 from adk_deepagents import create_deep_agent
-from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
+from adk_deepagents.types import DeepAgentConfig, DynamicTaskConfig, TemporalTaskConfig
 
 agent = create_deep_agent(
-    delegation_mode="dynamic",
-    dynamic_task_config=DynamicTaskConfig(
-        timeout_seconds=90,
-        temporal=TemporalTaskConfig(
-            target_host="127.0.0.1:7233",
-            namespace="default",
-            task_queue="adk-deepagents-tasks",
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            timeout_seconds=90,
+            temporal=TemporalTaskConfig(
+                target_host="127.0.0.1:7233",
+                namespace="default",
+                task_queue="adk-deepagents-tasks",
+            ),
         ),
     ),
 )

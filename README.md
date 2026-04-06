@@ -137,25 +137,33 @@ uv run adk run my_project/
 The main synchronous factory function. Returns a configured `google.adk.agents.LlmAgent`.
 
 ```python
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 
 agent = create_deep_agent(
+    name="deep_agent",              # Agent name
     model="gemini-2.5-flash",       # LLM model string
-    tools=None,                      # Additional tool functions
     instruction=None,                # Custom system instruction
+    tools=None,                      # Additional tool functions
     subagents=None,                  # Sub-agent specifications
-    skills=None,                     # Skill directory paths
-    skills_config=None,              # SkillsConfig for adk-skills
     memory=None,                     # AGENTS.md file paths to load
-    output_schema=None,              # Pydantic BaseModel for structured output
+    skills=None,                     # Skill directory paths
     backend=None,                    # Backend instance or factory
     execution=None,                  # "local", "heimdall", or MCP config dict
     browser=None,                    # "playwright" or BrowserConfig
-    summarization=None,              # SummarizationConfig
-    delegation_mode="static",       # "static", "dynamic", or "both"
-    dynamic_task_config=None,        # DynamicTaskConfig (includes optional Temporal backend)
-    interrupt_on=None,               # Tool names requiring approval
-    name="deep_agent",              # Agent name
+    config=DeepAgentConfig(
+        output_schema=None,          # Pydantic BaseModel for structured output
+        summarization=None,          # SummarizationConfig
+        delegation_mode="static",   # "static", "dynamic", or "both"
+        dynamic_task_config=None,    # DynamicTaskConfig (optional Temporal backend)
+        skills_config=None,          # SkillsConfig for adk-skills
+        interrupt_on=None,           # Tool names requiring approval
+        callbacks=None,              # Optional callback hooks
+        error_handling=True,
+        message_queue=False,
+        message_queue_provider=None,
+        multimodal=False,
+        http_tools=False,
+    ),
 )
 ```
 
@@ -309,17 +317,19 @@ to continue the same delegated sub-session across turns.
 (recursive delegation depth) and `max_parallel` (simultaneous running tasks).
 
 ```python
-from adk_deepagents import DynamicTaskConfig, SubAgentSpec, create_deep_agent
+from adk_deepagents import DeepAgentConfig, DynamicTaskConfig, SubAgentSpec, create_deep_agent
 
 agent = create_deep_agent(
     subagents=[
         SubAgentSpec(name="explore", description="Searches files and code patterns."),
         SubAgentSpec(name="coder", description="Writes and edits files."),
     ],
-    delegation_mode="dynamic",
-    dynamic_task_config=DynamicTaskConfig(
-        timeout_seconds=90,
-        allow_model_override=False,
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            timeout_seconds=90,
+            allow_model_override=False,
+        ),
     ),
 )
 ```
@@ -333,17 +343,18 @@ To run delegated `task()` turns on Temporal workers instead of in-process
 sessions, set `DynamicTaskConfig.temporal`:
 
 ```python
-from adk_deepagents import create_deep_agent
-from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
+from adk_deepagents import DeepAgentConfig, DynamicTaskConfig, TemporalTaskConfig, create_deep_agent
 
 agent = create_deep_agent(
-    delegation_mode="dynamic",
-    dynamic_task_config=DynamicTaskConfig(
-        temporal=TemporalTaskConfig(
-            target_host="127.0.0.1:7233",
-            namespace="default",
-            task_queue="adk-deepagents-tasks",
-        )
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(
+            temporal=TemporalTaskConfig(
+                target_host="127.0.0.1:7233",
+                namespace="default",
+                task_queue="adk-deepagents-tasks",
+            )
+        ),
     ),
 )
 ```
@@ -359,14 +370,16 @@ it auto-enables Temporal-backed dynamic tasks using those settings.
 Automatic context window management. When the conversation exceeds a configurable fraction of the context window, older messages are replaced with a condensed summary.
 
 ```python
-from adk_deepagents import create_deep_agent, SummarizationConfig
+from adk_deepagents import DeepAgentConfig, SummarizationConfig, create_deep_agent
 
 agent = create_deep_agent(
-    summarization=SummarizationConfig(
-        model="gemini-2.5-flash",
-        trigger=("fraction", 0.85),     # Trigger at 85% of context window
-        keep=("messages", 6),           # Keep 6 most recent messages
-        history_path_prefix="/conversation_history",
+    config=DeepAgentConfig(
+        summarization=SummarizationConfig(
+            model="gemini-2.5-flash",
+            trigger=("fraction", 0.85),     # Trigger at 85% of context window
+            keep=("messages", 6),           # Keep 6 most recent messages
+            history_path_prefix="/conversation_history",
+        ),
     ),
 )
 ```
@@ -390,12 +403,16 @@ Memory files should contain project context, role descriptions, coding conventio
 Require human approval before specific tools execute. When a tool is interrupted, its invocation is stored in session state under `_pending_approval`.
 
 ```python
+from adk_deepagents import DeepAgentConfig, create_deep_agent
+
 agent = create_deep_agent(
-    interrupt_on={
-        "write_file": True,
-        "execute": True,
-        "read_file": False,  # Explicitly allow (no interruption)
-    },
+    config=DeepAgentConfig(
+        interrupt_on={
+            "write_file": True,
+            "execute": True,
+            "read_file": False,  # Explicitly allow (no interruption)
+        },
+    ),
 )
 ```
 
@@ -404,6 +421,7 @@ agent = create_deep_agent(
 Use a Pydantic `BaseModel` subclass to constrain the agent's final output format.
 
 ```python
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from pydantic import BaseModel
 
 class AnalysisResult(BaseModel):
@@ -412,8 +430,8 @@ class AnalysisResult(BaseModel):
     confidence: float
 
 agent = create_deep_agent(
-    output_schema=AnalysisResult,
     instruction="Analyze the given code and return structured results.",
+    config=DeepAgentConfig(output_schema=AnalysisResult),
 )
 ```
 
@@ -434,8 +452,8 @@ Every agent created with `create_deep_agent()` includes these tools:
 
 With `execution="local"` or `execution="heimdall"`, an `execute` tool is also available for shell commands.
 
-With `summarization=SummarizationConfig(...)`, a `compact_conversation` tool is added for
-manual context compaction on the next model turn.
+With `config=DeepAgentConfig(summarization=SummarizationConfig(...))`, a
+`compact_conversation` tool is added for manual context compaction on the next model turn.
 
 With `browser="playwright"`, browser tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, etc.) are added for web page interaction.
 
@@ -449,7 +467,7 @@ With `delegation_mode="dynamic"` or `"both"`, a single `task` tool is added for 
 adk_deepagents/
 ├── __init__.py          # Public API exports
 ├── graph.py             # create_deep_agent() and create_deep_agent_async()
-├── types.py             # SubAgentSpec, SummarizationConfig, SkillsConfig, BrowserConfig
+├── types.py             # DeepAgentConfig and shared config/spec dataclasses
 ├── prompts.py           # System prompt templates
 ├── memory.py            # AGENTS.md loading and formatting
 ├── summarization.py     # Context window management

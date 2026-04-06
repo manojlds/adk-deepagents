@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 from google.genai import types
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.tools import task_dynamic
 from adk_deepagents.types import DynamicTaskConfig
 
@@ -69,11 +69,13 @@ async def test_dynamic_wait_policy_queues_parallel_task_calls(monkeypatch):
     monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
 
     agent = create_deep_agent(
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=1,
-            concurrency_policy="wait",
-            queue_timeout_seconds=1.0,
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=1,
+                concurrency_policy="wait",
+                queue_timeout_seconds=1.0,
+            ),
         ),
     )
     task_tool = _task_tool_from_agent(agent)
@@ -133,10 +135,12 @@ async def test_dynamic_error_policy_rejects_overflow_parallel_calls(monkeypatch)
     monkeypatch.setattr(task_dynamic, "_run_dynamic_task", fake_run_dynamic_task)
 
     agent = create_deep_agent(
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=1,
-            concurrency_policy="error",
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=1,
+                concurrency_policy="error",
+            ),
         ),
     )
     task_tool = _task_tool_from_agent(agent)
@@ -181,11 +185,13 @@ async def test_dynamic_error_policy_rejects_overflow_parallel_calls(monkeypatch)
 
 def test_dynamic_task_tool_doc_exposes_concurrency_limits() -> None:
     agent = create_deep_agent(
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=3,
-            concurrency_policy="wait",
-            queue_timeout_seconds=12.5,
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=3,
+                concurrency_policy="wait",
+                queue_timeout_seconds=12.5,
+            ),
         ),
     )
     task_tool = _task_tool_from_agent(agent)
@@ -199,11 +205,13 @@ def test_dynamic_task_tool_doc_exposes_concurrency_limits() -> None:
 
 async def test_dynamic_task_limits_are_injected_into_system_instruction() -> None:
     agent = create_deep_agent(
-        delegation_mode="dynamic",
-        dynamic_task_config=DynamicTaskConfig(
-            max_parallel=3,
-            concurrency_policy="wait",
-            queue_timeout_seconds=12.5,
+        config=DeepAgentConfig(
+            delegation_mode="dynamic",
+            dynamic_task_config=DynamicTaskConfig(
+                max_parallel=3,
+                concurrency_policy="wait",
+                queue_timeout_seconds=12.5,
+            ),
         ),
     )
 

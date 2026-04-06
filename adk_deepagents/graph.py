@@ -36,6 +36,8 @@ from adk_deepagents.tools.task_dynamic import (
 from adk_deepagents.tools.todos import read_todos, write_todos
 from adk_deepagents.types import (
     BrowserConfig,
+    CallbackHooks,
+    DeepAgentConfig,
     DynamicTaskConfig,
     SkillsConfig,
     SubAgentSpec,
@@ -294,7 +296,7 @@ def _build_callbacks(
     message_queue: bool,
     message_queue_provider: Callable[[], list[dict[str, Any]]] | None,
     multimodal: bool,
-    extra_callbacks: dict[str, Callable] | None,
+    callbacks: CallbackHooks | None,
 ) -> dict[str, Callable | None]:
     """Build all agent callbacks.
 
@@ -323,12 +325,12 @@ def _build_callbacks(
     before_tool_cb = make_before_tool_callback(interrupt_on=interrupt_on)
     after_model_cb = make_after_model_callback()
 
-    if extra_callbacks:
-        before_agent_cb = _compose_callbacks(before_agent_cb, extra_callbacks.get("before_agent"))
-        before_model_cb = _compose_callbacks(before_model_cb, extra_callbacks.get("before_model"))
-        after_model_cb = _compose_callbacks(after_model_cb, extra_callbacks.get("after_model"))
-        after_tool_cb = _compose_callbacks(after_tool_cb, extra_callbacks.get("after_tool"))
-        before_tool_cb = _compose_callbacks(before_tool_cb, extra_callbacks.get("before_tool"))
+    if callbacks is not None:
+        before_agent_cb = _compose_callbacks(before_agent_cb, callbacks.before_agent)
+        before_model_cb = _compose_callbacks(before_model_cb, callbacks.before_model)
+        after_model_cb = _compose_callbacks(after_model_cb, callbacks.after_model)
+        after_tool_cb = _compose_callbacks(after_tool_cb, callbacks.after_tool)
+        before_tool_cb = _compose_callbacks(before_tool_cb, callbacks.before_tool)
 
     return {
         "before_agent": before_agent_cb,
@@ -410,29 +412,18 @@ def _compose_callbacks(
 
 
 def create_deep_agent(
-    model: str | Any = "gemini-2.5-flash",
-    tools: Sequence[Callable] | None = None,
     *,
+    name: str = "deep_agent",
+    model: str | Any = "gemini-2.5-flash",
     instruction: str | None = None,
+    tools: Sequence[Callable] | None = None,
     subagents: list[SubAgentSpec | LlmAgent] | None = None,
-    skills: list[str] | None = None,
-    skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
-    output_schema: Any = None,
+    skills: list[str] | None = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     browser: BrowserConfig | str | None = None,
-    summarization: SummarizationConfig | None = None,
-    delegation_mode: Literal["static", "dynamic", "both"] = "static",
-    dynamic_task_config: DynamicTaskConfig | None = None,
-    interrupt_on: dict[str, bool] | None = None,
-    extra_callbacks: dict[str, Callable] | None = None,
-    name: str = "deep_agent",
-    error_handling: bool = True,
-    message_queue: bool = False,
-    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
-    multimodal: bool = False,
-    http_tools: bool = False,
+    config: DeepAgentConfig | None = None,
 ) -> LlmAgent:
     """Create a deep agent with ADK primitives.
 
@@ -441,23 +432,21 @@ def create_deep_agent(
 
     Parameters
     ----------
+    name:
+        Agent name (default ``"deep_agent"``).
     model:
         Model string (default ``"gemini-2.5-flash"``).
-    tools:
-        Additional user-provided tool functions.
     instruction:
         Custom system instruction. ``BASE_AGENT_PROMPT`` is prepended.
+    tools:
+        Additional user-provided tool functions.
     subagents:
         Sub-agent specifications. A general-purpose sub-agent is always
         included by default.
-    skills:
-        List of directory paths to discover Agent Skills from (via adk-skills).
-    skills_config:
-        Optional configuration for adk-skills ``SkillsRegistry``.
     memory:
         List of AGENTS.md file paths to load as persistent memory.
-    output_schema:
-        Optional Pydantic model or type for structured output.
+    skills:
+        List of directory paths to discover Agent Skills from (via adk-skills).
     backend:
         A ``Backend`` instance or a ``BackendFactory``. Defaults to
         ``StateBackend`` backed by session state.
@@ -470,43 +459,16 @@ def create_deep_agent(
         Browser automation backend. ``"playwright"`` for Playwright MCP,
         or a ``BrowserConfig`` for custom configuration. Requires
         ``create_deep_agent_async()`` to resolve MCP tools.
-    summarization:
-        Optional ``SummarizationConfig`` for context window management.
-    delegation_mode:
-        Sub-agent delegation style. ``"static"`` uses one ``AgentTool`` per
-        configured sub-agent (default behavior). ``"dynamic"`` exposes a single
-        ``task`` tool with runtime sub-agent/session routing. ``"both"`` exposes
-        both interfaces.
-    dynamic_task_config:
-        Optional configuration for the dynamic ``task`` delegation tool.
-    interrupt_on:
-        Tool names that require human approval before execution.
-    extra_callbacks:
-        Optional dict with keys ``before_agent``, ``before_model``,
-        ``after_model``, ``before_tool``, ``after_tool``.  Each value is a callback that
-        is composed **after** the built-in callback.  If the built-in
-        callback short-circuits (returns a non-``None`` value), the
-        extra callback is **not** called.
-    name:
-        Agent name (default ``"deep_agent"``).
-    error_handling:
-        Wrap tool functions with error handlers so exceptions return
-        structured error dicts to the LLM instead of crashing.
-    message_queue:
-        When ``True``, enable message queue support. External systems
-        can inject messages mid-run by writing to
-        ``state["_message_queue"]``.
-    multimodal:
-        When ``True``, scan user messages for image URLs and fetch them
-        as inline base64 data parts for multimodal model support.
-    http_tools:
-        Include ``fetch_url`` and ``http_request`` tools with SSRF protection.
+    config:
+        Advanced configuration (delegation, summarization, feature flags,
+        callbacks, etc.).  See :class:`DeepAgentConfig`.
 
     Returns
     -------
     LlmAgent
         A fully configured ADK agent.
     """
+    cfg = config or DeepAgentConfig()
 
     # 1. Resolve backend
     backend_factory = _resolve_backend_factory(backend)
@@ -514,13 +476,13 @@ def create_deep_agent(
     # 2. Build core tools + feature flags
     core_tools, has_execution, has_browser, has_http_tools = _build_core_tools(
         user_tools=tools,
-        error_handling=error_handling,
-        summarization=summarization,
+        error_handling=cfg.error_handling,
+        summarization=cfg.summarization,
         skills=skills,
-        skills_config=skills_config,
+        skills_config=cfg.skills_config,
         execution=execution,
         browser=browser,
-        http_tools=http_tools,
+        http_tools=cfg.http_tools,
     )
 
     # 3. Build sub-agent tools
@@ -528,30 +490,30 @@ def create_deep_agent(
         core_tools=core_tools,
         model=model,
         subagents=subagents,
-        delegation_mode=delegation_mode,
-        dynamic_task_config=dynamic_task_config,
-        skills_config=skills_config,
+        delegation_mode=cfg.delegation_mode,
+        dynamic_task_config=cfg.dynamic_task_config,
+        skills_config=cfg.skills_config,
         memory=memory,
         backend_factory=backend_factory,
         has_execution=has_execution,
-        summarization=summarization,
-        interrupt_on=interrupt_on,
+        summarization=cfg.summarization,
+        interrupt_on=cfg.interrupt_on,
     )
 
     # 4. Build callbacks
-    callbacks = _build_callbacks(
+    resolved_callbacks = _build_callbacks(
         memory=memory,
         backend_factory=backend_factory,
         has_execution=has_execution,
         has_http_tools=has_http_tools,
         subagent_descriptions=subagent_descriptions or None,
         dynamic_task_config=resolved_dynamic_config,
-        summarization=summarization,
-        interrupt_on=interrupt_on,
-        message_queue=message_queue,
-        message_queue_provider=message_queue_provider,
-        multimodal=multimodal,
-        extra_callbacks=extra_callbacks,
+        summarization=cfg.summarization,
+        interrupt_on=cfg.interrupt_on,
+        message_queue=cfg.message_queue,
+        message_queue_provider=cfg.message_queue_provider,
+        multimodal=cfg.multimodal,
+        callbacks=cfg.callbacks,
     )
 
     # 5. Build instruction
@@ -568,12 +530,12 @@ def create_deep_agent(
         model=model,
         instruction=full_instruction,
         tools=all_tools,
-        output_schema=output_schema,
-        before_agent_callback=callbacks["before_agent"],
-        before_model_callback=callbacks["before_model"],
-        after_model_callback=callbacks["after_model"],
-        after_tool_callback=callbacks["after_tool"],
-        before_tool_callback=callbacks["before_tool"],
+        output_schema=cfg.output_schema,
+        before_agent_callback=resolved_callbacks["before_agent"],
+        before_model_callback=resolved_callbacks["before_model"],
+        after_model_callback=resolved_callbacks["after_model"],
+        after_tool_callback=resolved_callbacks["after_tool"],
+        before_tool_callback=resolved_callbacks["before_tool"],
     )
 
 
@@ -583,29 +545,18 @@ def create_deep_agent(
 
 
 async def create_deep_agent_async(
-    model: str | Any = "gemini-2.5-flash",
-    tools: Sequence[Callable] | None = None,
     *,
+    name: str = "deep_agent",
+    model: str | Any = "gemini-2.5-flash",
     instruction: str | None = None,
+    tools: Sequence[Callable] | None = None,
     subagents: list[SubAgentSpec | LlmAgent] | None = None,
-    skills: list[str] | None = None,
-    skills_config: SkillsConfig | None = None,
     memory: list[str] | None = None,
-    output_schema: Any = None,
+    skills: list[str] | None = None,
     backend: Backend | BackendFactory | None = None,
     execution: str | dict | None = None,
     browser: BrowserConfig | str | None = None,
-    summarization: SummarizationConfig | None = None,
-    delegation_mode: Literal["static", "dynamic", "both"] = "static",
-    dynamic_task_config: DynamicTaskConfig | None = None,
-    interrupt_on: dict[str, bool] | None = None,
-    extra_callbacks: dict[str, Callable] | None = None,
-    name: str = "deep_agent",
-    error_handling: bool = True,
-    message_queue: bool = False,
-    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None,
-    multimodal: bool = False,
-    http_tools: bool = False,
+    config: DeepAgentConfig | None = None,
 ) -> tuple[LlmAgent, Callable | None]:
     """Async variant of ``create_deep_agent()`` that resolves MCP tools.
 
@@ -673,28 +624,17 @@ async def create_deep_agent_async(
             await fn()
 
     agent = create_deep_agent(
+        name=name,
         model=model,
-        tools=combined_tools,
         instruction=instruction,
+        tools=combined_tools,
         subagents=subagents,
-        skills=skills,
-        skills_config=skills_config,
         memory=memory,
-        output_schema=output_schema,
+        skills=skills,
         backend=backend,
         execution=effective_execution,
         browser=effective_browser,
-        summarization=summarization,
-        delegation_mode=delegation_mode,
-        dynamic_task_config=dynamic_task_config,
-        interrupt_on=interrupt_on,
-        extra_callbacks=extra_callbacks,
-        name=name,
-        error_handling=error_handling,
-        message_queue=message_queue,
-        message_queue_provider=message_queue_provider,
-        multimodal=multimodal,
-        http_tools=http_tools,
+        config=config,
     )
 
     return agent, cleanup

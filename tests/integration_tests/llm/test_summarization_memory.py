@@ -15,7 +15,7 @@ import os
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.types import SummarizationConfig
 from tests.integration_tests.conftest import (
@@ -57,7 +57,7 @@ async def test_summarization_trigger():
             "When asked to recall facts, list them all. "
             "Always respond concisely."
         ),
-        summarization=summarization,
+        config=DeepAgentConfig(summarization=summarization),
     )
 
     # Turn 1: Establish a memorable fact
@@ -169,7 +169,7 @@ async def test_summarization_offload_readable_by_agent():
             "When asked to read a file, use read_file. "
             "Always respond concisely."
         ),
-        summarization=summarization,
+        config=DeepAgentConfig(summarization=summarization),
     )
 
     # Turn 1: Establish facts (will be summarized away)
@@ -225,7 +225,7 @@ async def test_compact_conversation_tool_forces_summarization_pass():
             "When the user asks to compact conversation, you MUST call "
             "compact_conversation exactly once before your final answer."
         ),
-        summarization=summarization,
+        config=DeepAgentConfig(summarization=summarization),
     )
 
     _texts, runner, session = await run_agent(

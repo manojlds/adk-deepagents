@@ -201,7 +201,13 @@ python examples/deep_research/agent.py --model anthropic/claude-sonnet-4-2025051
 ### Key Code
 
 ```python
-from adk_deepagents import DynamicTaskConfig, SubAgentSpec, SummarizationConfig, create_deep_agent
+from adk_deepagents import (
+    DeepAgentConfig,
+    DynamicTaskConfig,
+    SubAgentSpec,
+    SummarizationConfig,
+    create_deep_agent,
+)
 
 from .tools import think, web_search
 
@@ -218,12 +224,14 @@ agent = create_deep_agent(
     instruction=_build_orchestrator_prompt(),
     tools=[web_search, think],
     subagents=[planner_subagent, researcher_subagent, reporter_subagent, grader_subagent],
-    delegation_mode="dynamic",
-    dynamic_task_config=DynamicTaskConfig(max_parallel=4, max_depth=2),
-    summarization=SummarizationConfig(
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(max_parallel=4, max_depth=2),
+        summarization=SummarizationConfig(
             model=model,
-        trigger=("fraction", 0.75),
-        keep=("messages", 8),
+            trigger=("fraction", 0.75),
+            keep=("messages", 8),
+        ),
     ),
 )
 ```
@@ -457,15 +465,22 @@ A hybrid research agent combining web search APIs with browser automation. Uses 
 ### Key Code
 
 ```python
-from adk_deepagents import BrowserConfig, DynamicTaskConfig, create_deep_agent_async
+from adk_deepagents import (
+    BrowserConfig,
+    DeepAgentConfig,
+    DynamicTaskConfig,
+    create_deep_agent_async,
+)
 
 agent, cleanup = await create_deep_agent_async(
     name="browser_research",
     tools=[web_search, think],
     subagents=[browser_researcher_subagent],
     browser=BrowserConfig(headless=True),
-    delegation_mode="dynamic",
-    dynamic_task_config=DynamicTaskConfig(max_parallel=2, max_depth=2),
+    config=DeepAgentConfig(
+        delegation_mode="dynamic",
+        dynamic_task_config=DynamicTaskConfig(max_parallel=2, max_depth=2),
+    ),
 )
 ```
 

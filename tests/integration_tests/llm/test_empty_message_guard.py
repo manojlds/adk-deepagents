@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 from tests.integration_tests.conftest import make_litellm_model, run_agent
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
@@ -55,7 +55,7 @@ async def test_extra_after_model_callback_composes():
         model=model,
         name="extra_after_model_test",
         instruction="You are a test agent. Respond concisely.",
-        extra_callbacks={"after_model": extra_after_model},
+        config=DeepAgentConfig(callbacks=CallbackHooks(after_model=extra_after_model)),
     )
 
     texts, _runner, _session = await run_agent(

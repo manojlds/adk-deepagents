@@ -6,7 +6,8 @@ delegation.
 
 ## Where delegation is wired
 
-Delegation is configured in `create_deep_agent()` (`adk_deepagents/graph.py`):
+Delegation is configured in `create_deep_agent()` (`adk_deepagents/graph.py`)
+via `config=DeepAgentConfig(...)`:
 
 - `delegation_mode="static"` (default): build one `AgentTool` per sub-agent
 - `delegation_mode="dynamic"`: add one dynamic `task` tool

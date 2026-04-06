@@ -119,24 +119,26 @@ callback = make_after_tool_callback(
 )
 ```
 
-## extra_callbacks Parameter
+## callbacks via DeepAgentConfig
 
-The `extra_callbacks` parameter on `create_deep_agent` lets you compose custom callbacks after the built-in ones:
+Custom callbacks are passed via `DeepAgentConfig(callbacks=CallbackHooks(...))`. They are composed after the built-in ones:
 
 ```python
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 
 agent = create_deep_agent(
-    extra_callbacks={
-        "before_agent": my_before_agent,
-        "before_model": my_before_model,
-        "before_tool": my_before_tool,
-        "after_tool": my_after_tool,
-    },
+    config=DeepAgentConfig(
+        callbacks=CallbackHooks(
+            before_agent=my_before_agent,
+            before_model=my_before_model,
+            before_tool=my_before_tool,
+            after_tool=my_after_tool,
+        ),
+    ),
 )
 ```
 
-Only include the callbacks you need — missing keys are ignored.
+Only include the callbacks you need — unset fields are ignored.
 
 ## _compose_callbacks
 
@@ -193,7 +195,7 @@ import logging
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +206,9 @@ def my_before_agent(callback_context: CallbackContext) -> types.Content | None:
 
 
 agent = create_deep_agent(
-    extra_callbacks={"before_agent": my_before_agent},
+    config=DeepAgentConfig(
+        callbacks=CallbackHooks(before_agent=my_before_agent),
+    ),
 )
 ```
 
@@ -214,7 +218,7 @@ agent = create_deep_agent(
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 from adk_deepagents.callbacks.before_model import _append_to_system_instruction
 
 
@@ -233,7 +237,9 @@ def augment_prompt(
 
 
 agent = create_deep_agent(
-    extra_callbacks={"before_model": augment_prompt},
+    config=DeepAgentConfig(
+        callbacks=CallbackHooks(before_model=augment_prompt),
+    ),
 )
 ```
 
@@ -245,7 +251,7 @@ from typing import Any
 
 from google.adk.tools import BaseTool, ToolContext
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
 
 _last_call: dict[str, float] = {}
 MIN_INTERVAL = 1.0  # seconds
@@ -266,6 +272,8 @@ def rate_limit(
 
 
 agent = create_deep_agent(
-    extra_callbacks={"before_tool": rate_limit},
+    config=DeepAgentConfig(
+        callbacks=CallbackHooks(before_tool=rate_limit),
+    ),
 )
 ```

@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 from google.adk.agents import LlmAgent
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.cli.resources import MemoryMappedFilesystemBackend
 from adk_deepagents.temporal.worker import create_temporal_worker
 from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec, TemporalTaskConfig
@@ -95,8 +95,10 @@ async def test_temporal_single_turn_delegation(
             model=model,
             name="temporal_single_turn_test",
             instruction=("Always delegate using the task tool. Never answer directly."),
-            delegation_mode="dynamic",
-            dynamic_task_config=dynamic_task_config,
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
         )
 
         texts, calls, responses, _runner, _session = await run_agent_with_events(
@@ -127,8 +129,10 @@ async def test_temporal_multi_turn_resume_state(
                 "Always delegate using the task tool. "
                 "If the user gives a task_id, pass that same task_id to task."
             ),
-            delegation_mode="dynamic",
-            dynamic_task_config=dynamic_task_config,
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
         )
 
         texts1, calls1, responses1, runner, session = await run_agent_with_events(
@@ -184,8 +188,10 @@ async def test_temporal_named_subagent_routing(
                 "For arithmetic, use subagent_type='math_expert'."
             ),
             subagents=[math_subagent],
-            delegation_mode="dynamic",
-            dynamic_task_config=dynamic_task_config,
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
         )
 
         texts, calls, responses, _runner, _session = await run_agent_with_events(
@@ -216,8 +222,10 @@ async def test_temporal_multiple_independent_tasks(
                 "Always delegate using the task tool. Never answer directly. "
                 "When asked multiple questions, call task once for each question."
             ),
-            delegation_mode="dynamic",
-            dynamic_task_config=dynamic_task_config,
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
         )
 
         texts, calls, responses, _runner, _session = await run_agent_with_events(
@@ -252,8 +260,10 @@ async def test_temporal_task_returns_function_calls_metadata(
                 "Always delegate using the task tool. "
                 "Return the result from the task tool verbatim."
             ),
-            delegation_mode="dynamic",
-            dynamic_task_config=dynamic_task_config,
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
         )
 
         runner = InMemoryRunner(agent=agent, app_name="integration_test")
@@ -312,8 +322,10 @@ async def test_temporal_worker_sees_parent_workspace_backend(
                 "For filesystem checks, delegate and return the task result."
             ),
             backend=MemoryMappedFilesystemBackend(root_dir=Path.cwd()),
-            delegation_mode="dynamic",
-            dynamic_task_config=dynamic_task_config,
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
         )
 
         runner = InMemoryRunner(agent=agent, app_name="integration_test")

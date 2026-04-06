@@ -173,3 +173,63 @@ class SkillsConfig:
 
     # Placeholder — populated when adk-skills integration is wired up.
     extra: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CallbackHooks:
+    """Typed callback hooks for composing with built-in callbacks.
+
+    Each callback is composed **after** the built-in callback.  If the
+    built-in short-circuits (returns non-``None``), the hook is skipped.
+    """
+
+    before_agent: Callable | None = None
+    before_model: Callable | None = None
+    after_model: Callable | None = None
+    before_tool: Callable | None = None
+    after_tool: Callable | None = None
+
+
+@dataclass
+class DeepAgentConfig:
+    """Advanced configuration for ``create_deep_agent()``.
+
+    Groups rarely-used settings, feature flags, and hooks so the main
+    factory signature stays clean.
+    """
+
+    output_schema: Any = None
+    """Optional Pydantic model or type for structured output."""
+
+    summarization: SummarizationConfig | None = None
+    """Context window management configuration."""
+
+    delegation_mode: Literal["static", "dynamic", "both"] = "static"
+    """Sub-agent delegation style."""
+
+    dynamic_task_config: DynamicTaskConfig | None = None
+    """Configuration for the dynamic ``task`` delegation tool."""
+
+    skills_config: SkillsConfig | None = None
+    """Optional configuration for adk-skills ``SkillsRegistry``."""
+
+    interrupt_on: dict[str, bool] | None = None
+    """Tool names that require human approval before execution."""
+
+    callbacks: CallbackHooks | None = None
+    """Extra callback hooks composed after the built-in callbacks."""
+
+    error_handling: bool = True
+    """Wrap tools with error handlers (structured error dicts)."""
+
+    message_queue: bool = False
+    """Enable message queue support via ``state["_message_queue"]``."""
+
+    message_queue_provider: Callable[[], list[dict[str, Any]]] | None = None
+    """Optional callable that drains in-process queued messages."""
+
+    multimodal: bool = False
+    """Scan user messages for image URLs and inline them."""
+
+    http_tools: bool = False
+    """Include ``fetch_url`` and ``http_request`` tools."""

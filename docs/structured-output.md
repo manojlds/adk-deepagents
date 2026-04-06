@@ -6,7 +6,7 @@ adk-deepagents supports constraining agent output with a Pydantic `BaseModel`. W
 
 ## How It Works
 
-The `output_schema` parameter is passed directly to ADK's `LlmAgent`:
+The `output_schema` is passed via `DeepAgentConfig` and forwarded to ADK's `LlmAgent`:
 
 ```python
 agent = LlmAgent(
@@ -32,7 +32,7 @@ ADK handles the schema enforcement with the underlying model, instructing it to 
 ```python
 from pydantic import BaseModel
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 
 
 class AnalysisResult(BaseModel):
@@ -44,7 +44,9 @@ class AnalysisResult(BaseModel):
 
 agent = create_deep_agent(
     instruction="Analyze the given text and return a structured analysis.",
-    output_schema=AnalysisResult,
+    config=DeepAgentConfig(
+        output_schema=AnalysisResult,
+    ),
 )
 ```
 
@@ -64,7 +66,7 @@ The agent will return responses conforming to:
 ```python
 from pydantic import BaseModel
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 
 
 class CodeIssue(BaseModel):
@@ -88,7 +90,9 @@ agent = create_deep_agent(
         "Review the provided code and return a structured code review. "
         "Score from 1-10. Severity is one of: critical, warning, info."
     ),
-    output_schema=CodeReviewResult,
+    config=DeepAgentConfig(
+        output_schema=CodeReviewResult,
+    ),
 )
 ```
 
@@ -97,7 +101,7 @@ agent = create_deep_agent(
 ```python
 from pydantic import BaseModel
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 
 
 class ProjectSummary(BaseModel):
@@ -113,7 +117,9 @@ agent = create_deep_agent(
         "Explore the project filesystem and return a structured summary. "
         "Use ls, read_file, and glob to gather information."
     ),
-    output_schema=ProjectSummary,
+    config=DeepAgentConfig(
+        output_schema=ProjectSummary,
+    ),
 )
 ```
 

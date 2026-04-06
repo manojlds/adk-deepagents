@@ -108,7 +108,7 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 adk_deepagents/
 ├── __init__.py          # Public API: create_deep_agent, create_deep_agent_async
 ├── graph.py             # Main factory functions
-├── types.py             # SubAgentSpec, SummarizationConfig, SkillsConfig, BrowserConfig
+├── types.py             # DeepAgentConfig and shared config/spec dataclasses
 ├── prompts.py           # System prompt templates
 ├── memory.py            # AGENTS.md loading and formatting
 ├── summarization.py     # Context window management

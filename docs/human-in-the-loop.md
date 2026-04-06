@@ -48,13 +48,16 @@ The `interrupt_on` parameter is a `dict[str, bool]` mapping tool names to whethe
 
 ```python
 from adk_deepagents import create_deep_agent
+from adk_deepagents.types import DeepAgentConfig
 
 agent = create_deep_agent(
-    interrupt_on={
-        "write_file": True,
-        "edit_file": True,
-        "execute": True,
-    },
+    config=DeepAgentConfig(
+        interrupt_on={
+            "write_file": True,
+            "edit_file": True,
+            "execute": True,
+        },
+    ),
 )
 ```
 
@@ -152,7 +155,7 @@ coder = SubAgentSpec(
 
 agent = create_deep_agent(
     subagents=[coder],
-    # No interrupt_on on parent
+    # No interrupt_on in config
 )
 ```
 
@@ -164,14 +167,17 @@ The sub-agent gets its own `before_tool_callback` created by `make_before_tool_c
 
 ```python
 from adk_deepagents import create_deep_agent
+from adk_deepagents.types import DeepAgentConfig
 
 agent = create_deep_agent(
     instruction="You are a coding assistant.",
     execution="local",
-    interrupt_on={
-        "write_file": True,
-        "execute": True,
-    },
+    config=DeepAgentConfig(
+        interrupt_on={
+            "write_file": True,
+            "execute": True,
+        },
+    ),
 )
 ```
 

@@ -13,7 +13,7 @@ import json
 import pytest
 from pydantic import BaseModel
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from tests.integration_tests.conftest import make_litellm_model, run_agent
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
@@ -48,7 +48,7 @@ async def test_structured_output_sentiment():
             "the given text. Return structured output with the text, sentiment "
             "(positive/negative/neutral), and confidence score (0.0 to 1.0)."
         ),
-        output_schema=SentimentResult,
+        config=DeepAgentConfig(output_schema=SentimentResult),
     )
 
     texts, _runner, _session = await run_agent(
@@ -85,7 +85,7 @@ async def test_structured_output_math():
             "You are a math agent. Solve the given expression. Return structured "
             "output with the expression, numeric result, and solution steps."
         ),
-        output_schema=MathResult,
+        config=DeepAgentConfig(output_schema=MathResult),
     )
 
     texts, _runner, _session = await run_agent(

@@ -17,7 +17,7 @@ from adk_deepagents.optimization.trajectory import (
     ToolCall,
     Trajectory,
 )
-from adk_deepagents.types import DynamicTaskConfig
+from adk_deepagents.types import DeepAgentConfig
 
 
 class _FakeStdin:
@@ -1007,10 +1007,12 @@ def test_build_cli_agent_enables_hitl_interrupts(monkeypatch) -> None:
 
     assert captured["name"] == "demo_cli"
     assert captured["execution"] == "local"
-    assert captured["delegation_mode"] == "dynamic"
-    dynamic_config = cast(DynamicTaskConfig, captured["dynamic_task_config"])
-    assert dynamic_config.concurrency_policy == "wait"
-    assert captured["interrupt_on"] == repl.INTERACTIVE_INTERRUPT_ON
+    cfg = cast(DeepAgentConfig, captured["config"])
+    assert cfg.delegation_mode == "dynamic"
+    dynamic_cfg = cfg.dynamic_task_config
+    assert dynamic_cfg is not None
+    assert dynamic_cfg.concurrency_policy == "wait"
+    assert cfg.interrupt_on == repl.INTERACTIVE_INTERRUPT_ON
 
 
 def test_build_cli_agent_missing_skills_dependency_is_actionable(
@@ -1449,7 +1451,8 @@ def test_build_cli_agent_passes_summarization_config(monkeypatch) -> None:
         summarization=config,
     )
 
-    assert captured["summarization"] is config
+    cfg = cast(DeepAgentConfig, captured["config"])
+    assert cfg.summarization is config
 
 
 def test_build_cli_agent_without_summarization_omits_key(monkeypatch) -> None:
@@ -1471,7 +1474,8 @@ def test_build_cli_agent_without_summarization_omits_key(monkeypatch) -> None:
         cwd=Path("/tmp/workspace"),
     )
 
-    assert "summarization" not in captured
+    cfg = cast(DeepAgentConfig, captured["config"])
+    assert cfg.summarization is None
 
 
 def test_run_interactive_returns_error_code_on_exception(monkeypatch, capsys) -> None:

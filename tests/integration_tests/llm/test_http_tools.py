@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from adk_deepagents import create_deep_agent
+from adk_deepagents import DeepAgentConfig, create_deep_agent
 from tests.integration_tests.conftest import (
     make_litellm_model,
     run_agent_with_events,
@@ -27,7 +27,7 @@ async def test_fetch_url_tool_invocation():
     agent = create_deep_agent(
         model=model,
         name="fetch_url_test",
-        http_tools=True,
+        config=DeepAgentConfig(http_tools=True),
         instruction=(
             "You are a test agent with HTTP tools. "
             "Use fetch_url when asked to fetch a web page. "
@@ -59,7 +59,7 @@ async def test_http_request_get():
     agent = create_deep_agent(
         model=model,
         name="http_request_test",
-        http_tools=True,
+        config=DeepAgentConfig(http_tools=True),
         instruction=(
             "You are a test agent with HTTP tools. "
             "Use http_request for API calls. Report the response."
@@ -88,7 +88,7 @@ async def test_ssrf_protection_blocks_private_url():
     agent = create_deep_agent(
         model=model,
         name="ssrf_block_test",
-        http_tools=True,
+        config=DeepAgentConfig(http_tools=True),
         instruction=(
             "You are a test agent. Use the fetch_url tool when asked. "
             "If the tool returns an error, report the error message."
