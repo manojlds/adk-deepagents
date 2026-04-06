@@ -22,6 +22,7 @@ from tests.integration_tests.conftest import (
     make_litellm_model,
     run_agent,
     run_agent_with_events,
+    run_agent_with_task_payloads,
     send_followup,
     send_followup_with_events,
 )
@@ -231,6 +232,7 @@ __all__ = [
     "get_file_content",
     "make_litellm_model",
     "run_agent",
+    "run_agent_with_task_payloads",
     "run_agent_with_events",
     "send_followup",
     "send_followup_with_events",

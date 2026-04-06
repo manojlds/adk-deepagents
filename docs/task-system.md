@@ -151,6 +151,10 @@ When the remote endpoint emits structured artifact payloads with schema
 
 See [A2A Integration](a2a.md) for setup details.
 
+For integration testing, helper fixtures also support an in-process A2A bridge
+mode (`ADK_DEEPAGENTS_LLM_TRANSPORT=a2a`) so the same LLM scenarios can run
+through A2A transport rather than direct in-memory runner calls.
+
 ## State model (persisted vs process-local)
 
 ### Persisted in ADK session state

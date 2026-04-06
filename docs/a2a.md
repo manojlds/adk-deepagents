@@ -102,3 +102,18 @@ Example:
 
 If no structured payload is present, `adk-deepagents` falls back to plain-text
 artifact/message extraction for `result`.
+
+## LLM integration test mode
+
+The shared integration test helpers support an A2A bridge mode so existing LLM
+tests can execute through `to_a2a_app(...)` instead of direct in-process
+`Runner.run_async(...)` calls.
+
+Enable it with:
+
+```bash
+ADK_DEEPAGENTS_LLM_TRANSPORT=a2a uv run pytest -m llm
+```
+
+This keeps the same test expectations while exercising the A2A request/response
+path end-to-end in-process.

@@ -633,6 +633,9 @@ uv run pytest tests/unit_tests/
 
 # Run tests matching a pattern
 uv run pytest -k "test_summarization"
+
+# Run LLM integration tests via A2A transport bridge
+ADK_DEEPAGENTS_LLM_TRANSPORT=a2a uv run pytest -m llm
 ```
 
 ## License

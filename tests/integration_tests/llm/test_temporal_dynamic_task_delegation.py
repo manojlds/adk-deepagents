@@ -27,6 +27,7 @@ from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec, TemporalTaskCo
 from tests.integration_tests.conftest import (
     make_litellm_model,
     run_agent_with_events,
+    run_agent_with_task_payloads,
     send_followup_with_events,
 )
 
@@ -245,9 +246,6 @@ async def test_temporal_task_returns_function_calls_metadata(
     ensure_temporal_server: TemporalTaskConfig,
 ):
     """The task result from a Temporal worker includes function_calls metadata."""
-    from google.adk.runners import InMemoryRunner
-    from google.genai import types
-
     model = make_litellm_model()
     temporal_config = _make_temporal_config(ensure_temporal_server)
     dynamic_task_config = DynamicTaskConfig(timeout_seconds=90, temporal=temporal_config)
@@ -266,33 +264,10 @@ async def test_temporal_task_returns_function_calls_metadata(
             ),
         )
 
-        runner = InMemoryRunner(agent=agent, app_name="integration_test")
-        session = await runner.session_service.create_session(
-            app_name="integration_test",
-            user_id="test_user",
-            state={"files": {}},
+        _texts, task_payloads, _runner, _session = await run_agent_with_task_payloads(
+            agent,
+            "Use task to solve: what is 99 + 1?",
         )
-
-        content = types.Content(
-            role="user", parts=[types.Part(text="Use task to solve: what is 99 + 1?")]
-        )
-        task_payloads: list[dict] = []
-
-        async for event in runner.run_async(
-            session_id=session.id,
-            user_id="test_user",
-            new_message=content,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    fn_resp = getattr(part, "function_response", None)
-                    if fn_resp is None:
-                        continue
-                    if getattr(fn_resp, "name", None) != "task":
-                        continue
-                    payload = getattr(fn_resp, "response", None)
-                    if isinstance(payload, dict):
-                        task_payloads.append(payload)
 
         assert task_payloads, "Expected at least one task function-response payload"
         payload = task_payloads[-1]
@@ -306,9 +281,6 @@ async def test_temporal_worker_sees_parent_workspace_backend(
     ensure_temporal_server: TemporalTaskConfig,
 ):
     """Temporal delegation sees workspace files when parent uses filesystem backend."""
-    from google.adk.runners import InMemoryRunner
-    from google.genai import types
-
     model = make_litellm_model()
     temporal_config = _make_temporal_config(ensure_temporal_server)
     dynamic_task_config = DynamicTaskConfig(timeout_seconds=90, temporal=temporal_config)
@@ -328,42 +300,14 @@ async def test_temporal_worker_sees_parent_workspace_backend(
             ),
         )
 
-        runner = InMemoryRunner(agent=agent, app_name="integration_test")
-        session = await runner.session_service.create_session(
-            app_name="integration_test",
-            user_id="test_user",
-            state={"files": {}},
+        _texts, task_payloads, _runner, _session = await run_agent_with_task_payloads(
+            agent,
+            (
+                "Use task to inspect /adk_deepagents and verify whether "
+                "/adk_deepagents/__init__.py exists."
+            ),
+            state={"_backend_factory": None},
         )
-
-        content = types.Content(
-            role="user",
-            parts=[
-                types.Part(
-                    text=(
-                        "Use task to inspect /adk_deepagents and verify whether "
-                        "/adk_deepagents/__init__.py exists."
-                    )
-                )
-            ],
-        )
-
-        task_payloads: list[dict[str, Any]] = []
-
-        async for event in runner.run_async(
-            session_id=session.id,
-            user_id="test_user",
-            new_message=content,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    fn_resp = getattr(part, "function_response", None)
-                    if fn_resp is None:
-                        continue
-                    if getattr(fn_resp, "name", None) != "task":
-                        continue
-                    payload = getattr(fn_resp, "response", None)
-                    if isinstance(payload, dict):
-                        task_payloads.append(payload)
 
         assert task_payloads, "Expected at least one task function-response payload"
         payload = task_payloads[-1]

@@ -15,9 +15,21 @@ from adk_deepagents.types import A2ATaskConfig, DynamicTaskConfig
 
 
 class _FakePart:
-    def __init__(self, *, text: str | None = None, data: object | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        text: str | None = None,
+        data: object | None = None,
+        root: object | None = None,
+    ) -> None:
         self.text = text
         self.data = data
+        self.root = root
+
+
+class _FakeTextPart:
+    def __init__(self, *, text: str) -> None:
+        self.text = text
 
 
 class _FakeArtifact:
@@ -81,7 +93,7 @@ class _FakeClientConfig:
 
 
 class _FakeRole:
-    ROLE_USER = "ROLE_USER"
+    user = "user"
 
 
 class _FakeMessageRequest:
@@ -114,7 +126,16 @@ def _install_fake_a2a_modules(monkeypatch) -> None:
         "a2a.client.client_factory",
         SimpleNamespace(ClientFactory=_FakeClientFactory),
     )
-    monkeypatch.setitem(sys.modules, "a2a.types", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "a2a.types",
+        SimpleNamespace(
+            Message=_FakeMessageRequest,
+            Part=_FakePart,
+            Role=_FakeRole,
+            TextPart=_FakeTextPart,
+        ),
+    )
     monkeypatch.setitem(
         sys.modules,
         "a2a.types.a2a_pb2",

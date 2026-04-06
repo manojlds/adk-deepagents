@@ -158,13 +158,20 @@ def _consume_a2a_part(
     response_text_parts: list[str],
     structured_state: dict[str, Any],
 ) -> None:
-    part_data = part.get("data") if isinstance(part, dict) else getattr(part, "data", None)
+    root = part.get("root") if isinstance(part, dict) else getattr(part, "root", None)
+    candidate = root if root is not None else part
+
+    part_data = (
+        candidate.get("data") if isinstance(candidate, dict) else getattr(candidate, "data", None)
+    )
     payload = _parse_dynamic_task_result_payload(part_data)
     if payload is not None:
         _merge_structured_result_payload(state=structured_state, payload=payload)
         return
 
-    part_text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+    part_text = (
+        candidate.get("text") if isinstance(candidate, dict) else getattr(candidate, "text", None)
+    )
     payload = _parse_dynamic_task_result_payload(part_text)
     if payload is not None:
         _merge_structured_result_payload(state=structured_state, payload=payload)
@@ -462,7 +469,7 @@ async def _run_dynamic_task_a2a(
     try:
         from a2a.client.client import ClientConfig
         from a2a.client.client_factory import ClientFactory
-        from a2a.types.a2a_pb2 import Message, Part, Role
+        from a2a.types import Message, Part, Role, TextPart
     except ImportError:
         raise ImportError(
             "A2A support requires the 'a2a-sdk' package. "
@@ -471,8 +478,8 @@ async def _run_dynamic_task_a2a(
 
     message_id = f"{task_id}:{subagent_type}"
     request = Message(
-        role=Role.ROLE_USER,
-        parts=[Part(text=prompt)],
+        role=Role.user,
+        parts=[Part(root=TextPart(text=prompt))],
         message_id=message_id,
         context_id=task_id,
     )

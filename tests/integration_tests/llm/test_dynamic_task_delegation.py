@@ -6,8 +6,6 @@ Run with: uv run pytest -m llm tests/integration_tests/llm/test_dynamic_task_del
 from __future__ import annotations
 
 import pytest
-from google.adk.runners import InMemoryRunner
-from google.genai import types
 
 from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.tools import task_dynamic
@@ -15,47 +13,11 @@ from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec
 from tests.integration_tests.conftest import (
     make_litellm_model,
     run_agent_with_events,
+    run_agent_with_task_payloads,
     send_followup_with_events,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.llm]
-
-
-async def _run_agent_with_task_payloads(agent, prompt: str) -> tuple[list[str], list[dict]]:
-    """Run an agent turn and capture task function-response payloads."""
-    runner = InMemoryRunner(agent=agent, app_name="integration_test")
-    session = await runner.session_service.create_session(
-        app_name="integration_test",
-        user_id="test_user",
-        state={"files": {}},
-    )
-
-    content = types.Content(role="user", parts=[types.Part(text=prompt)])
-    texts: list[str] = []
-    task_payloads: list[dict] = []
-
-    async for event in runner.run_async(
-        session_id=session.id,
-        user_id="test_user",
-        new_message=content,
-    ):
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    texts.append(part.text)
-
-                function_response = getattr(part, "function_response", None)
-                if function_response is None:
-                    continue
-
-                if getattr(function_response, "name", None) != "task":
-                    continue
-
-                payload = getattr(function_response, "response", None)
-                if isinstance(payload, dict):
-                    task_payloads.append(payload)
-
-    return texts, task_payloads
 
 
 @pytest.mark.timeout(120)
@@ -208,7 +170,7 @@ async def test_dynamic_task_wait_policy_surfaces_queue_metadata():
         ),
     )
 
-    texts, task_payloads = await _run_agent_with_task_payloads(
+    texts, task_payloads, _runner, _session = await run_agent_with_task_payloads(
         agent,
         "Use task to solve: what is 84 divided by 12?",
     )
