@@ -99,9 +99,6 @@ and picks model in this order:
 2. `ADK_DEEPAGENTS_MODEL`
 3. `gemini-2.5-flash`
 
-When these `ADK_DEEPAGENTS_TEMPORAL_*` variables are present, CLI/TUI runs
-also auto-enable Temporal-backed dynamic tasks.
-
 `DynamicTaskWorkflow` executions can remain in `Running` state briefly after a
 turn completes so the same `task_id` can resume context. They auto-complete
 after the configured idle timeout (`ADK_DEEPAGENTS_TEMPORAL_IDLE_TIMEOUT_SECONDS`,

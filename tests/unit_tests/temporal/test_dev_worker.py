@@ -42,7 +42,7 @@ class TestRunWorker:
         with (
             patch("adk_deepagents.temporal.dev_worker._load_workspace_env"),
             patch(
-                "adk_deepagents.temporal.dev_worker.build_cli_dynamic_task_config",
+                "adk_deepagents.temporal.dev_worker.build_dynamic_task_config",
                 return_value=DynamicTaskConfig(),
             ),
             pytest.raises(RuntimeError, match="ADK_DEEPAGENTS_TEMPORAL"),
@@ -61,7 +61,7 @@ class TestRunWorker:
         with (
             patch("adk_deepagents.temporal.dev_worker._load_workspace_env"),
             patch(
-                "adk_deepagents.temporal.dev_worker.build_cli_dynamic_task_config",
+                "adk_deepagents.temporal.dev_worker.build_dynamic_task_config",
                 return_value=DynamicTaskConfig(temporal=TemporalTaskConfig()),
             ),
             patch(
@@ -102,7 +102,7 @@ class TestRunWorker:
         with (
             patch("adk_deepagents.temporal.dev_worker._load_workspace_env"),
             patch(
-                "adk_deepagents.temporal.dev_worker.build_cli_dynamic_task_config",
+                "adk_deepagents.temporal.dev_worker.build_dynamic_task_config",
                 return_value=DynamicTaskConfig(temporal=TemporalTaskConfig()),
             ),
             patch("adk_deepagents.temporal.dev_worker.create_temporal_worker", create_worker),

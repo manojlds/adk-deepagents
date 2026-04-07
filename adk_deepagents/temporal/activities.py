@@ -99,7 +99,9 @@ def _build_backend_factory(backend_context: dict[str, Any] | None) -> Any | None
     raw_mapped_sources = backend_context.get("memory_source_paths")
     if isinstance(raw_mapped_sources, dict):
         try:
-            from adk_deepagents.cli.resources import MemoryMappedFilesystemBackend
+            from adk_deepagents.backends.memory_mapped_filesystem import (
+                MemoryMappedFilesystemBackend,
+            )
 
             mapped_sources: dict[str, Path] = {}
             for raw_key, raw_value in raw_mapped_sources.items():

@@ -21,7 +21,7 @@ import pytest
 from google.adk.agents import LlmAgent
 
 from adk_deepagents import DeepAgentConfig, create_deep_agent
-from adk_deepagents.cli.resources import MemoryMappedFilesystemBackend
+from adk_deepagents.backends.memory_mapped_filesystem import MemoryMappedFilesystemBackend
 from adk_deepagents.temporal.worker import create_temporal_worker
 from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec, TemporalTaskConfig
 from tests.integration_tests.conftest import (

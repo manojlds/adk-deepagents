@@ -8,7 +8,6 @@ requires-python = ">=3.11"
 dependencies = [
     "google-adk>=1.21.0",
     "python-dotenv>=1.0",
-    "textual>=1.0.0",
     "wcmatch>=8.5",
 ]
 
@@ -28,9 +27,6 @@ a2a = [
 harbor = [
     "harbor; python_version >= '3.12'",
 ]
-
-[project.scripts]
-adk-deepagents = "adk_deepagents.cli.main:cli_main"
 
 [dependency-groups]
 dev = [

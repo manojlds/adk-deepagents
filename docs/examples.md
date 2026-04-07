@@ -652,5 +652,4 @@ OPENAI_API_KEY=... ADK_DEEPAGENTS_MODEL=openai/gpt-4o-mini \
   uv run python examples/optimization_loop/run.py
 ```
 
-See [Optimization & Trajectories](optimization.md) for the full TUI workflow
-and Python API reference.
+See [Optimization & Trajectories](optimization.md) for the full Python API reference.

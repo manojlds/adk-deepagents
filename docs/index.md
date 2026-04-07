@@ -92,14 +92,13 @@ Out of the box, the agent has filesystem tools (backed by in-memory `StateBacken
 | Page | Description |
 |------|-------------|
 | [Getting Started](getting-started.md) | Installation, first agent, running interactively, ADK CLI, models |
-| [CLI Guide](cli.md) | CLI commands/flags, interactive controls, non-interactive safety, release smoke checklist |
 | [Backends](backends.md) | StateBackend, FilesystemBackend, CompositeBackend, StoreBackend, custom backends |
 | [Tools](tools.md) | Filesystem tools, todo tools, execution tools — signatures, arguments, examples |
 | [Browser Automation](browser.md) | Playwright MCP integration, agent-browser CLI skill, BrowserConfig |
 | [Sub-Agent Delegation](subagents.md) | Static `AgentTool` delegation, `SubAgentSpec`, general-purpose sub-agent behavior |
 | [Skills Integration](skills.md) | Root-agent and sub-agent skills, `add_skills_tools`, prompt injection |
 | [Task System Internals](task-system.md) | Static vs dynamic delegation internals, state keys, runtime registries, guardrails, failure semantics |
-| [Optimization & Trajectories](optimization.md) | LLM judge, trajectory replay, autoresearch optimization loop, TUI workflow |
+| [Optimization & Trajectories](optimization.md) | LLM judge, trajectory replay, autoresearch optimization loop |
 | [Temporal Backend](temporal.md) | Configure Temporal-backed dynamic tasks, workers, and mise + pitchfork services |
 | [A2A Integration](a2a.md) | Expose deep agents via A2A and run dynamic tasks through A2A endpoints |
 

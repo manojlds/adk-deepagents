@@ -52,26 +52,6 @@ uv pip install "adk-deepagents[temporal]"
 uv pip install "adk-deepagents[a2a]"
 ```
 
-## CLI Quickstart (`adk-deepagents`)
-
-The package installs an `adk-deepagents` CLI for interactive and non-interactive workflows.
-
-```bash
-# Interactive REPL (default mode)
-adk-deepagents
-
-# Interactive REPL with an auto-submitted first prompt
-adk-deepagents -m "Summarize this repository"
-
-# One-shot non-interactive run
-adk-deepagents -n "Run tests and summarize failures"
-
-# Piped stdin non-interactive run (automation-friendly output)
-printf 'Summarize README.md\n' | adk-deepagents -q
-```
-
-For the full command/flag reference, see [docs/cli.md](docs/cli.md).
-
 ## Python Quickstart
 
 ```python
@@ -365,9 +345,6 @@ agent = create_deep_agent(
 See [docs/temporal.md](docs/temporal.md) for worker setup, `mise + pitchfork` services,
 and integration test instructions.
 
-When the CLI runs in an environment with `ADK_DEEPAGENTS_TEMPORAL_*` variables,
-it auto-enables Temporal-backed dynamic tasks using those settings.
-
 #### A2A exposure and dynamic task backend
 
 Expose a deep agent as an A2A server endpoint:
@@ -590,7 +567,7 @@ The repo includes `mise.toml` and `pitchfork.toml` to run local support
 services for Temporal workflows and OTEL trace collection.
 
 `mise.toml` also exports the `ADK_DEEPAGENTS_TEMPORAL_*` and OTEL environment
-variables used by the CLI and dev worker.
+variables used by the Temporal dev worker.
 
 ```bash
 # Install/update local tools pinned in mise.toml

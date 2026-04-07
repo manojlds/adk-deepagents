@@ -2,6 +2,7 @@
 
 from adk_deepagents.backends.composite import CompositeBackend
 from adk_deepagents.backends.filesystem import FilesystemBackend
+from adk_deepagents.backends.memory_mapped_filesystem import MemoryMappedFilesystemBackend
 from adk_deepagents.backends.protocol import (
     Backend,
     BackendFactory,
@@ -29,6 +30,7 @@ __all__ = [
     "FileInfo",
     "FileUploadResponse",
     "GrepMatch",
+    "MemoryMappedFilesystemBackend",
     "ReadResult",
     "SandboxBackend",
     "StateBackend",

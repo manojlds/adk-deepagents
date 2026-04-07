@@ -10,7 +10,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from adk_deepagents.cli.delegation_config import build_cli_dynamic_task_config
+from adk_deepagents.dynamic_task_config import build_dynamic_task_config
 from adk_deepagents.temporal.worker import create_temporal_worker
 from adk_deepagents.tools.filesystem import edit_file, glob, grep, ls, read_file, write_file
 from adk_deepagents.tools.todos import read_todos, write_todos
@@ -46,7 +46,7 @@ async def _handle_health_probe(
 
 async def run_worker(*, health_port: int | None = None) -> None:
     _load_workspace_env()
-    dynamic_task_config = build_cli_dynamic_task_config()
+    dynamic_task_config = build_dynamic_task_config()
     if dynamic_task_config.temporal is None:
         raise RuntimeError(
             "Temporal worker requires ADK_DEEPAGENTS_TEMPORAL_* environment variables."

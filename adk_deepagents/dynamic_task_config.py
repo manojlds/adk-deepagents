@@ -1,11 +1,10 @@
-"""CLI dynamic delegation configuration helpers."""
+"""Helpers for dynamic task configuration."""
 
 from __future__ import annotations
 
 import os
 from typing import Literal
 
-from adk_deepagents.cli.config import CliDefaults
 from adk_deepagents.types import DynamicTaskConfig, TemporalTaskConfig
 
 _ENV_MAX_PARALLEL = "ADK_DYNAMIC_TASK_MAX_PARALLEL"
@@ -31,28 +30,15 @@ _TEMPORAL_ENV_KEYS = (
 )
 
 
-def build_cli_dynamic_task_config(defaults: CliDefaults | None = None) -> DynamicTaskConfig:
-    """Build dynamic task config for CLI/TUI harnesses.
+def build_dynamic_task_config() -> DynamicTaskConfig:
+    """Build dynamic task config from environment variables.
 
     Defaults are tuned for interactive reliability:
     - ``concurrency_policy`` defaults to ``"wait"``
     - ``queue_timeout_seconds`` defaults to ``30``
-    - ``max_parallel`` defaults to the library default unless overridden
-
-    Precedence:
-    - environment variables
-    - CLI config defaults (`CliDefaults`)
-    - built-in defaults
+    - ``max_parallel`` defaults to the ``DynamicTaskConfig`` default
     """
     config = DynamicTaskConfig(concurrency_policy="wait", queue_timeout_seconds=30.0)
-
-    if defaults is not None:
-        if defaults.dynamic_task_max_parallel is not None:
-            config.max_parallel = defaults.dynamic_task_max_parallel
-        if defaults.dynamic_task_concurrency_policy is not None:
-            config.concurrency_policy = defaults.dynamic_task_concurrency_policy
-        if defaults.dynamic_task_queue_timeout_seconds is not None:
-            config.queue_timeout_seconds = defaults.dynamic_task_queue_timeout_seconds
 
     max_parallel = _read_int_env(_ENV_MAX_PARALLEL, minimum=1)
     if max_parallel is not None:

@@ -108,15 +108,6 @@ agent = create_deep_agent(
 
 The paths are resolved by the backend. With `StateBackend`, they are looked up in `state["files"]`. With `FilesystemBackend`, they are resolved relative to the backend's root directory.
 
-## CLI Memory Precedence (`adk-deepagents`)
-
-The bundled CLI loads memory from deterministic global/project paths in this order:
-
-1. `global://profiles/<agent>/AGENTS.md` → `~/.adk-deepagents/profiles/<agent>/AGENTS.md`
-2. `project://AGENTS.md` → `<cwd>/AGENTS.md` (when present)
-
-Project memory is appended after global memory so workspace-specific guidance has higher precedence.
-
 ## Examples
 
 ### Basic Memory Loading

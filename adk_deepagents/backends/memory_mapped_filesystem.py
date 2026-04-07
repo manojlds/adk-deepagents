@@ -1,22 +1,16 @@
-"""CLI memory/skills discovery and backend helpers."""
+"""Filesystem backend with explicit memory source path mappings."""
 
 from __future__ import annotations
 
 import fnmatch
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from adk_deepagents.backends.filesystem import FilesystemBackend
 from adk_deepagents.backends.protocol import FileDownloadResponse, FileInfo, GrepMatch
-from adk_deepagents.cli.config import PROFILE_MEMORY_FILENAME, CliPaths, ensure_profile_memory
 
-PROFILE_SKILLS_DIRNAME = "skills"
-PROJECT_MEMORY_FILENAME = "AGENTS.md"
-PROJECT_SKILLS_DIRNAME = "skills"
-
-_CLI_DEFAULT_EXCLUDED_DIR_NAMES = frozenset(
+_DEFAULT_EXCLUDED_DIR_NAMES = frozenset(
     {
         ".git",
         ".hg",
@@ -31,96 +25,17 @@ _CLI_DEFAULT_EXCLUDED_DIR_NAMES = frozenset(
     }
 )
 
-_CLI_DEFAULT_EXCLUDE_PATTERNS = (
+_DEFAULT_EXCLUDE_PATTERNS = (
     "**/*.pyc",
     "**/*.pyo",
 )
 
 
-@dataclass(frozen=True)
-class CliAgentResources:
-    """Resolved memory/skills resources for a CLI agent run."""
-
-    memory_sources: tuple[str, ...]
-    memory_source_paths: Mapping[str, Path]
-    skills_dirs: tuple[str, ...]
-
-
-def discover_cli_agent_resources(
-    *, paths: CliPaths, agent_name: str, cwd: Path
-) -> CliAgentResources:
-    """Resolve memory and skills discovery paths with deterministic precedence.
-
-    Precedence order:
-    1. Global profile resources under ``~/.adk-deepagents/profiles/<agent>/``
-    2. Project resources under the current working directory
-
-    Project entries are appended after global entries to give project context
-    the final precedence in the system prompt / skills discovery order.
-    """
-    normalized_cwd = cwd.resolve()
-
-    profile_memory_path = ensure_profile_memory(paths, agent_name).resolve()
-    project_memory_path = (normalized_cwd / PROJECT_MEMORY_FILENAME).resolve()
-
-    memory_sources: list[str] = []
-    memory_source_paths: dict[str, Path] = {}
-    seen_memory_paths: set[Path] = set()
-
-    global_memory_source = f"global://profiles/{agent_name}/{PROFILE_MEMORY_FILENAME}"
-    if profile_memory_path not in seen_memory_paths:
-        seen_memory_paths.add(profile_memory_path)
-        memory_sources.append(global_memory_source)
-        memory_source_paths[global_memory_source] = profile_memory_path
-
-    project_memory_source = f"project://{PROJECT_MEMORY_FILENAME}"
-    if project_memory_path.is_file() and project_memory_path not in seen_memory_paths:
-        seen_memory_paths.add(project_memory_path)
-        memory_sources.append(project_memory_source)
-        memory_source_paths[project_memory_source] = project_memory_path
-
-    skills_dirs: list[str] = []
-    seen_skills_dirs: set[str] = set()
-    skills_candidates = [
-        (paths.profiles_dir / agent_name / PROFILE_SKILLS_DIRNAME).resolve(),
-        (normalized_cwd / PROJECT_SKILLS_DIRNAME).resolve(),
-    ]
-
-    for skills_dir in skills_candidates:
-        if not skills_dir.is_dir():
-            continue
-
-        key = str(skills_dir)
-        if key in seen_skills_dirs:
-            continue
-
-        seen_skills_dirs.add(key)
-        skills_dirs.append(key)
-
-    return CliAgentResources(
-        memory_sources=tuple(memory_sources),
-        memory_source_paths=memory_source_paths,
-        skills_dirs=tuple(skills_dirs),
-    )
-
-
-def build_missing_skills_dependency_error(skills_dirs: Sequence[str]) -> RuntimeError:
-    """Create an actionable error for missing optional skills dependencies."""
-    requested = ", ".join(skills_dirs) if skills_dirs else "(none)"
-    return RuntimeError(
-        "Skills discovery was requested but optional dependency 'adk-skills-agent' is missing. "
-        f"Requested skills directories: {requested}. "
-        'Install optional support with: pip install "adk-deepagents[skills]"'
-    )
-
-
 class MemoryMappedFilesystemBackend(FilesystemBackend):
     """Workspace filesystem backend with explicit memory-source path mappings.
 
-    CLI memory may include files outside the workspace (for example global
-    profile memory under ``~/.adk-deepagents``). This backend keeps normal tool
-    operations sandboxed to the workspace while allowing memory downloads from
-    explicitly mapped source keys.
+    This backend keeps normal file operations sandboxed to ``root_dir`` while
+    allowing reads from explicit source keys mapped to paths outside the root.
     """
 
     def __init__(
@@ -220,12 +135,10 @@ class MemoryMappedFilesystemBackend(FilesystemBackend):
             return False
 
         parts = PurePosixPath(relative_path).parts
-        if any(part in _CLI_DEFAULT_EXCLUDED_DIR_NAMES for part in parts):
+        if any(part in _DEFAULT_EXCLUDED_DIR_NAMES for part in parts):
             return True
 
-        if any(
-            fnmatch.fnmatch(relative_path, pattern) for pattern in _CLI_DEFAULT_EXCLUDE_PATTERNS
-        ):
+        if any(fnmatch.fnmatch(relative_path, pattern) for pattern in _DEFAULT_EXCLUDE_PATTERNS):
             return True
 
         return any(fnmatch.fnmatch(relative_path, pattern) for pattern in self._exclude_patterns)

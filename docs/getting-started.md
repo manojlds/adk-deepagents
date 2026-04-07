@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through installing adk-deepagents, creating your first agent, and running it interactively, with the ADK CLI, and with the ADK Web UI.
+This guide walks you through installing adk-deepagents, creating your first agent, and running it interactively in Python and with ADK tools.
 
 ## Prerequisites
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from adk_deepagents import CallbackHooks, DeepAgentConfig, create_deep_agent
-from adk_deepagents.cli.tui.agent_service import _SharedMessageQueue
+from adk_deepagents.message_queue import SharedMessageQueue
 from tests.integration_tests.conftest import (
     make_litellm_model,
     run_agent,
@@ -164,11 +164,11 @@ async def test_message_queue_provider_pre_loaded():
     """Messages pre-loaded into the provider are visible to the LLM on the first turn.
 
     This is the simplest provider test: push a message into
-    ``_SharedMessageQueue`` *before* ``run_async``, and verify the
+    ``SharedMessageQueue`` *before* ``run_async``, and verify the
     ``before_model_callback`` drains it and the LLM sees it.
     """
     model = make_litellm_model()
-    queue = _SharedMessageQueue()
+    queue = SharedMessageQueue()
 
     agent = create_deep_agent(
         model=model,
@@ -201,11 +201,11 @@ async def test_message_queue_provider_mid_turn():
 
     This simulates the real TUI flow: the user queues a message while the
     agent is executing tool calls.  We use ``after_tool`` to push a message
-    into the ``_SharedMessageQueue``.  The ``before_model_callback`` drains
+    into the ``SharedMessageQueue``.  The ``before_model_callback`` drains
     it before the next LLM call — all within a single ``run_async``.
     """
     model = make_litellm_model()
-    queue = _SharedMessageQueue()
+    queue = SharedMessageQueue()
     injected = False
 
     def inject_via_provider(tool, args, tool_context, **kwargs):
@@ -256,7 +256,7 @@ async def test_message_queue_provider_coexists_with_state_queue():
     Both code words should appear in the response.
     """
     model = make_litellm_model()
-    queue = _SharedMessageQueue()
+    queue = SharedMessageQueue()
     injected_via_state = False
 
     def inject_state_queue(tool, args, tool_context, **kwargs):

@@ -26,162 +26,17 @@ Chat with agent → OTEL captures traces → Trajectories stored
                           └───────────────────────────────────┘
 ```
 
-## TUI Workflow
+## Library Workflow
 
-The TUI (`adk-deepagents --tui`) provides the full workflow interactively.
+Optimization is a library-first workflow:
 
-### Step 1: Chat and collect trajectories
+1. Capture trajectories from agent runs (for example from OTEL traces).
+2. Store and curate trajectories (including golden labels and feedback).
+3. Replay trajectories with current agent configuration.
+4. Evaluate replays with the LLM judge.
+5. Run iterative optimization with `run_optimization_loop`.
 
-Chat with the agent normally. OTEL traces are captured automatically when
-the OTEL collector is configured (via `pitchfork` or `OTEL_TRACES_FILE` env var).
-
-```
-you> Write a blog post about Python for beginners
-assistant> [writes content using tools]
-```
-
-### Step 2: Review trajectories
-
-List all captured trajectories:
-
-```
-/trajectories
-```
-
-Or open the trajectory review overlay for a visual picker:
-
-```
-/trajectories review
-```
-
-The review overlay supports keyboard shortcuts:
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Show trajectory details |
-| `v` | Evaluate with LLM judge |
-| `p` | Replay with current config |
-| `g` | Toggle golden mark |
-| `0`–`5` | Quick score (0→0.0, 5→1.0) |
-| `r` | Refresh from OTEL traces |
-| `e` | Export dataset |
-| `Esc` | Close overlay |
-
-### Step 3: Mark golden trajectories
-
-Mark high-quality trajectories as "golden" — these serve as the baseline
-for optimization:
-
-```
-/trajectories mark <trace_id_prefix>
-```
-
-In the review overlay, press `g` on a highlighted trajectory.
-
-### Step 4: Evaluate trajectories
-
-Run the LLM judge on a trajectory to get a structured score:
-
-```
-/trajectories evaluate <trace_id_prefix>
-```
-
-The evaluator scores on three criteria (default rubric):
-
-| Criterion | Weight | Description |
-|-----------|--------|-------------|
-| `task_completion` | 0.6 | Did the agent complete the requested task? |
-| `efficiency` | 0.2 | Was the agent efficient (steps, tokens, retries)? |
-| `tool_usage_quality` | 0.2 | Were tools used correctly and appropriately? |
-
-Output includes per-criterion scores, strengths, issues, and an overall
-weighted score that is saved to the trajectory store.
-
-### Step 5: Replay trajectories
-
-Re-run a trajectory's original task with the current agent configuration:
-
-```
-/trajectories replay <trace_id_prefix>
-```
-
-The replay:
-- Extracts the original user prompt(s) from the trajectory
-- Runs a fresh agent session with the current config
-- Auto-approves tool confirmation requests
-- Saves the replay as a new trajectory linked to the original
-
-### Step 6: Run the optimization loop
-
-Run the full autoresearch-style optimization loop:
-
-```
-/optimize loop
-```
-
-With options:
-
-```
-/optimize loop --golden-only --max-iter 3
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--golden-only` | off | Only optimize over golden trajectories |
-| `--max-iter N` | 2 | Maximum optimization iterations |
-
-The loop:
-1. Replays each trajectory with the current agent config
-2. Evaluates each replay with the LLM judge
-3. Compares replay scores to baseline scores
-4. Uses a reflector LLM to suggest improvements
-5. Auto-applies prompt and skill changes
-6. Repeats until convergence or max iterations
-
-Progress is displayed in real-time:
-
-```
-Starting optimization loop: 3 trajectories, max 2 iterations
---- Iteration 1 ---
-  Avg score: 0.720
-  Avg delta: -0.280
-  Regressions: 1
-  • instruction_append [auto]: Add SEO guidelines to improve content quality
---- Iteration 2 ---
-  Avg score: 0.850
-  Avg delta: +0.130
-  Regressions: 0
-Optimization complete: converged
-```
-
-## Slash Command Reference
-
-### Trajectory management
-
-| Command | Description |
-|---------|-------------|
-| `/trajectories` | List all trajectories (auto-imports from OTEL) |
-| `/trajectories golden` | List golden trajectories only |
-| `/trajectories show <id> [--detail]` | Show trajectory flow |
-| `/trajectories mark <id>` | Mark as golden |
-| `/trajectories unmark <id>` | Remove golden mark |
-| `/trajectories rate <id> <0-1>` | Set score manually |
-| `/trajectories feedback <id> <0-1> [comment]` | Add feedback entry |
-| `/trajectories tag <id> <key> <value>` | Set a tag |
-| `/trajectories untag <id> <key>` | Remove a tag |
-| `/trajectories export [path]` | Export dataset (summary or JSONL) |
-| `/trajectories review` | Open trajectory review overlay |
-| `/trajectories evaluate <id>` | Run LLM judge |
-| `/trajectories replay <id>` | Replay with current config |
-
-### Optimization
-
-| Command | Description |
-|---------|-------------|
-| `/optimize loop` | Run optimization loop on all trajectories |
-| `/optimize loop --golden-only` | Loop on golden trajectories only |
-| `/optimize loop --max-iter N` | Set iteration count |
-| `/optimize gepa [path] [--run]` | Export GEPA dataset / run external optimizer |
+Use the Python API sections below for concrete evaluator, replay, and loop usage.
 
 ## Python API
 
