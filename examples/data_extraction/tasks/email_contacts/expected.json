@@ -1,0 +1,28 @@
+{
+  "contacts": [
+    {
+      "name": "John Smith",
+      "email": "john.smith@acmecorp.com",
+      "phone": "555-987-6543",
+      "role": "Director of Business Development"
+    },
+    {
+      "name": "Sarah Johnson",
+      "email": "s.johnson@widgetinc.com",
+      "phone": null,
+      "role": null
+    },
+    {
+      "name": "Mike Chen",
+      "email": "m.chen@acmecorp.com",
+      "phone": "555-123-4567",
+      "role": "VP of Engineering"
+    },
+    {
+      "name": "Lisa Park",
+      "email": "lisa@consulting.io",
+      "phone": null,
+      "role": null
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+    QUICK MART
+    456 Elm Street
+    Springfield, IL 62701
+    ========================
+    Date: 03/22/2025  2:45 PM
+    Cashier: Sarah M.
+    
+    Organic Milk 1gal      $5.99
+    Wheat Bread             $3.49
+    Free Range Eggs         $6.29
+    Baby Spinach 5oz        $4.99
+    Ground Coffee 12oz      $8.99
+    Sparkling Water 6pk     $5.49
+    
+    SUBTOTAL              $35.24
+    TAX (6.25%)            $2.20
+    ========================
+    TOTAL                 $37.44
+    
+    VISA ****4821
+    Thank you for shopping!

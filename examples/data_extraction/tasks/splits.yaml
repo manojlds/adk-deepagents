@@ -1,0 +1,12 @@
+# Train/test split for data extraction benchmark
+train:
+  - invoice_simple
+  - receipt_multiline
+  - product_listing
+  - server_logs
+  - email_contacts
+
+test:
+  - csv_malformed
+  - mixed_currency
+  - nested_tables

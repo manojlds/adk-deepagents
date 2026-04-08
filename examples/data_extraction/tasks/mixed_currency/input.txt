@@ -1,0 +1,18 @@
+QUARTERLY EXPENSE REPORT - Q4 2024
+===================================
+
+Travel:
+  - Flight to London: £1,250.00
+  - Hotel in Tokyo: ¥185,000
+  - Berlin conference: €890.50
+  - NYC taxi: $45.75
+
+Equipment:
+  - Laptop (US): $2,199.00
+  - Monitor (Germany): €549.99
+  - Keyboard (Japan): ¥12,800
+
+Services:
+  - Cloud hosting (US): $1,500.00/month
+  - Translation service: €350.00
+  - Consulting (UK): £2,750.00

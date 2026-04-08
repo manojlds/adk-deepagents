@@ -1,0 +1,15 @@
+{
+  "store_name": "Quick Mart",
+  "date": "2025-03-22",
+  "items": [
+    {"name": "Organic Milk 1gal", "price": 5.99},
+    {"name": "Wheat Bread", "price": 3.49},
+    {"name": "Free Range Eggs", "price": 6.29},
+    {"name": "Baby Spinach 5oz", "price": 4.99},
+    {"name": "Ground Coffee 12oz", "price": 8.99},
+    {"name": "Sparkling Water 6pk", "price": 5.49}
+  ],
+  "subtotal": 35.24,
+  "tax": 2.20,
+  "total": 37.44
+}

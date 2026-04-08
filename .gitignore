@@ -216,3 +216,6 @@ progress.txt
 .ralphi/*
 !.ralphi/config.yaml
 .playwright-mcp/
+
+# Example workspaces (generated at runtime)
+examples/*/workspace/

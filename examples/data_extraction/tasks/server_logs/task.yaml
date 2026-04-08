@@ -1,0 +1,10 @@
+name: server_logs
+instruction: |
+  Read the file /workspace/input.txt containing server access logs.
+  Extract a summary as structured JSON.
+  Write the result to /workspace/output.json.
+  The JSON should contain: total_requests, unique_ips, error_count,
+  status_codes (object mapping code to count), and top_paths
+  (array of {path, count} sorted by count descending, top 3).
+input_file: input.txt
+output_file: output.json

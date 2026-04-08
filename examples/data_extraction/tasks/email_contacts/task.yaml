@@ -1,0 +1,9 @@
+name: email_contacts
+instruction: |
+  Read the file /workspace/input.txt containing an email thread.
+  Extract all contact information mentioned as structured JSON.
+  Write the result to /workspace/output.json.
+  The JSON should contain a "contacts" array, each with: name, email,
+  phone (if mentioned), and role (if mentioned).
+input_file: input.txt
+output_file: output.json

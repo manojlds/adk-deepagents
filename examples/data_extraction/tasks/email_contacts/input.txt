@@ -1,0 +1,20 @@
+From: John Smith <john.smith@acmecorp.com>
+To: Sarah Johnson <s.johnson@widgetinc.com>
+CC: Mike Chen <m.chen@acmecorp.com>, Lisa Park <lisa@consulting.io>
+Date: Mon, 20 Jan 2025 09:15:00 -0500
+Subject: Re: Q1 Partnership Proposal
+
+Hi Sarah,
+
+Thanks for the proposal. I've looped in Mike (our VP of Engineering)
+and Lisa from our consulting team.
+
+Mike can be reached at (555) 123-4567 if you need to discuss
+technical requirements directly.
+
+My direct line is 555-987-6543.
+
+Best,
+John Smith
+Director of Business Development
+Acme Corp

@@ -1,0 +1,19 @@
+INVOICE
+========================================
+From: Acme Corp, 123 Main St, Springfield
+To: Widget Inc, 456 Oak Ave, Shelbyville
+
+Invoice #: INV-2025-0042
+Date: January 15, 2025
+Due: February 14, 2025
+
+Items:
+  1. Widget Assembly Kit (x3) ........... $45.00 each
+  2. Premium Bolts Pack (x10) ........... $12.50 each
+  3. Shipping & Handling ................ $15.00
+
+                              Subtotal: $275.00
+                              Tax (8%):  $22.00
+                              TOTAL:    $297.00
+
+Payment terms: Net 30

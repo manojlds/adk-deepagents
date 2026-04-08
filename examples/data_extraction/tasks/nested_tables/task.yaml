@@ -1,0 +1,9 @@
+name: nested_tables
+instruction: |
+  Read the file /workspace/input.txt containing a department org chart
+  with nested team structures. Extract the hierarchy as structured JSON.
+  Write the result to /workspace/output.json.
+  The JSON should contain a "departments" array, each with: name, head,
+  and teams (array of {name, lead, members} where members is an array of names).
+input_file: input.txt
+output_file: output.json

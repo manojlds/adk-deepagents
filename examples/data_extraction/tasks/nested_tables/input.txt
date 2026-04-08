@@ -1,0 +1,28 @@
+COMPANY ORG CHART - 2025
+========================
+
+ENGINEERING DEPARTMENT
+  Head: Jane Martinez (VP Engineering)
+  
+  Team: Backend
+    Lead: Tom Anderson
+    Members: Alice Wu, Bob Kim, Carlos Reyes
+  
+  Team: Frontend  
+    Lead: Diana Shah
+    Members: Eric Larsen, Fiona O'Brien
+
+  Team: Infrastructure
+    Lead: George Nakamura
+    Members: Hannah Lee, Ivan Petrov, Julia Santos, Kevin Walsh
+
+MARKETING DEPARTMENT
+  Head: Rachel Green (VP Marketing)
+  
+  Team: Content
+    Lead: Sam Turner
+    Members: Uma Patel, Victor Hugo
+
+  Team: Analytics
+    Lead: Wendy Liu
+    Members: Xavier Cruz, Yuki Tanaka, Zara Ahmed

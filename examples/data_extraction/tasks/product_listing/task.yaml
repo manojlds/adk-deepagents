@@ -1,0 +1,9 @@
+name: product_listing
+instruction: |
+  Read the file /workspace/input.txt containing product descriptions from
+  an online store. Extract each product's details as structured JSON.
+  Write the result to /workspace/output.json.
+  The JSON should contain a "products" array, each with: name, price, rating,
+  num_reviews, and availability.
+input_file: input.txt
+output_file: output.json

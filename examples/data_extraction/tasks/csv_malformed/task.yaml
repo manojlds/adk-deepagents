@@ -1,0 +1,8 @@
+name: csv_malformed
+instruction: |
+  Read the file /workspace/input.txt containing a malformed CSV with
+  inconsistent delimiters and quoting. Parse it and extract clean
+  structured data. Write the result to /workspace/output.json.
+  The JSON should contain a "records" array, each with: name, age, city, and occupation.
+input_file: input.txt
+output_file: output.json

@@ -1,0 +1,14 @@
+{
+  "vendor": "Acme Corp",
+  "invoice_number": "INV-2025-0042",
+  "date": "2025-01-15",
+  "due_date": "2025-02-14",
+  "line_items": [
+    {"description": "Widget Assembly Kit", "quantity": 3, "unit_price": 45.00, "total": 135.00},
+    {"description": "Premium Bolts Pack", "quantity": 10, "unit_price": 12.50, "total": 125.00},
+    {"description": "Shipping & Handling", "quantity": 1, "unit_price": 15.00, "total": 15.00}
+  ],
+  "subtotal": 275.00,
+  "tax": 22.00,
+  "grand_total": 297.00
+}

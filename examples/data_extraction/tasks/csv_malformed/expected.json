@@ -1,0 +1,9 @@
+{
+  "records": [
+    {"name": "Alice Johnson", "age": 32, "city": "New York", "occupation": "Software Engineer"},
+    {"name": "Bob Williams", "age": 28, "city": "Chicago", "occupation": "Data Analyst"},
+    {"name": "Carol Davis", "age": 45, "city": "San Francisco", "occupation": "Product Manager"},
+    {"name": "David Brown", "age": 38, "city": "Boston", "occupation": "Designer"},
+    {"name": "Eve Wilson", "age": null, "city": "Seattle", "occupation": null}
+  ]
+}

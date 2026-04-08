@@ -1,0 +1,14 @@
+{
+  "transactions": [
+    {"description": "Flight to London", "amount": 1250.00, "currency": "GBP"},
+    {"description": "Hotel in Tokyo", "amount": 185000, "currency": "JPY"},
+    {"description": "Berlin conference", "amount": 890.50, "currency": "EUR"},
+    {"description": "NYC taxi", "amount": 45.75, "currency": "USD"},
+    {"description": "Laptop (US)", "amount": 2199.00, "currency": "USD"},
+    {"description": "Monitor (Germany)", "amount": 549.99, "currency": "EUR"},
+    {"description": "Keyboard (Japan)", "amount": 12800, "currency": "JPY"},
+    {"description": "Cloud hosting (US)", "amount": 1500.00, "currency": "USD"},
+    {"description": "Translation service", "amount": 350.00, "currency": "EUR"},
+    {"description": "Consulting (UK)", "amount": 2750.00, "currency": "GBP"}
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "departments": [
+    {
+      "name": "Engineering",
+      "head": "Jane Martinez",
+      "teams": [
+        {
+          "name": "Backend",
+          "lead": "Tom Anderson",
+          "members": ["Alice Wu", "Bob Kim", "Carlos Reyes"]
+        },
+        {
+          "name": "Frontend",
+          "lead": "Diana Shah",
+          "members": ["Eric Larsen", "Fiona O'Brien"]
+        },
+        {
+          "name": "Infrastructure",
+          "lead": "George Nakamura",
+          "members": ["Hannah Lee", "Ivan Petrov", "Julia Santos", "Kevin Walsh"]
+        }
+      ]
+    },
+    {
+      "name": "Marketing",
+      "head": "Rachel Green",
+      "teams": [
+        {
+          "name": "Content",
+          "lead": "Sam Turner",
+          "members": ["Uma Patel", "Victor Hugo"]
+        },
+        {
+          "name": "Analytics",
+          "lead": "Wendy Liu",
+          "members": ["Xavier Cruz", "Yuki Tanaka", "Zara Ahmed"]
+        }
+      ]
+    }
+  ]
+}
