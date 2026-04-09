@@ -22,7 +22,9 @@ from google.adk.agents import LlmAgent
 
 from adk_deepagents import DeepAgentConfig, create_deep_agent
 from adk_deepagents.backends.memory_mapped_filesystem import MemoryMappedFilesystemBackend
+from adk_deepagents.backends.utils import create_file_data
 from adk_deepagents.temporal.worker import create_temporal_worker
+from adk_deepagents.tools.filesystem import ls, read_file
 from adk_deepagents.types import DynamicTaskConfig, SubAgentSpec, TemporalTaskConfig
 from tests.integration_tests.conftest import (
     make_litellm_model,
@@ -274,6 +276,62 @@ async def test_temporal_task_returns_function_calls_metadata(
         assert payload.get("status") == "completed", f"Expected completed status, got: {payload}"
     assert "task_id" in payload, f"Expected task_id in payload, got: {payload}"
     assert "result" in payload, f"Expected result in payload, got: {payload}"
+
+
+@pytest.mark.timeout(240)
+async def test_temporal_worker_preserves_state_backend_files(
+    ensure_temporal_server: TemporalTaskConfig,
+):
+    """Temporal delegation can read files seeded in the parent session state."""
+    model = make_litellm_model()
+    temporal_config = _make_temporal_config(ensure_temporal_server)
+    dynamic_task_config = DynamicTaskConfig(timeout_seconds=90, temporal=temporal_config)
+
+    async with _temporal_worker(
+        model,
+        temporal_config,
+        dynamic_task_config,
+        default_tools=[ls, read_file],
+    ):
+        agent = create_deep_agent(
+            model=model,
+            name="temporal_state_backend_test",
+            instruction=(
+                "Always delegate using the task tool. "
+                "For file reads, delegate and return the task result exactly."
+            ),
+            config=DeepAgentConfig(
+                delegation_mode="dynamic",
+                dynamic_task_config=dynamic_task_config,
+            ),
+        )
+
+        sentinel = "ORBITAL_STATE_SENTINEL_314159"
+        initial_files = {
+            "/note.txt": create_file_data(sentinel),
+        }
+
+        _texts, task_payloads, _runner, _session = await run_agent_with_task_payloads(
+            agent,
+            (
+                "Use task to read /note.txt and return only the exact contents of that file. "
+                "Do not summarize or transform it."
+            ),
+            state={"files": initial_files},
+        )
+
+        assert task_payloads, "Expected at least one task function-response payload"
+        payload = task_payloads[-1]
+        assert payload.get("status") == "completed", f"Expected completed status, got: {payload}"
+        assert "read_file" in payload.get("function_calls", []), (
+            f"Expected delegated task to call read_file, got: {payload}"
+        )
+
+        result_text = str(payload.get("result", ""))
+        assert sentinel in result_text, (
+            "Expected delegated task to read the state-backed file, "
+            f"got result: {payload.get('result')}"
+        )
 
 
 @pytest.mark.timeout(240)
