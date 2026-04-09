@@ -10,6 +10,7 @@ from google.adk.tools.tool_context import ToolContext
 
 from adk_deepagents.backends.protocol import BackendFactory
 from adk_deepagents.backends.runtime import get_or_create_backend_for_session
+from adk_deepagents.backends.state import StateBackend
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,9 @@ def _coerce_backend_factory(value: Any) -> BackendFactory | None:
 
 
 def _backend_context_from_backend(backend: Any) -> dict[str, Any] | None:
+    if isinstance(backend, StateBackend):
+        return {"kind": "state"}
+
     root_value = getattr(backend, "_root", None)
     if isinstance(root_value, Path):
         root_dir = str(root_value)
@@ -103,12 +107,9 @@ def _extract_temporal_backend_context(
     if context is not None:
         return context
 
-    # Final fallback: preserve the caller's current workspace root.
-    return {
-        "kind": "filesystem",
-        "root_dir": str(Path.cwd().resolve()),
-        "virtual_mode": True,
-    }
+    # Default to session-state semantics when the parent backend cannot be
+    # serialized for Temporal handoff.
+    return {"kind": "state"}
 
 
 def _coerce_files_state(value: Any) -> dict[str, Any]:

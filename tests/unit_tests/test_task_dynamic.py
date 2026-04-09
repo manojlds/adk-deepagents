@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 from adk_deepagents.backends.filesystem import FilesystemBackend
 from adk_deepagents.backends.runtime import clear_session_backend, register_backend_factory
+from adk_deepagents.backends.state import StateBackend
 from adk_deepagents.tools import task_dynamic
 from adk_deepagents.tools.task_dynamic import (
     create_dynamic_task_tool,
@@ -615,7 +615,56 @@ class TestDynamicTaskToolGuards:
             "virtual_mode": True,
         }
 
-    async def test_temporal_mode_falls_back_to_current_workdir_backend_context(self, monkeypatch):
+    async def test_temporal_mode_serializes_registered_state_backend(self, monkeypatch):
+        observed_snapshot: dict[str, Any] = {}
+
+        async def fake_temporal_run(*, snapshot_data, **kwargs):
+            del kwargs
+            observed_snapshot.update(snapshot_data)
+            return {
+                "result": "done",
+                "function_calls": [],
+                "files": {},
+                "todos": [],
+                "timed_out": False,
+                "error": None,
+            }
+
+        class _ForbiddenRunner:
+            def __init__(self, *args, **kwargs):
+                del args, kwargs
+                raise AssertionError("InMemoryRunner should not be created in Temporal mode")
+
+        monkeypatch.setattr(task_dynamic, "_run_dynamic_task_temporal", fake_temporal_run)
+        monkeypatch.setattr(task_dynamic, "InMemoryRunner", _ForbiddenRunner)
+
+        parent_session_id = "parent_session_state_temporal"
+        register_backend_factory(parent_session_id, lambda state: StateBackend(state))
+
+        task_tool = create_dynamic_task_tool(
+            default_model="gemini-2.5-flash",
+            default_tools=[],
+            subagents=None,
+            config=DynamicTaskConfig(temporal=TemporalTaskConfig()),
+        )
+
+        context = _DummyToolContext(state={})
+        context.session = type("_Session", (), {"id": parent_session_id})()
+
+        try:
+            result = await task_tool(
+                description="delegate",
+                prompt="delegate",
+                subagent_type="general",
+                tool_context=cast(Any, context),
+            )
+        finally:
+            clear_session_backend(parent_session_id)
+
+        assert result["status"] == "completed"
+        assert observed_snapshot["backend_context"] == {"kind": "state"}
+
+    async def test_temporal_mode_defaults_to_state_backend_context(self, monkeypatch):
         observed_snapshot: dict[str, Any] = {}
 
         async def fake_temporal_run(*, snapshot_data, **kwargs):
@@ -654,11 +703,7 @@ class TestDynamicTaskToolGuards:
         )
 
         assert result["status"] == "completed"
-        assert observed_snapshot["backend_context"] == {
-            "kind": "filesystem",
-            "root_dir": str(Path.cwd().resolve()),
-            "virtual_mode": True,
-        }
+        assert observed_snapshot["backend_context"] == {"kind": "state"}
 
     async def test_resume_recovers_runtime_from_persisted_task_state(self, monkeypatch):
         observed: dict[str, str] = {}

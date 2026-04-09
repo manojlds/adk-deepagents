@@ -86,6 +86,14 @@ def _build_backend_factory(backend_context: dict[str, Any] | None) -> Any | None
     if not isinstance(backend_context, dict):
         return None
 
+    if backend_context.get("kind") == "state":
+        from adk_deepagents.backends.state import StateBackend
+
+        def _state_factory(state: dict[str, Any]) -> Any:
+            return StateBackend(state)
+
+        return _state_factory
+
     if backend_context.get("kind") != "filesystem":
         return None
 

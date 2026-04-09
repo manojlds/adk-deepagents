@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from adk_deepagents.temporal.activities import TaskResult, TaskSnapshot
+from adk_deepagents.backends.state import StateBackend
+from adk_deepagents.temporal.activities import TaskResult, TaskSnapshot, _build_backend_factory
 
 
 def test_task_snapshot_defaults():
@@ -70,3 +71,12 @@ def test_task_result_roundtrip():
 
     restored = TaskResult.from_dict(result.to_dict())
     assert restored == result
+
+
+def test_build_backend_factory_restores_state_backend():
+    factory = _build_backend_factory({"kind": "state"})
+
+    assert factory is not None
+
+    backend = factory({"files": {}})
+    assert isinstance(backend, StateBackend)
